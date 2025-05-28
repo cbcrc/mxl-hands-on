@@ -1,0 +1,56 @@
+
+# apiVersion: v1
+# kind: PersistentVolumeClaim
+# metadata:
+#   name: mxl-longhorn-pvc
+# spec:
+#   accessModes:
+#     - ReadWriteMany
+#   storageClassName: longhorn
+#   resources:
+#     requests:
+#       storage: 2Gi
+# ---
+apiVersion: apps/v1 
+kind: Deployment
+metadata:
+  name: vnc-mxl
+spec:
+  selector:
+    matchLabels:
+      app: vnc
+  replicas: 1 # tells deployment to run 2 pods matching the template
+  template:
+    metadata:
+      labels:
+        app: vnc
+    spec:
+      containers:
+        - name: vnc
+          image: tiryoh/ubuntu-desktop-lxde-vnc  # image in Dockerhub
+          ports:
+          - containerPort: 80
+          volumeMounts:
+            - name: domain-volume
+              mountPath: /domain
+      nodeName: hol1
+      volumes:
+        - name: domain-volume
+          persistentVolumeClaim:
+            claimName: mxl-longhorn-pvc
+      restartPolicy: Always
+---
+apiVersion: v1 
+kind: Service
+metadata:
+  name: vnc-mxl
+spec:
+  ports:
+    - name: http
+      nodePort: 30680
+      port: 5900
+      protocol: TCP
+      targetPort: 80
+  selector:
+    app: vnc
+  type: NodePort

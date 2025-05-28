@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mxl-longhorn-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: writer-media-function
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: writer-media-function
+  template:
+    metadata:
+      labels:
+        app: writer-media-function
+    spec:
+      containers:
+        - name: writer-container
+          image: deplops/mxl-writer:latest
+          imagePullPolicy: Always
+          # If the image is private, configure ImagePullSecrets
+          volumeMounts:
+            - name: domain-volume
+              mountPath: /domain
+      nodeName: hol1
+      volumes:
+        - name: domain-volume
+          persistentVolumeClaim:
+            claimName: mxl-longhorn-pvc
+      restartPolicy: Always
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reader-media-function
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reader-media-function
+  template:
+    metadata:
+      labels:
+        app: reader-media-function
+    spec:
+      containers:
+        - name: reader-container
+          image: deplops/mxl-reader:latest
+          imagePullPolicy: IfNotPresent
+          tty: true
+          stdin: true
+          volumeMounts:
+            - name: domain-volume
+              mountPath: /domain
+              readOnly: true
+      nodeName: hol1
+      volumes:
+        - name: domain-volume
+          persistentVolumeClaim:
+            claimName: mxl-longhorn-pvc
+      restartPolicy: Always
