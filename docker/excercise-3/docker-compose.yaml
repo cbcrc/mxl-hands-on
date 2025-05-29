@@ -4,12 +4,13 @@ services:
     restart: unless-stopped
     volumes:
       - domain:/domain  # Maps the named volume "domain" to /domain inside the container, in read-write mode.
+    command: ["/app/mxl-gst-videotestsrc", "-d", "/domain", "-f", "/app/v210_flow.json", "-t", "Original Flow"]
   writer-media-function-2:
     image: deplops/mxl-writer
     restart: unless-stopped
     volumes:
       - domain:/domain  # Maps the named volume "domain" to /domain inside the container, in read-write mode.
-      - ./data/v210_flow_2.json:/app/v210_flow_2.json  # Example: Upload specific file into container
+      - ./data/v210_flow_2.json:/app/v210_flow_2.json  
     command: ["/app/mxl-gst-videotestsrc", "-d", "/domain", "-f", "/app/v210_flow_2.json", "-t", "NEW Flow 2"]
   reader-media-function:
     image: deplops/mxl-reader
@@ -23,9 +24,11 @@ services:
     restart: unless-stopped
     volumes:
       - domain:/domain:ro  # Maps the named volume "domain" to /domain inside the container, in read only mode
-      - ./data/mxl.rag.gz:/tmp/mxl.rag.gz  # Example: Upload specific file into container
+      - ./data:/root  
     ports:
-      - "80:6080"  # Maps port 5900 of the container to port 8000 on the host
+      - "5900:80"  # Maps port 5900 of the container to port 8000 on the host
+    working_dir: /root  # Sets the working directory inside the container to /root
+    command: ["/bin/bash", "-c", "install.sh"]  # Keeps the container running
 
 volumes:
   domain:  # Defines the named volume "domain"

@@ -1,0 +1,3 @@
+ls /domain
+cd mxl-sink
+./mxl-gst-videosink -d /domain -f 5fbec3b1-1b0f-417d-9059-8b94a47197ed
