@@ -31,8 +31,17 @@ Expected output
 
 ## Excercise 3 - Add VNC client for GUI
 
-Add Web based VNC front end to docker compose [`tiryoh/ubuntu-desktop-lxde-vnc`](https://hub.docker.com/r/tiryoh/ubuntu-desktop-lxde-vnc) To allow users to visualise their modifications on `gstreamer`
-
+1. Go to VNC web browser <<IP_ADDRESS>>:5900
+1. Go to `Start Menu > System Tools > LXTerminal`
+	```sh
+	cd /root
+	chmod +x install.sh
+	./install.sh # This can take afew minutes to upack mxl and install gstreamer
+	cd mxl-sink
+	ls /domain
+	./mxl-gst-videosink -d /domain -f 5fbec3b1-1b0f-417d-9059-8b94a47197ed # change flowID from ls command
+	```
+1. Enjoy memory video memory sharing.
 
 ## TODO
 
