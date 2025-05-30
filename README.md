@@ -2,6 +2,9 @@
 
 ## Excercise 1 - Introduction
 
+1. test repo push by mathieu
+
+
 ## Excercise 2 - Multiple senders
 
 1. Clone repo
