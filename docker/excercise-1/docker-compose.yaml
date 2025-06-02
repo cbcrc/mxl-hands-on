@@ -1,0 +1,15 @@
+services:
+  writer-media-function:
+    image: deplops/mxl-writer
+    restart: unless-stopped
+    volumes:
+      - domain:/domain  # Maps the named volume "domain" to /domain inside the container, in read-write mode.
+  reader-media-function:
+    image: deplops/mxl-reader
+    restart: unless-stopped
+    volumes:
+      - domain:/domain:ro  # Maps the named volume "domain" to /domain inside the container, in read only mode
+    stdin_open: true
+    tty: true
+volumes:
+  domain:  # Defines the named volume "domain"
