@@ -31,11 +31,7 @@
 |${mxlDomain}/${flowId}.mxl-flow/.json|NMOS IS-04 Flow resource definition.|
 |${mxlDomain}/${flowId}.mxl-flow/.access|File 'touched' by readers (if permissions allow it) to notify flow access. Enables reliable 'lastReadTime' metadata update.|
 |${mxlDomain}/${flowId}.mxl-flow/grains/|Directory where individual grains are stored.|
-
-
-
-${mxlDomain}/${flowId}.mxl-flow/grains/${grainIndex}
-Grain Header and optional payload (if payload is in host memory and not device memory ). Memory mapped by readers and writers
+|${mxlDomain}/${flowId}.mxl-flow/grains/${grainIndex}|Grain Header and optional payload (if payload is in host memory and not device memory ). Memory mapped by readers and writers|
 
 ## Excercise 2 - Multiple senders
 
