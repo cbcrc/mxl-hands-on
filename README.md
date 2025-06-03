@@ -5,11 +5,11 @@
 ### Synopsis
 
 
-#### In excercise 1 we will have 2 docker containers running. One MXL writer writing one video flow and
-#### one MXL reader reading it. We will explore the following important concepts of MXL:
-#### - MXL domain and its structure, which is the base folder where flows are stored.
-#### - The NMOS IS-04 Flow resource definition. A .json file that describe a unique flow. Stored in the MXL domain.
-#### We will then use the mxl-info tool to list the available flow of the MXL domain and inspect it.
+**In excercise 1 we will have 2 docker containers running. One MXL writer writing one video flow and
+one MXL reader reading it. We will explore the following important concepts of MXL:
+- MXL domain and its structure, which is the base folder where flows are stored.
+- The NMOS IS-04 Flow resource definition. A .json file that describe a unique flow. Stored in the MXL domain.
+We will then use the mxl-info tool to list the available flow of the MXL domain and inspect it.**
 
 
 1. Clone repo
