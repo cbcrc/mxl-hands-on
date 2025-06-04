@@ -50,11 +50,9 @@ MXL domain files structure explained
 |${mxlDomain}/${flowId}.mxl-flow/|Directory containing resources associated with a flow with uuid ${flowId}|
 |${mxlDomain}/${flowId}.mxl-flow/data|Flow header. contains metadata for a flow ring buffer. Memory mapped by readers and writers.|
 |${mxlDomain}/${flowId}.mxl-flow/.json|NMOS IS-04 Flow resource definition.|
-|${mxlDomain}/${flowId}.mxl-flow/.access|File 'touched' by readers (if permissions allow it) to notify flow access.  
-Enables reliable 'lastReadTime' metadata update.|
+|${mxlDomain}/${flowId}.mxl-flow/.access|File 'touched' by readers (if permissions allow it) to notify flow access. Enables reliable 'lastReadTime' metadata update.|
 |${mxlDomain}/${flowId}.mxl-flow/grains/|Directory where individual grains are stored.|
-|${mxlDomain}/${flowId}.mxl-flow/grains/${grainIndex}|Grain Header and optional payload (if payload is in host memory and not device memory ).  
-Memory mapped by readers and writers|
+|${mxlDomain}/${flowId}.mxl-flow/grains/${grainIndex}|Grain Header and optional payload (if payload is in host memory and not device memory ). Memory mapped by readers and writers|
 
 The *tmpfs* file system in linux is mounted in ram. This is confirming that the flow frame buffer lives in memory. If you want to read more about  
 *tmpfs*, here is some documentation: https://www.kernel.org/doc/html/latest/filesystems/tmpfs.html
