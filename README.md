@@ -36,8 +36,8 @@ docker exec -it excercise-1-reader-media-function-1 ls /domain
 docker exec -it excercise-1-reader-media-function-1 ls /domain/subFolders
 ls /dev/shm/mxl
 df -h /dev/shm/mxl
-docker exec -it excercise-1-reader-media-function-1 cat /domain/*flowId.mxl-flow/video.json*
-docker exec -it excercise-1-reader-media-function-1 /app/mxl-info -d /domain -f *flowId*
+docker exec -it excercise-1-reader-media-function-1 cat /domain/flowId.mxl-flow/video.json
+docker exec -it excercise-1-reader-media-function-1 /app/mxl-info -d /domain -f flowId
 ```
 
 ### Extra information
