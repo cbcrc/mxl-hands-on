@@ -20,7 +20,7 @@ one MXL reader reading it. We will explore the following important concepts of M
 1. Look at the MXL domain file structure inside the container
 1. Have a look in all the sub repository of /domain
 1. Look at the MXL domain file structure on the host
-1. Confirm that the MXL domain file structure is mounted in ram
+1. Confirm that the MXL domain file structure is mounted in ram by confirming the filesystem is *tmpfs*
 1. Look at the NMOS IS-04 Flow definition in the /domain/flowId.mxl-flow/video.json and observe the parameters
 1. Use mxl-info to get flow information from the mxl reader, you can use watch in front of the command to have live update
 
