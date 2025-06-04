@@ -11,18 +11,22 @@ one MXL reader reading it. We will explore the following important concepts of M
  - The NMOS IS-04 Flow resource definition. A .json file that describe a unique flow, stored in the MXL domain.  
  We will then use the mxl-info tool to list the available flow in the MXL domain and inspect it.**
 
+### Steps
 
 1. Clone repo
 1. Go to exercise 1 folder
 1. Look at the docker-compose.yaml file and notice the volume used by both containers
 1. Start the containers with the provided .yaml file
 1. Look at the containers running
-1. Look at the MXL domain file structure inside the container
+1. Look at the MXL domain file as seen by the reader app.
 1. Have a look in all the sub repository of /domain
-1. Look at the MXL domain file structure on the host
+1. Look at the MXL domain_1 file structure on the host
 1. Confirm that the MXL domain file structure is mounted in ram by confirming the filesystem is *tmpfs*
 1. Look at the NMOS IS-04 Flow definition in the /domain/flowId.mxl-flow/video.json and observe the parameters
 1. Use mxl-info to get flow information from the mxl reader, you can use watch in front of the command to have live update
+1. Look inside the repository of the grains on the host and confirm that you have all the grain according to the grain count value observed in the step before
+1. Shut down the containers of excercise 1
+1. look at the MXL domain file structure on the host again and notice that the file are gone.
 
 ### Commands at a glance
 
@@ -34,10 +38,13 @@ docker compose up -d
 docker ps
 docker exec -it excercise-1-reader-media-function-1 ls /domain
 docker exec -it excercise-1-reader-media-function-1 ls /domain/subFolders
-ls /dev/shm/mxl
+ls /dev/shm/mxl/domain_1
 df -h /dev/shm/mxl
 docker exec -it excercise-1-reader-media-function-1 cat /domain/flowId.mxl-flow/video.json
 docker exec -it excercise-1-reader-media-function-1 /app/mxl-info -d /domain -f flowId
+ls /dev/shm/mxl/domain_1/flowId.mxl-flow/grains
+docker compose down
+ls /dev/shm/mxl/domain_1
 ```
 
 ### Extra information
@@ -45,7 +52,7 @@ docker exec -it excercise-1-reader-media-function-1 /app/mxl-info -d /domain -f 
 MXL domain files structure explained
 
 |Path|Description|
-|:---|:----------|
+|:---|:---|
 |${mxlDomain}/|Base directory of the MXL domain|
 |${mxlDomain}/${flowId}.mxl-flow/|Directory containing resources associated with a flow with uuid ${flowId}|
 |${mxlDomain}/${flowId}.mxl-flow/data|Flow header. contains metadata for a flow ring buffer. Memory mapped by readers and writers.|
@@ -64,34 +71,50 @@ In the ouput of mxl-info, the *grain count* value represent the depth of the buf
 interesting. Since this writer is writing grain that have a size of 1 frame, depending of when you are executing the command, the latency value  
 will be between 0 and 33 msec because the frame rate is set to 30000/1001.
 
-## Excercise 2 - Multiple senders
+## Excercise 2 - Multiple senders and multiple domains
 
-1. Clone repo
+### Synopsis
+
+### Setps
+
 1. Go to excercise 2 folder
-1. Modify docker-compose file with your text 
-	* Explain importance of json file and grains
-1. Inspect `/doman` to see how the files are written form both sources
- 
+1. Look at the docker-compose.yaml file and notice that we now have 2 writers and that all containers are mapped to the same MXL domain.
+1. Start the containers with the provided .yaml file
+1. Look at the containers running
+1. Look at the MXL domain file structure as seen by the reader app. Notice the second flow with a new unique ID
+1. Look at the MXL domain_1 file structure on the host.
+1. Use mxl-info to get flow information from the mxl reader to get information of each flow
+1. Shut down the containers of excercise 2
+1. Modify the docker-compose.yaml file to map the second writer to /dev/shm/mxl/domain_2
+1. Start up the containers with the updated .yaml file
+1. Look at the MXL domain file structure as seen by the reader app. Notice that we only see the flow of the first writer app after we change the domain of writer 2.
+1. Look at the MXL domain_1 and domain_2 file structure on the host and notice that both flows still exist but they are isolated by their MXL domain.
+1. Shudown containers of excercise 2
+
 
 ### Commands at a glance
 
 ```sh
-git clone https://snyamweno@bitbucket.org/snyamweno/nts-hands-on.git
 cd nts-hands-on/docker/excercise-2
+cat docker-compose.yaml
 docker compose up -d
 docker ps
-docker exec -it excercise-2-reader-media-function-1 /app/mxl-info -d /domain -l
 docker exec -it excercise-2-reader-media-function-1 ls /domain
+ls /dev/shm/mxl/domain_1
+docker exec -it excercise-2-reader-media-function-1 /app/mxl-info -d /domain -l
+docker compose down
+nano docker-compose.yaml and change line 14 for this: source: /dev/shm/mxl/domain_2
+docker compose up -d
+docker exec -it excercise-2-reader-media-function-1 ls /domain
+ls /dev/shm/mxl/domain_1 and ls /dev/shm/mxl/domain_2
+docker compose down
 ```
-Expected output
 
-```
- --- MXL Flows ---
-	93abcf83-c7e8-41b5-a388-fe0f511abc12
-	5fbec3b1-1b0f-417d-9059-8b94a47197ed
-```
+## Excercise 3 - Add VNC client for GUI and changing the attribute of one of the writer app
 
-## Excercise 3 - Add VNC client for GUI
+### Synopsis
+
+### Steps
 
 1. Go to VNC web browser <<IP_ADDRESS>>:5900
 1. Go to `Start Menu > System Tools > LXTerminal`
@@ -104,6 +127,9 @@ Expected output
 	./mxl-gst-videosink -d /domain -f 5fbec3b1-1b0f-417d-9059-8b94a47197ed # change flowID from ls command
 	```
 1. Enjoy memory video memory sharing.
+1. Modify docker-compose file with your text 
+	* Explain importance of json file and grains 
+
 
 ## TODO
 
