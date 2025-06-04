@@ -3,12 +3,17 @@ services:
     image: deplops/mxl-writer
     restart: unless-stopped
     volumes:
-      - domain:/domain  # Maps the named volume "domain" to /domain inside the container, in read-write mode.
+      - type: bind   # Maps the named volume "/dev/shm/mxl" (in memory) to /domain inside the container, in read-write mode.
+        source: /dev/shm/mxl
+        target: /domain  
   reader-media-function:
     image: deplops/mxl-reader
     restart: unless-stopped
     volumes:
-      - domain:/domain:ro  # Maps the named volume "domain" to /domain inside the container, in read only mode
+      - type: bind   # Maps the named volume "/dev/shm/mxl" (in memory) to /domain inside the container, in read-only mode.
+        source: /dev/shm/mxl
+        target: /domain
+        read_only: true
     stdin_open: true
     tty: true
 volumes:
