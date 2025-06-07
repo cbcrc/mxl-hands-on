@@ -136,14 +136,14 @@ In the initial setup of Exercise 2 (Steps 2 through 7), you observed two MXL wri
 The core learning objective of the latter part of Exercise 2 (Steps 8 through 12) is to understand the concept of domain separation in MXL.
 
 * **Logical and Physical Isolation:** By modifying the `docker-compose.yaml` file to map writer-2 to `/dev/shm/mxl/domain_2`, you effectively writing to a second, entirely separate MXL domain.
-   * **Logical Isolation:** From the perspective of applications, a flow existing in `domain_1` is completely distinct and inaccessible to an application configured only to read from `domain_2`, and vice-versa.
-   * **Physical Isolation:** As you confirmed in Step 12 (`ls /dev/shm/mxl/domain_1` and `ls /dev/shm/mxl/domain_2`), the two domains exist as independent directory structures on the host's `tmpfs` filesystem.
+	* **Logical Isolation:** From the perspective of applications, a flow existing in `domain_1` is completely distinct and inaccessible to an application configured only to read from `domain_2`, and vice-versa.
+	* **Physical Isolation:** As you confirmed in Step 12 (`ls /dev/shm/mxl/domain_1` and `ls /dev/shm/mxl/domain_2`), the two domains exist as independent directory structures on the host's `tmpfs` filesystem.
 * **Use Cases for Multiple Domains:** The ability to establish multiple, isolated MXL domains is a fundamental feature for various architectural patterns:
-   * **Security:** Different applications or user groups can be granted access only to specific domains, ensuring that sensitive media flows are isolated from less secure ones.
-   * **Workload Separation:** High-sensitivity workflows, like playout, can be isolated in their own domain to prevent interference from other, less critical workflows, ensuring consistent operation of critical systems.
-   * **Organizational Boundaries:** In large media systems, different production groups might operate their own distinct MXL domains to manage their media assets independently.
-   * **Resource Management:** While tmpfs uses shared memory, creating separate domains can simplify resource allocation and monitoring for distinct sets of flows.
-   * **Scalability:** While not directly demonstrated in this exercise, the concept of domains facilitates distributed architectures where different parts of a system might manage their own local MXL domains.
+	* **Security:** Different applications or user groups can be granted access only to specific domains, ensuring that sensitive media flows are isolated from less secure ones.
+	* **Workload Separation:** High-sensitivity workflows, like playout, can be isolated in their own domain to prevent interference from other, less critical workflows, ensuring consistent operation of critical systems.
+	* **Organizational Boundaries:** In large media systems, different production groups might operate their own distinct MXL domains to manage their media assets independently.
+	* **Resource Management:** While tmpfs uses shared memory, creating separate domains can simplify resource allocation and monitoring for distinct sets of flows.
+	* **Scalability:** While not directly demonstrated in this exercise, the concept of domains facilitates distributed architectures where different parts of a system might manage their own local MXL domains.
 
 **Key Takeaway:** The concept of domains in MXL allows you to set up clear boundaries for your media workflows. Whether for security, isolation, organizational purposes, or robust resource management, multiple MXL domains provide the necessary separation and control for complex media exchange environments.
 
