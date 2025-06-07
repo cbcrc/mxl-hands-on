@@ -69,8 +69,9 @@ As noted, `tmpfs` is a temporary file storage facility in Unix-like operating sy
 You can read more about `tmpfs` here: https://www.kernel.org/doc/html/latest/filesystems/tmpfs.html
 
 
-#### NMOS IS04 flow definiion
-`${mxlDomain}/<flowId>.mxl-flow/.json`: This JSON file is the NMOS IS-04 Flow Resource Definition. It is crucial as it uniquely describes the characteristics of the MXL flow. Key parameters you observed include:
+#### NMOS IS04 flow definiion  
+`${mxlDomain}/<flowId>.mxl-flow/.json`: This JSON file is the NMOS IS-04 Flow Resource Definition. It is crucial as it uniquely describes the characteristics of the MXL flow. Key parameters you observed include:  
+
 * `id`: The unique identifier (flowId) for this specific flow.
 * `label`: A human-readable label for the flow.
 * `media_type`: Crucially, this indicates the data model used to store the media into memory. For the initial development of MXL, this will be `"media_type": "video/v210"`, signifying uncompressed 10-bit YCbCr 4:2:2 video. As MXL evolves, other media_type values will be supported for different data formats.
