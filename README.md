@@ -201,10 +201,10 @@ The addition of the `VNC-Viewer` Docker container serves several critical purpos
 
 ## TODO
 
-* Upgrade image to latest MXL version
-* Publish on `company` Docker hub instead of `deplops`
-* Move repo to corprate project
-* Write docker -compse for Excercise-3
+- [x] Upgrade image to latest MXL version
+- [ ] Publish on `company` Docker hub instead of `deplops`
+- [ ] Move repo to corprate project
+- [x] Write docker -compse for Excercise-3
 
 ## Authors
 
