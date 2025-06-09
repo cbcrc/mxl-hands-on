@@ -95,6 +95,8 @@ Building on the foundational concepts from Exercise 1, this exercise will demons
 
 You will deploy three Docker containers: two MXL writers, each generating a unique video flow, and one MXL reader. We will explore how the reader interacts with multiple flows on the **same MXL domain**, observe the resulting file structure, and then **modify a writer's domain** to understand how flows can be isolated. This hands-on experience will solidify your understanding of MXL's domain-based organization.
 
+<img src="./Images/exercise2.png" width="480">
+
 ### Setps
 
 1. Go to excercise 2 folder  
@@ -156,6 +158,8 @@ The core learning objective of the latter part of Exercise 2 (Steps 8 through 12
 ### Synopsis
 
 In Exercise 3, we will enhance our MXL environment by integrating a **VNC client and a lightweight Linux desktop container**. This setup will provide a graphical interface, allowing you to **visualize the actual video output** from the MXL writer applications. Building on this, you will then learn how to **modify attributes of an MXL writer application**, specifically changing the overlay text on one of the video flows, and observing these changes live through the VNC viewer. This exercise will provide a tangible demonstration of MXL's video writer and reader test applications.
+
+<img src="./Images/exercise3.png" width="480">
 
 ### Steps
 
