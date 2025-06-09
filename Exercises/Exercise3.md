@@ -54,17 +54,4 @@ The addition of the `VNC-Viewer` Docker container serves several critical purpos
 * `mxl-gst-videosink` **(Reader/Viewer):** This application acts as an MXL reader and uses GStreamer to display the video.
 	* It takes the `-d` (domain) and `-f` (flow ID) parameters to specify which MXL domain to connect to and which specific flow to consume.
 	* It translates the MXL grains (V210 format in this case) into a displayable video stream.
-
-## TODO
-
-* Upgrade image to latest MXL version
-* Publish on `company` Docker hub instead of `deplops`
-* Move repo to corprate project
-* Write docker -compse for Excercise-3
-
-## Authors
-
-* Felix Poulin: initial idea
-* Mathieu Rochon: Excercise design
-* Anthony Royer: Excercise design
-* Sunday Nyamweno: Excercise design and implementation 
+### [Back to main page](../README.md)

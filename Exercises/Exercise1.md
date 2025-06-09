@@ -113,3 +113,4 @@ Step 11 introduces you to the `mxl-info` tool, which is invaluable for inspectin
 In this exercise, with the writer generating grains @ 29.97 frames per second (30000/1001), each grain represents 33.36 milliseconds of video.
 Therefore, the latency value will fluctuate between 0 and approximately 33 msec. A value close to 0 msec indicates you are very close to when the current grain was completed by the MXL writer, while a value closer to 33 msec means the current grain has been available for almost a full frame interval. This could potentially inticate issue in the system if this value goes beyond the time value of a grain.
 * `grain rate`: Displays the nominal framerate of the flow, derived from the NMOS IS-04 definition.
+### [Back to main page](../README.md)

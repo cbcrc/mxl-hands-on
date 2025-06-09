@@ -88,3 +88,4 @@ The core learning objective of the latter part of Exercise 2 (Steps 8 through 12
 	* **Scalability:** While not directly demonstrated in this exercise, the concept of domains facilitates distributed architectures where different parts of a system might manage their own local MXL domains.
 
 **Key Takeaway:** The concept of domains in MXL allows you to set up clear boundaries for your media workflows. Whether for security, isolation, organizational purposes, or robust resource management, multiple MXL domains provide the necessary separation and control for complex media exchange environments.
+### [Back to main page](../README.md)
