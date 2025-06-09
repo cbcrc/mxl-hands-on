@@ -11,6 +11,7 @@ In Exercise 1, we will set up two Docker containers: one MXL writer to generate 
 
 You will then use the mxl-info tool to list and inspect the available flow within the MXL domain, providing insight into its characteristics.
 
+<img src="https://bitbucket.org/snyamweno/nts-hands-on/src/main/Images/MXL%20Hands-On%20exercise%201.png" width="640" height="400">
 
 ### Steps
 
@@ -201,10 +202,10 @@ The addition of the `VNC-Viewer` Docker container serves several critical purpos
 
 ## TODO
 
-- [x] Upgrade image to latest MXL version
-- [ ] Publish on `company` Docker hub instead of `deplops`
-- [ ] Move repo to corprate project
-- [x] Write docker -compse for Excercise-3
+* Upgrade image to latest MXL version
+* Publish on `company` Docker hub instead of `deplops`
+* Move repo to corprate project
+* Write docker -compse for Excercise-3
 
 ## Authors
 
