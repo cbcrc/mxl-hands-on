@@ -11,7 +11,7 @@ In Exercise 1, we will set up two Docker containers: one MXL writer to generate 
 
 You will then use the mxl-info tool to list and inspect the available flow within the MXL domain, providing insight into its characteristics.
 
-<img src="https://bitbucket.org/snyamweno/nts-hands-on/src/main/Images/exercise1.png" width="800">
+<img src="./Images/exercise1.png" width="800">
 
 ### Steps
 
