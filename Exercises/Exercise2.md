@@ -11,7 +11,7 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
 
 1. Go to excercise 2 folder  
    ```sh
-   cd home/lab/nts-hands-on/docker/excercise-2
+   cd /home/lab/nts-hands-on/docker/excercise-2
    ```
 1. Look at the docker-compose.yaml file and notice that we now have 2 writers and that all containers are mapped to the same MXL domain.  
    ```sh
