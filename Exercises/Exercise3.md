@@ -21,6 +21,7 @@ On your PC (if you are onsite in MTL), go to VNC web browser <<IP_ADDRESS>>:5900
    ```sh
    docker compose up -d
    ```
+1. On your PC (if you are onsite in MTL), go to VNC web browser <<IP_ADDRESS>>:5900. If you are through VPN or elsewhere in Canada, you can RDP here in order to do so: 10.164.50.197 (credential to be provided)
 1. To install all the Gstreamer dependencies on your linux desktop, go to `Start Menu > System Tools > LXTerminal`  
    ```sh
    cd /root
