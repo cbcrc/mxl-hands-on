@@ -17,6 +17,10 @@ On your PC (if you are onsite in MTL), go to VNC web browser <<IP_ADDRESS>>:5900
    ```sh
    cat docker-compose.yaml
    ```
+1. Start the containers
+   ```sh
+   docker compose up -d
+   ```
 1. To install all the Gstreamer dependencies on your linux desktop, go to `Start Menu > System Tools > LXTerminal`  
    ```sh
    cd /root
