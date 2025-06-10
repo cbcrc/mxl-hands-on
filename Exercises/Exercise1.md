@@ -51,7 +51,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Look at the NMOS IS-04 Flow definition in the /domain/flowId.mxl-flow/video.json and observe the parameters  
    ```sh
-   docker exec -it excercise-1-reader-media-function-1 cat /domain/flowId.mxl-flow/video.json
+   docker exec -it excercise-1-reader-media-function-1 cat /domain/flowId.mxl-flow/.json
    ```
 1. Use mxl-info to get flow information from the mxl reader, you can use watch in front of the command to have live update  
    ```sh
