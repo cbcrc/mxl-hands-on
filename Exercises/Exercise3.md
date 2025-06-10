@@ -27,7 +27,7 @@ On your PC (if you are onsite in MTL), go to VNC web browser <<IP_ADDRESS>>:5900
    cd /root
    chmod +x install.sh
    ./install.sh # This can take afew minutes to upack mxl and install gstreamer
-   cd mxl-sink
+   cd mxl-gst-sink-250509
    ls /domain
    ./mxl-gst-videosink -d /domain -f flowId # use one of the flow ID from the ls /domain command
    ```
