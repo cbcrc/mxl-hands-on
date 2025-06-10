@@ -3,27 +3,37 @@ services:
     image: deplops/mxl-writer
     restart: unless-stopped
     volumes:
-      - domain:/domain  # Maps the named volume "domain" to /domain inside the container, in read-write mode.
+      - type: bind   # Maps the named volume "/dev/shm/mxl" (in memory) to /domain inside the container, in read-write mode.
+        source: /dev/shm/mxl/domain_1
+        target: /domain
     command: ["/app/mxl-gst-videotestsrc", "-d", "/domain", "-f", "/app/v210_flow.json", "-t", "Original Flow"]
   writer-media-function-2:
     image: deplops/mxl-writer
     restart: unless-stopped
     volumes:
-      - domain:/domain  # Maps the named volume "domain" to /domain inside the container, in read-write mode.
+      - type: bind   # Maps the named volume "/dev/shm/mxl" (in memory) to /domain inside the container, in read-write mode.
+        source: /dev/shm/mxl/domain_1
+        target: /domain
       - ./data/v210_flow_2.json:/app/v210_flow_2.json  
     command: ["/app/mxl-gst-videotestsrc", "-d", "/domain", "-f", "/app/v210_flow_2.json", "-t", "NEW Flow 2"]
   reader-media-function:
     image: deplops/mxl-reader
     restart: unless-stopped
     volumes:
-      - domain:/domain:ro  # Maps the named volume "domain" to /domain inside the container, in read only mode
+      - type: bind   # Maps the named volume "/dev/shm/mxl" (in memory) to /domain inside the container, in read-write mode.
+        source: /dev/shm/mxl/domain_1
+        target: /domain
+        read_only: true
     stdin_open: true
     tty: true
   vnc-viewer:
     image: tiryoh/ubuntu-desktop-lxde-vnc # VNC viewer to connect to the writer-media-function
     restart: unless-stopped
     volumes:
-      - domain:/domain:ro  # Maps the named volume "domain" to /domain inside the container, in read only mode
+      - type: bind   # Maps the named volume "/dev/shm/mxl" (in memory) to /domain inside the container, in read-write mode.
+        source: /dev/shm/mxl/domain_1
+        target: /domain
+        read_only: true
       - ./data:/root  
     ports:
       - "5900:80"  # Maps port 5900 of the container to port 8000 on the host
