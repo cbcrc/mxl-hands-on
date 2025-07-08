@@ -70,13 +70,17 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```sh
    docker exec -it excercise-1-reader-media-function-1 ls /domain
    ```
+1. Store the flow ID of flow 1 in a local variable called **FLOW_ID**
+   ```sh
+   FLOW1_ID=5fbec3b1-1b0f-417d-9059-8b94a47197ed
+   ```
 1. Have a look in all the sub repository of /domain  
    ```sh
-   docker exec -it excercise-1-reader-media-function-1 ls /domain/subFolders
+   docker exec -it excercise-1-reader-media-function-1 ls /domain/$FLOW_ID.mxl-flow
    ```
 1. Look at the MXL domain_1 file structure on the host  
    ```sh
-   ls /mxl/domain_1
+   ls /mxl/domain_1 && ls /mxl/domain_1/$FLOW1_ID.mxl-flow
    ```
 1. Confirm that the MXL domain file structure is mounted in ram by confirming the filesystem is *tmpfs*  
    ```sh
@@ -84,15 +88,15 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Look at the NMOS IS-04 Flow definition in the /domain/flowId.mxl-flow/video.json and observe the parameters  
    ```sh
-   docker exec -it excercise-1-reader-media-function-1 cat /domain/flowId.mxl-flow/.json
+   docker exec -it excercise-1-reader-media-function-1 cat /domain/$FLOW1_ID.mxl-flow/.json
    ```
 1. Use mxl-info to get flow information from the mxl reader, you can use watch in front of the command to have live update  
    ```sh
-   docker exec -it excercise-1-reader-media-function-1 /app/mxl-info -d /domain -f flowId
+   docker exec -it excercise-1-reader-media-function-1 /app/mxl-info -d /domain -f $FLOW_ID
    ```
 1. Look inside the repository of the grains on the host and confirm that you have all the grain according to the grain count value observed in the step before  
    ```sh
-   ls /mxl/domain_1/flowId.mxl-flow/grains
+   ls /mxl/domain_1/$FLOW1_ID.mxl-flow/grains
    ```
 1. Shut down the containers of excercise 1  
    ```sh

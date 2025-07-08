@@ -55,7 +55,7 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
 
 1. Go to excercise 2 folder  
    ```sh
-   cd /home/lab/mxl-hands-on/docker/excercise-2
+   cd /home/admin/mxl-hands-on/docker/excercise-2
    ```
 1. Look at the docker-compose.yaml file and notice that we now have 2 writers and that all containers are mapped to the same MXL domain.  
    ```sh
@@ -73,11 +73,15 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```sh
    docker exec -it excercise-2-reader-media-function-1 ls /domain
    ```
+1. Store the second Flow ID into a local variable called **FLOW2_ID**
+   ```sh
+   FLOW2_ID=93abcf83-c7e8-41b5-a388-fe0f511abc12
+   ```
 1. Look at the MXL domain_1 file structure on the host.  
    ```sh
    ls /mxl/domain_1
    ```
-1. Use mxl-info to get flow information from the mxl reader to get information of each flow  
+1. Use mxl-info to get flow information from the mxl reader to get a list of all flow available in the domain
    ```sh
    docker exec -it excercise-2-reader-media-function-1 /app/mxl-info -d /domain -l
    ```
@@ -85,9 +89,9 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```sh
    docker compose down
    ```
-1. Modify the docker-compose.yaml file to map the second writer to /dev/shm/mxl/domain_2  
+1. Modify the docker-compose.yaml file to map the second writer to /mxl/domain_2  
    ```sh
-   nano docker-compose.yaml and change line 14 for this: source: /dev/shm/mxl/domain_2
+   sed -i '14 s|mxl/domain_1|mxl/domain_2|' docker-compose.yaml
    ```
 1. Start up the containers with the updated .yaml file  
    ```sh
