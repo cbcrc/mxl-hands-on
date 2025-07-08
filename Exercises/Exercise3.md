@@ -4,13 +4,71 @@
 
 In Exercise 3, we will enhance our MXL environment by integrating a **VNC client and a lightweight Linux desktop container**. This setup will provide a graphical interface, allowing you to **visualize the actual video output** from the MXL writer applications. Building on this, you will then learn how to **modify attributes of an MXL writer application**, specifically changing the overlay text on one of the video flows, and observing these changes live through the VNC viewer. This exercise will provide a tangible demonstration of MXL's video writer and reader test applications.
 
-<img src="./exercise3.png" width="640">
+```mermaid
+   graph
+      direction LR
+         subgraph WSL Alma Linux
+            subgraph docker_writer_1 [docker]
+                  direction LR
+                  gstreamer_writer_1[Gstreamer writer]
+                  mxl_sdk_writer_1[MXL SDK]
+                  gstreamer_writer_1 --> mxl_sdk_writer_1
+            end
+             
+             subgraph docker_writer_2 [docker]
+                  direction LR
+                  gstreamer_writer_2[Gstreamer writer]
+                  mxl_sdk_writer_2[MXL SDK]
+                  gstreamer_writer_2 --> mxl_sdk_writer_2
+            end
+
+            subgraph docker_reader_1 [docker]
+                  direction LR
+                  gstreamer_reader_1[Gstreamer Reader]
+                  mxl_sdk_reader_1[MXL SDK]
+                  mxl_sdk_reader_1 --> gstreamer_reader_1
+            end
+
+            subgraph docker_reader_2 [docker]
+               subgraph Linux_VNC [Linux with VNC]
+                  direction LR
+                  gstreamer_reader_2[Gstreamer Reader]
+                  mxl_sdk_reader_2[MXL SDK]
+                  mxl_sdk_reader_2 --> gstreamer_reader_2
+               end           
+            end
+
+            tmpfs([tmpfs<br>/mxl/domain_1])
+
+            mxl_sdk_writer_1 --> tmpfs
+            mxl_sdk_writer_2 --> tmpfs
+            tmpfs --> mxl_sdk_reader_1
+            tmpfs --> mxl_sdk_reader_2
+         end
+
+         %% Styling
+         linkStyle default stroke:black,stroke-width:2px
+         style docker_writer_1 fill:#cce6ff,color:black,stroke:#333,stroke-width:3px
+         style docker_writer_2 fill:#cce6ff,color:black,stroke:#333,stroke-width:3px
+         style docker_reader_1 fill:#cce6ff,color:black,stroke:#333,stroke-width:3px
+         style docker_reader_2 fill:#cce6ff,color:black,stroke:#333,stroke-width:3px
+         style gstreamer_writer_1 fill:#66b3ff,color:black,stroke:#333,stroke-width:2px
+         style gstreamer_writer_2 fill:#66b3ff,color:black,stroke:#333,stroke-width:2px
+         style gstreamer_reader_1 fill:#66b3ff,color:black,stroke:#333,stroke-width:2px
+         style gstreamer_reader_2 fill:#66b3ff,color:black,stroke:#333,stroke-width:2px
+         style mxl_sdk_writer_1 fill:#007bff,color:white,stroke:#333,stroke-width:2px
+         style mxl_sdk_writer_2 fill:#007bff,color:white,stroke:#333,stroke-width:2px
+         style mxl_sdk_reader_1 fill:#007bff,color:white,stroke:#333,stroke-width:2px
+         style mxl_sdk_reader_2 fill:#007bff,color:white,stroke:#333,stroke-width:2px
+         style Linux_VNC fill:#f0f8ff,stroke:#333,stroke-width:2px,color:black
+         style tmpfs fill:#ffe0b3,color:black,stroke:#333,stroke-width:2px
+```
 
 ### Steps
 
 1. Go to excercise 3 folder  
    ```sh
-   cd /home/lab/nts-hands-on/docker/excercise-3
+   cd /home/lab/mxl-hands-on/docker/excercise-3
    ```
 1. Look at the docker-compose.yaml file and notice the addition of the VNC-Viewer container. This container is there to give you acces to a desktop in order to be able to see video at the end of the excercise.
 On your PC (if you are onsite in MTL), go to VNC web browser <<IP_ADDRESS>>:5900. If you are through VPN or elsewhere in Canada, you can RDP here in order to do so: 10.164.50.197 (credential to be provided)  

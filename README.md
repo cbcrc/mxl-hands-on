@@ -20,8 +20,6 @@ As the media industry transitions from traditional hardware-based setups to virt
 
 * Upgrade image to latest MXL version
 * Publish on `company` Docker hub instead of `deplops`
-* Move repo to corprate project
-* Write docker -compse for Excercise-3
 
 ## Authors
 

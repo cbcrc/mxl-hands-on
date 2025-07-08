@@ -5,13 +5,57 @@ Building on the foundational concepts from Exercise 1, this exercise will demons
 
 You will deploy three Docker containers: two MXL writers, each generating a unique video flow, and one MXL reader. We will explore how the reader interacts with multiple flows on the **same MXL domain**, observe the resulting file structure, and then **modify a writer's domain** to understand how flows can be isolated. This hands-on experience will solidify your understanding of MXL's domain-based organization.
 
-<img src="./exercise2.png" width="640">
+```mermaid
+   graph
+      direction LR
+         subgraph WSL Alma Linux
+            subgraph docker_writer_1 [docker]
+                  direction LR
+                  gstreamer_writer_1[Gstreamer writer]
+                  mxl_sdk_writer_1[MXL SDK]
+                  gstreamer_writer_1 --> mxl_sdk_writer_1
+            end
+             
+             subgraph docker_writer_2 [docker]
+                  direction LR
+                  gstreamer_writer_2[Gstreamer writer]
+                  mxl_sdk_writer_2[MXL SDK]
+                  gstreamer_writer_2 --> mxl_sdk_writer_2
+            end
+
+            subgraph docker_reader [docker]
+                  direction LR
+                  gstreamer_reader[Gstreamer Reader]
+                  mxl_sdk_reader[MXL SDK]
+                  mxl_sdk_reader --> gstreamer_reader
+            end
+
+            tmpfs([tmpfs<br>/mxl/domain_1])
+
+            mxl_sdk_writer_1 --> tmpfs
+            mxl_sdk_writer_2 --> tmpfs
+            tmpfs --> mxl_sdk_reader
+         end
+
+         %% Styling
+         linkStyle default stroke:black,stroke-width:2px
+         style docker_writer_1 fill:#cce6ff,color:black,stroke:#333,stroke-width:3px
+         style docker_writer_2 fill:#cce6ff,color:black,stroke:#333,stroke-width:3px
+         style docker_reader fill:#cce6ff,color:black,stroke:#333,stroke-width:3px
+         style gstreamer_writer_1 fill:#66b3ff,color:black,stroke:#333,stroke-width:2px
+         style gstreamer_writer_2 fill:#66b3ff,color:black,stroke:#333,stroke-width:2px
+         style gstreamer_reader fill:#66b3ff,color:black,stroke:#333,stroke-width:2px
+         style mxl_sdk_writer_1 fill:#007bff,color:black,stroke:#333,stroke-width:2px,color:#fff
+         style mxl_sdk_writer_2 fill:#007bff,color:black,stroke:#333,stroke-width:2px,color:#fff
+         style mxl_sdk_reader fill:#007bff,color:black,stroke:#333,stroke-width:2px,color:#fff
+         style tmpfs fill:#ffe0b3,color:black,stroke:#333,stroke-width:2px
+```
 
 ### Setps
 
 1. Go to excercise 2 folder  
    ```sh
-   cd /home/lab/nts-hands-on/docker/excercise-2
+   cd /home/lab/mxl-hands-on/docker/excercise-2
    ```
 1. Look at the docker-compose.yaml file and notice that we now have 2 writers and that all containers are mapped to the same MXL domain.  
    ```sh
@@ -31,7 +75,7 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```
 1. Look at the MXL domain_1 file structure on the host.  
    ```sh
-   ls /dev/shm/mxl/domain_1
+   ls /mxl/domain_1
    ```
 1. Use mxl-info to get flow information from the mxl reader to get information of each flow  
    ```sh
@@ -55,7 +99,7 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```
 1. Look at the MXL domain_1 and domain_2 file structure on the host and notice that both flows still exist but they are isolated by their MXL domain.  
    ```sh
-   ls /dev/shm/mxl/domain_1 and ls /dev/shm/mxl/domain_2
+   ls /mxl/domain_1 && ls /mxl/domain_2
    ```
 1. Shudown containers of excercise 2  
    ```sh

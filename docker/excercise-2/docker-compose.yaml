@@ -4,14 +4,14 @@ services:
     restart: unless-stopped
     volumes:
       - type: bind   # Maps the named volume "/dev/shm/mxl" (in memory) to /domain inside the container, in read-write mode.
-        source: /dev/shm/mxl/domain_1
+        source: /mxl/domain_1
         target: /domain
   writer-media-function-2:
     image: deplops/mxl-writer
     restart: unless-stopped
     volumes:
       - type: bind   # Maps the named volume "/dev/shm/mxl" (in memory) to /domain inside the container, in read-write mode.
-        source: /dev/shm/mxl/domain_1
+        source: /mxl/domain_1
         target: /domain
       - ./data/v210_flow_2.json:/app/v210_flow_2.json  # Example: Upload specific file into container
     command: ["/app/mxl-gst-videotestsrc", "-d", "/domain", "-f", "/app/v210_flow_2.json", "-t", "NEW Flow 2"]
@@ -20,7 +20,7 @@ services:
     restart: unless-stopped
     volumes:
       - type: bind   # Maps the named volume "/dev/shm/mxl" (in memory) to /domain inside the container, in read-only mode.
-        source: /dev/shm/mxl/domain_1
+        source: /mxl/domain_1
         target: /domain
         read_only: true
     stdin_open: true

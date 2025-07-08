@@ -9,17 +9,50 @@ In Exercise 1, we will set up two Docker containers: one MXL writer to generate 
 
 You will then use the mxl-info tool to list and inspect the available flow within the MXL domain, providing insight into its characteristics.
 
-<img src="./exercise1.png" width="480">
+```mermaid
+   graph
+      direction LR
+         subgraph WSL Alma Linux
+            subgraph docker_writer [docker]
+                  direction LR
+                  gstreamer_writer[Gstreamer writer]
+                  mxl_sdk_writer[MXL SDK]
+                  gstreamer_writer --> mxl_sdk_writer
+            end
+
+            subgraph docker_reader [docker]
+                  direction LR
+                  gstreamer_reader[Gstreamer Reader]
+                  mxl_sdk_reader[MXL SDK]
+                  mxl_sdk_reader --> gstreamer_reader
+            end
+
+            tmpfs([tmpfs<br>/mxl/domain_1])
+
+            mxl_sdk_writer --> tmpfs
+            tmpfs --> mxl_sdk_reader
+         end
+
+         %% Styling
+         linkStyle default stroke:black,stroke-width:2px
+         style docker_writer fill:#cce6ff,color:black,stroke:#333,stroke-width:3px
+         style docker_reader fill:#cce6ff,color:black,stroke:#333,stroke-width:3px
+         style gstreamer_writer fill:#66b3ff,color:black,stroke:#333,stroke-width:2px
+         style gstreamer_reader fill:#66b3ff,color:black,stroke:#333,stroke-width:2px
+         style mxl_sdk_writer fill:#007bff,color:black,stroke:#333,stroke-width:2px,color:#fff
+         style mxl_sdk_reader fill:#007bff,color:black,stroke:#333,stroke-width:2px,color:#fff
+         style tmpfs fill:#ffe0b3,color:black,stroke:#333,stroke-width:2px
+```
 
 ### Steps
 
 1. Clone repo  
    ```sh
-   git clone https://snyamweno@bitbucket.org/snyamweno/nts-hands-on.git
+   git clone https://github.com/cbcrc/mxl-hands-on
    ```
 1. Go to exercise 1 folder  
    ```sh
-   cd nts-hands-on/docker/excercise-1
+   cd mxl-hands-on/docker/excercise-1
    ```
 1. Look at the docker-compose.yaml file and notice the volume used by both containers  
    ```sh
@@ -43,11 +76,11 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Look at the MXL domain_1 file structure on the host  
    ```sh
-   ls /dev/shm/mxl/domain_1
+   ls /mxl/domain_1
    ```
 1. Confirm that the MXL domain file structure is mounted in ram by confirming the filesystem is *tmpfs*  
    ```sh
-   df -h /dev/shm/mxl
+   df -h /mxl
    ```
 1. Look at the NMOS IS-04 Flow definition in the /domain/flowId.mxl-flow/video.json and observe the parameters  
    ```sh
@@ -59,7 +92,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Look inside the repository of the grains on the host and confirm that you have all the grain according to the grain count value observed in the step before  
    ```sh
-   ls /dev/shm/mxl/domain_1/flowId.mxl-flow/grains
+   ls /mxl/domain_1/flowId.mxl-flow/grains
    ```
 1. Shut down the containers of excercise 1  
    ```sh
@@ -67,7 +100,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. look at the MXL domain file structure on the host again and notice that the file are gone.  
    ```sh
-   ls /dev/shm/mxl/domain_1
+   ls /mxl/domain_1
    ```
 
 
