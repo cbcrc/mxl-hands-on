@@ -87,7 +87,8 @@ On your PC (if you are onsite in MTL), go to VNC web browser <<IP_ADDRESS>>:5900
    ./install.sh # This can take afew minutes to upack mxl and install gstreamer
    cd mxl-gst-sink-250509
    ls /domain
-   ./mxl-gst-videosink -d /domain -f flowId # use one of the flow ID from the ls /domain command
+   FLOW1_ID=5fbec3b1-1b0f-417d-9059-8b94a47197ed
+   ./mxl-gst-videosink -d /domain -f $FLOW1_ID # use one of the flow ID from the ls /domain command
    ```
 1. Close the Gstreamer window and CTRL break the LXTerminal.  
 1. Look at the other flow ID in the the domaine.  
