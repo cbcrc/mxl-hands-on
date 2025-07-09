@@ -21,9 +21,9 @@ In order to run these exercises, you need a Linux base system running with Docke
 1. Reboot your PC
 1. @CBC for the e250 project, we decided to use Alma Linux so this is the distribution we will select.
    ```sh
-   wsl.exe --install AlmaLinux-10
+   wsl.exe --install Ubuntu-24.04
    ```
-1. After the distribution install, it should prompt for a default UNIX username and password. **Use the admin username. This will make sure command in the exercises are working proprely**.
+1. After the distribution install, it should prompt for a default UNIX username and password. **Use the user username. This will make sure command in the exercises are working proprely**.
 1. You will now be logged in your newly created user. We will exit back to the powershell command line.
    ```sh
    exit
@@ -36,24 +36,30 @@ In order to run these exercises, you need a Linux base system running with Docke
    <img src="./PS1.jpg" width="480">
 1. Update your linux WSL instance
    ```sh
-   sudo dnf update -y
+   sudo apt update && sudo apt upgrade
    ```
 
 ### Installing Docker and Git in your WSL Alma linux instance
 
 ### Steps
 
-1. Add the Docker repository
+1. Add Docker's official GPG key
    ```sh
-   sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+   sudo install -m 0755 -d /etc/apt/keyrings
+   sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+   sudo chmod a+r /etc/apt/keyrings/docker.asc
    ```
-1. Install Docker Engine
+1. Add the repository to Apt sources
    ```sh
-   sudo dnf install docker-ce docker-ce-cli containerd.io -y
+   echo \
+   "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+   $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+   sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+   sudo apt-get update
    ```
-1. Start and enable Docker
+1. Install the latest version of Docker
    ```sh
-   sudo systemctl enable docker --now
+   sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
    ```
 1. Add your user to the docker group so that you can run docker command without using `sudo`
    ```sh
@@ -63,14 +69,6 @@ In order to run these exercises, you need a Linux base system running with Docke
 1. Verify the installation
    ```sh
    docker run hello-world
-   ```
-1. Install Git
-   ```sh
-   sudo dnf install git
-   ```
-1. Verify the Git installation
-   ```sh
-   git --version
    ```
 
 ### Creating a folder that is mounted in *tmpfs*. By default, WSL 2 is mounting /tmp and /dev on disk, not on RAM. We need to create a Folder that is mounted in RAM in order for MXL to be able to share media through memory. **If you are not using WSL but a regular linux installation, you still need to do these steps. This is where the MXL writers and readers will put media in the next exercises.**

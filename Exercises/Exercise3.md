@@ -68,7 +68,7 @@ In Exercise 3, we will enhance our MXL environment by integrating a **VNC client
 
 1. Go to excercise 3 folder  
    ```sh
-   cd /home/admin/mxl-hands-on/docker/excercise-3
+   cd /home/user/mxl-hands-on/docker/excercise-3
    ```
 1. Look at the docker-compose.yaml file and notice the addition of the VNC-Viewer container. This container is there to give you acces to a desktop in order to be able to see video at the end of the excercise.
 On your PC (if you are onsite in MTL), go to VNC web browser <<IP_ADDRESS>>:5900. If you are through VPN or elsewhere in Canada, you can RDP here in order to do so: 10.164.50.197 (credential to be provided)  
