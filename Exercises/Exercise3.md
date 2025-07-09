@@ -79,14 +79,20 @@ On your PC (if you are onsite in MTL), go to VNC web browser <<IP_ADDRESS>>:5900
    ```sh
    docker compose up -d
    ```
-1. On your PC (if you are onsite in MTL), go to VNC web browser <<IP_ADDRESS>>:5900. If you are through VPN or elsewhere in Canada, you can RDP here in order to do so: 10.164.50.197 (credential to be provided)
-1. To install all the Gstreamer dependencies on your linux desktop, go to `Start Menu > System Tools > LXTerminal`  
+1. On your PC, go to VNC web browser 127.0.0.1:5900.
+1. To install all the Gstreamer dependencies on your linux desktop, go to `Start Menu > System Tools > LXTerminal` and do the following commands.
    ```sh
    cd /root
    chmod +x install.sh
-   ./install.sh # This can take afew minutes to upack mxl and install gstreamer
+   ./install.sh
+   ```
+1. Go to the Gstreamer sink app and look at the available MXL flows from its perspective
+   ```sh
    cd mxl-gst-sink-250509
    ls /domain
+   ```
+1. Store the first flow ID in a local variable and use it to start the Gstreamer sink app and actually see some video strait out of memory!!!
+   ```sh
    FLOW1_ID=5fbec3b1-1b0f-417d-9059-8b94a47197ed
    ./mxl-gst-videosink -d /domain -f $FLOW1_ID # use one of the flow ID from the ls /domain command
    ```
@@ -95,12 +101,12 @@ On your PC (if you are onsite in MTL), go to VNC web browser <<IP_ADDRESS>>:5900
    ```sh
    ls /domain
    ```
-1. In LXTerminal, `./mxl-gstvideosink -d /domain -f /flowId` using the other flow ID from the `ls /domain` command you previously did. Can you spot the difference and identify where it is comming from?  
-Pay attention to the 2 lines in the docker-compose.yaml file that start the writer app in both writer container. One of them looks like this:
-   ```sh  
-   command: ["/app/mxl-gst-videotestsrc", "-d", "/domain", "-f", "/app/v210_flow.json", "-t", "Original Flow"]
+Whit what you learned so far, can you look at the video of the other MXL stream? Can you spot the difference and identify where it is comming from?  
+
+   ``` 
+   Hint: Carefully look at the docker-compose.yaml file
    ```
-   Look at the -t parameter. This is an optional paramter of the videotestsrc app. Can you try modifying one of the writer app with new text and observe the change with what you learned so far?
+Can you change the text ident of flow 2 for you first name and look at it again to proove that it changed?
 
 ### Extra information for Exercise 3
 Exercise 3 is transitioning from theoretical understanding and command-line inspection to direct visual confirmation of MXL's functionality. It also introduces the concept of dynamically influencing media flows, a key aspect of real-time broadcast and production environments.
