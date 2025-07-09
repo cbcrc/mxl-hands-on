@@ -8,7 +8,7 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
 ```mermaid
    graph
       direction LR
-         subgraph WSL Alma Linux
+         subgraph WSL Linux
             subgraph docker_writer_1 [docker]
                   direction LR
                   gstreamer_writer_1[Gstreamer writer]

@@ -12,7 +12,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
 ```mermaid
    graph
       direction LR
-         subgraph WSL Alma Linux
+         subgraph WSL Linux
             subgraph docker_writer [docker]
                   direction LR
                   gstreamer_writer[Gstreamer writer]
