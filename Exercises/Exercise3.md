@@ -7,7 +7,7 @@ In Exercise 3, we will enhance our MXL environment by integrating a **VNC client
 ```mermaid
    graph
       direction LR
-         subgraph WSL Alma Linux
+         subgraph WSL Linux
             subgraph docker_writer_1 [docker]
                   direction LR
                   gstreamer_writer_1[Gstreamer writer]
