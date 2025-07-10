@@ -32,8 +32,10 @@ In order to run these exercises, you need a Linux base system running with Docke
    ```sh
    wsl.exe --list --all
    ```
-1. We will now open a terminal connected to our AlmaLinux. There is an arrow down next to the plus sign of the of the powershell window. Click on it and select AlmaLinux-10
-   <img src="./PS1.jpg" width="480">
+1. We will now open a terminal connected to our Ubuntu linux. There is an arrow down next to the plus sign of the of the powershell window. Click on it and select Ubuntu-24.04
+   
+   <img src="./Ubuntu.jpg" width="480">
+
 1. Update your linux WSL instance
    ```sh
    sudo apt update && sudo apt upgrade
