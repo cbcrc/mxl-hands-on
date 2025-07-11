@@ -1,13 +1,13 @@
 services:
   writer-media-function:
-    image: deplops/mxl-writer
+    image: cbcrc/mxl-writer
     restart: unless-stopped
     volumes:
       - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
         source: /mxl/domain_1
         target: /domain  
   reader-media-function:
-    image: deplops/mxl-reader
+    image: cbcrc/mxl-reader
     restart: unless-stopped
     volumes:
       - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-only mode.
