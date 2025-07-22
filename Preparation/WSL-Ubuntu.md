@@ -19,7 +19,7 @@ In order to run these exercises, you need a Linux base system running with Docke
    wsl.exe --list --online
    ```
 1. Reboot your PC
-1. @CBC for the e250 project, we decided to use Alma Linux so this is the distribution we will select.
+1. Alternatively to Alma Linux, CBC also support Ubuntu Linux as well.
    ```sh
    wsl.exe --install Ubuntu-24.04
    ```
