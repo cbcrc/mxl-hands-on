@@ -8,11 +8,11 @@ As the media industry transitions from traditional hardware-based setups to virt
 * **Interoperable software-based media production** – Enabling broadcasters to optimize workflows by seamlessly integrating diverse production tools and compute environments.
 * **Accelerating industry-wide adoption of software-defined infrastructure** – Helping media companies adopt software solutions for all tiers of production and for all levels of complexity, including workflows that are latency or quality sensitive.
 
-### [Preparation Windows 11 - Getting WSL (Alma) and Docker ready](./Preparation/WSL-Alma.md)
+### [Preparation Windows 11 - Getting WSL (Alma) and Docker ready (Currently not working for exercise 3)](./Preparation/WSL-Alma.md)
 
 ### [Preparation Windows 11 - Getting WSL (Ubuntu) and Docker ready](./Preparation/WSL-Ubuntu.md)
 
-### [Preparation Mac - Getting Docker and RamDisk ready](./Preparation/MAC.md)
+### [Preparation Mac - Getting Docker installed and creating a RamDisk (Currently not working on ARM CPU)](./Preparation/MAC.md)
 
 ### [Excercise 1 - Single writer and single domain](./Exercises/Exercise1.md)
 

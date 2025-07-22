@@ -39,7 +39,7 @@ In order to run these exercises, you need a Linux base system running with Docke
    sudo dnf update -y
    ```
 
-### Installing Docker and Git in your WSL Alma linux instance
+### Installing Docker and Git in your WSL linux instance
 
 ### Steps
 
