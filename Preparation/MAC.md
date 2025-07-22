@@ -1,4 +1,4 @@
-## Preparation - Installing WSL and Docker
+## Preparation - Installing Docker, Xcode Command Line Tools and creating a RamDisk
 
 ### Synopsis
 
