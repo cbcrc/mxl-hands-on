@@ -23,7 +23,7 @@ In order to run these exercises, you need a Linux base system running with Docke
    ```sh
    wsl.exe --install AlmaLinux-10
    ```
-1. After the distribution install, it should prompt for a default UNIX username and password. **Use the admin username. This will make sure command in the exercises are working proprely**.
+1. After the distribution install, it should prompt for a default UNIX username and password. **Use the user username. This will make sure command in the exercises are working proprely**.
 1. You will now be logged in your newly created user. We will exit back to the powershell command line.
    ```sh
    exit

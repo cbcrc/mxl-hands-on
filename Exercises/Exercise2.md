@@ -32,8 +32,11 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
 
             tmpfs([tmpfs<br>/mxl/domain_1])
 
+            tmpfs2([tmpfs<br>/mxl/domain_2])
+
             mxl_sdk_writer_1 --> tmpfs
             mxl_sdk_writer_2 --> tmpfs
+            mxl_sdk_writer_2 -.-> tmpfs2
             tmpfs --> mxl_sdk_reader
          end
 
@@ -49,13 +52,14 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
          style mxl_sdk_writer_2 fill:#007bff,color:black,stroke:#333,stroke-width:2px,color:#fff
          style mxl_sdk_reader fill:#007bff,color:black,stroke:#333,stroke-width:2px,color:#fff
          style tmpfs fill:#ffe0b3,color:black,stroke:#333,stroke-width:2px
+         style tmpfs2 fill:#ffe0b3,color:black,stroke:#333,stroke-width:2px
 ```
 
 ### Setps
 
 1. Go to excercise 2 folder  
    ```sh
-   cd /home/admin/mxl-hands-on/docker/excercise-2
+   cd /home/user/mxl-hands-on/docker/excercise-2
    ```
 1. Look at the docker-compose.yaml file and notice that we now have 2 writers and that all containers are mapped to the same MXL domain.  
    ```sh
