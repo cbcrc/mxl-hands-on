@@ -4,7 +4,7 @@
 
 In order to run these exercises on a Mac, you need to install Docker and create a RAM disk. Theses preparation steps will help you to install Docker and setup a RAM disk on your Mac.
 
-### Installing Docker on MAC
+### Installing Docker on MAC !!!DISCLAIMER, DOCKER DESKTOP IS A LICENSED PRODUCT, MAKE SURE YOU ARE FOLLOWING THE LICENSE!!!
 
 ### Steps
 
