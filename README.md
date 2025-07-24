@@ -22,8 +22,8 @@ As the media industry transitions from traditional hardware-based setups to virt
 
 ## TODO
 
-* Upgrade image to latest MXL version
-* Publish on `company` Docker hub instead of `deplops`
+* Upgrade images to latest MXL version
+* Create a git pipeline that will automatically update the images to the latest MXL code
 
 ## Authors
 
