@@ -10,13 +10,19 @@ In order to run these exercises, you need a Linux base system running with Docke
 
 1. Open an Admin Command Prompt or Powershell window.
 
-1. Install WSL from the command prompt  
+1. Check if WSL is installed
    ```sh
-   wsl.exe -- install
+   wsl --version
    ```
+1. If it is installed update it, if not, install it.
+   ```sh
+   wsl --update
+   ```
+   ```sh
+   wsl --install
 1. List all the available linux distribution to be use with WSL
    ```sh
-   wsl.exe --list --online
+   wsl --list --online
    ```
 1. Reboot your PC
 1. Alternatively to Alma Linux, CBC also support Ubuntu Linux as well.
