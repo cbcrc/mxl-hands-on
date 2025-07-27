@@ -1,0 +1,24 @@
+# Declare build arguments for the base image
+ARG BASE_IMAGE=debian:trixie-slim
+
+FROM ${BASE_IMAGE}
+
+# Declare build arguments after FROM
+ARG BUILD_DIR=../build/Linux-Clang-Release_x86_64
+
+WORKDIR /app
+
+# Use minimal dependencies and clean up in the same layer to reduce image size
+RUN apt-get update && apt-get -y install --no-install-recommends \
+        procps \
+        patchelf \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy only necessary files
+COPY ${BUILD_DIR}/lib/*.so* /app/
+COPY ${BUILD_DIR}/tools/mxl-info/mxl-info /app/
+
+# Set rpath for the executable
+RUN patchelf --set-rpath /app mxl-info
+
+CMD ["watch", "/app/mxl-info", "-d", "/domain", "-l"]
