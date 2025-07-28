@@ -57,9 +57,9 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
 
 ### Setps
 
-1. Go to excercise 2 folder  
+1. Go to exercise 2 folder  
    ```sh
-   cd /home/user/mxl-hands-on/docker/excercise-2
+   cd /home/user/mxl-hands-on/docker/exercise-2
    ```
 1. Look at the docker-compose.yaml file and notice that we now have 2 writers and that all containers are mapped to the same MXL domain.  
    ```sh
@@ -75,7 +75,7 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```
 1. Look at the MXL domain file structure as seen by the reader app. Notice the second flow with a new unique ID  
    ```sh
-   docker exec -it excercise-2-reader-media-function-1 ls /domain
+   docker exec -it exercise-2-reader-media-function-1 ls /domain
    ```
 1. Store the second Flow ID into a local variable called **FLOW2_ID**
    ```sh
@@ -87,9 +87,9 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```
 1. Use mxl-info to get flow information from the mxl reader to get a list of all flow available in the domain
    ```sh
-   docker exec -it excercise-2-reader-media-function-1 /app/mxl-info -d /domain -l
+   docker exec -it exercise-2-reader-media-function-1 /app/mxl-info -d /domain -l
    ```
-1. Shut down the containers of excercise 2  
+1. Shut down the containers of exercise 2  
    ```sh
    docker compose down
    ```
@@ -103,7 +103,7 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```
 1. Look at the MXL domain file structure as seen by the reader app. Notice that we only see the flow of the first writer app after we change the domain of writer 2.  
    ```sh
-   docker exec -it excercise-2-reader-media-function-1 ls /domain
+   docker exec -it exercise-2-reader-media-function-1 ls /domain
    ```
 1. Look at the MXL domain_1 and domain_2 file structure on the host and notice that both flows still exist but they are isolated by their MXL domain.  
    ```sh

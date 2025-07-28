@@ -44,11 +44,30 @@ This will:
 
 ## Step 3: Upload to image repository
 
-Coming soon
+```sh
+   current_date=$(date +%Y-%m-%d)
+   docker tag mxl-writer:latest cbcrc/mxl-writer:latest
+   docker tag mxl-writer:latest cbcrc/mxl-writer:$current_date
+   docker tag mxl-reader:latest cbcrc/mxl-reader:latest
+   docker tag mxl-reader:latest cbcrc/mxl-reader:$current_date
+   docker push cbcrc/mxl-writer:latest
+   docker push cbcrc/mxl-writer:$current_date
+   docker push cbcrc/mxl-reader:latest
+   docker push cbcrc/mxl-reader:$current_date
+```
 
 ## Step 4: Create `portable-mxl-reader` for Excercise3
 
-Coming soon
+```sh
+   cd ~/mxl-hands-on
+   mkdir ../portable-mxl-reader
+   cp ./dmf-mxl/build/Linux-Clang-Release_x86_64/lib/*.so* ../portable-mxl-reader/
+   cp ./dmf-mxl/build/Linux-Clang-Release_x86_64/tools/mxl-info/mxl-info ../portable-mxl-reader/
+   cp ./dmf-mxl/build/Linux-Clang-Release_x86_64/tools/mxl-gst/mxl-gst-videosink ../portable-mxl-reader/
+   cp ./dmf-mxl/build/Linux-Clang-Release_x86_64/lib/tests/data/*.json ../portable-mxl-reader/
+   tar czf ../portable-mxl-reader.tar.gz --directory=../portable-mxl-reader/ .
+   cp ../portable-mxl-reader.tar.gz ./docker/exercise-3/data/
+```
 
 ## Step 5 Test with Exercises
 
@@ -77,14 +96,8 @@ cat Exercise1.md
 To check that your images support multiple architectures:
 
 ```bash
-# Check architecture information
-docker inspect --format='{{.Architecture}}:{{.Os}}' mxl-writer:latest
-
-# Or with buildx
-docker buildx imagetools inspect mxl-writer:latest
-
 # View image manifest tree structure
-docker image ls --tree | grep mxl-
+docker image ls --tree
 ```
 
 ## Troubleshooting
@@ -109,6 +122,8 @@ After you've built the Docker images, you can clean up the build artifacts to sa
 rm -rf dmf-mxl/build
 rm -rf dmf-mxl/install_*
 rm -rf dmf-mxl/vcpkg_cache
+rm -rf ~/portable-mxl-reader
+rm ~/portable-mxl-reader.tar.gz
 ```
 
 These commands will free up a significant amount of disk space, but you'll need to rebuild from scratch if you want to make changes later. You can also use the Git exclusion file to keep these directories ignored:
