@@ -52,7 +52,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Go to exercise 1 folder  
    ```sh
-   cd mxl-hands-on/docker/excercise-1
+   cd mxl-hands-on/docker/exercise-1
    ```
 1. Look at the docker-compose.yaml file and notice the volume used by both containers  
    ```sh
@@ -68,7 +68,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Look at the MXL domain file as seen by the reader app.  
    ```sh
-   docker exec -it excercise-1-reader-media-function-1 ls /domain
+   docker exec -it exercise-1-reader-media-function-1 ls /domain
    ```
 1. Store the flow ID of flow 1 in a local variable called **FLOW1_ID**
    ```sh
@@ -76,7 +76,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Have a look in all the sub repository of /domain  
    ```sh
-   docker exec -it excercise-1-reader-media-function-1 ls /domain/$FLOW1_ID.mxl-flow
+   docker exec -it exercise-1-reader-media-function-1 ls /domain/$FLOW1_ID.mxl-flow
    ```
 1. Look at the MXL domain_1 file structure on the host  
    ```sh
@@ -88,11 +88,11 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Look at the NMOS IS-04 Flow definition in the /domain/flowId.mxl-flow/video.json and observe the parameters  
    ```sh
-   docker exec -it excercise-1-reader-media-function-1 cat /domain/$FLOW1_ID.mxl-flow/.json
+   docker exec -it exercise-1-reader-media-function-1 cat /domain/$FLOW1_ID.mxl-flow/.json
    ```
 1. Use mxl-info to get flow information from the mxl reader, you can use watch in front of the command to have live update  
    ```sh
-   docker exec -it excercise-1-reader-media-function-1 /app/mxl-info -d /domain -f $FLOW1_ID
+   docker exec -it exercise-1-reader-media-function-1 /app/mxl-info -d /domain -f $FLOW1_ID
    ```
 1. Look inside the repository of the grains on the host and confirm that you have all the grain according to the grain count value observed in the step before  
    ```sh

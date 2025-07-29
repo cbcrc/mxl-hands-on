@@ -1,0 +1,31 @@
+services:
+  init:
+    image: alpine
+    command: ["sh", "-c", "mkdir -p /dev/shm/mxl"]
+    volumes:
+      - type: bind
+        source: /dev/shm
+        target: /dev/shm
+    restart: "no"
+
+  writer-media-function:
+    image: mxl-writer:${COMPILER_LOWER:-linux-clang-release}
+    depends_on:
+      - init
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: /dev/shm/mxl
+        target: /domain
+        
+  reader-media-function:
+    image: mxl-reader:${COMPILER_LOWER:-linux-clang-release}
+    depends_on:
+      - init
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: /dev/shm/mxl
+        target: /domain
+    stdin_open: true
+    tty: true
