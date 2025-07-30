@@ -1,6 +1,6 @@
 services:
   writer-media-function:
-    image: chcr.io/cbcrc/mxl-writer:latest
+    image: ghcr.io/cbcrc/mxl-writer:latest
     restart: unless-stopped
     volumes:
       - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
