@@ -46,14 +46,14 @@ This will:
 
 ```sh
    current_date=$(date +%Y-%m-%d)
-   docker tag mxl-writer:latest cbcrc/mxl-writer:latest
-   docker tag mxl-writer:latest cbcrc/mxl-writer:$current_date
-   docker tag mxl-reader:latest cbcrc/mxl-reader:latest
-   docker tag mxl-reader:latest cbcrc/mxl-reader:$current_date
-   docker push cbcrc/mxl-writer:latest
-   docker push cbcrc/mxl-writer:$current_date
-   docker push cbcrc/mxl-reader:latest
-   docker push cbcrc/mxl-reader:$current_date
+   docker tag mxl-writer:latest ghcr.io/cbcrc/mxl-writer:latest
+   docker tag mxl-writer:latest ghcr.io/cbcrc/mxl-writer:$current_date
+   docker tag mxl-reader:latest ghcr.io/cbcrc/mxl-reader:latest
+   docker tag mxl-reader:latest ghcr.io/cbcrc/mxl-reader:$current_date
+   docker push ghcr.io/cbcrc/mxl-writer:latest
+   docker push ghcr.io/cbcrc/mxl-writer:$current_date
+   docker push ghcr.io/cbcrc/mxl-reader:latest
+   docker push ghcr.io/cbcrc/mxl-reader:$current_date
 ```
 
 ## Step 4: Create `portable-mxl-reader` for Excercise3

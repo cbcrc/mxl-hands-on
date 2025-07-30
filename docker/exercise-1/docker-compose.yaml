@@ -1,13 +1,13 @@
 services:
   writer-media-function:
-    image: rochonma/mxl-writer
+    image: chcr.io/cbcrc/mxl-writer:latest
     restart: unless-stopped
     volumes:
       - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
         source: /mxl/domain_1
         target: /domain  
   reader-media-function:
-    image: rochonma/mxl-reader
+    image: ghcr.io/cbcrc/mxl-reader:latest
     restart: unless-stopped
     volumes:
       - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-only mode.
