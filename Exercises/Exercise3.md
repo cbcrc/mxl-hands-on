@@ -86,9 +86,8 @@ On your PC (if you are onsite in MTL), go to VNC web browser <<IP_ADDRESS>>:5900
    chmod +x install.sh
    ./install.sh
    ```
-1. Go to the Gstreamer sink app and look at the available MXL flows from its perspective
+1. Look at the available MXL flows as seen by the VNC container 
    ```sh
-   cd mxl-gst-sink-250509
    ls /domain
    ```
 1. Store the first flow ID in a local variable and use it to start the Gstreamer sink app and actually see some video strait out of memory!!!
