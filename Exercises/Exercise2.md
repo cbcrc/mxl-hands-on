@@ -8,7 +8,7 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
 ```mermaid
    graph
       direction LR
-         subgraph WSL Linux
+         subgraph Node/Host
             subgraph docker_writer_1 [docker]
                   direction LR
                   gstreamer_writer_1[Gstreamer writer]
@@ -30,9 +30,9 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
                   mxl_sdk_reader --> gstreamer_reader
             end
 
-            tmpfs([tmpfs<br>/mxl/domain_1])
+            tmpfs([tmpfs<br>/Volumes/mxl/domain_1])
 
-            tmpfs2([tmpfs<br>/mxl/domain_2])
+            tmpfs2([tmpfs<br>/Volumes/mxl/domain_2])
 
             mxl_sdk_writer_1 --> tmpfs
             mxl_sdk_writer_2 --> tmpfs
@@ -59,7 +59,7 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
 
 1. Go to exercise 2 folder  
    ```sh
-   cd /home/user/mxl-hands-on/docker/exercise-2
+   cd ~/mxl-hands-on/docker/exercise-2
    ```
 1. Look at the docker-compose.yaml file and notice that we now have 2 writers and that all containers are mapped to the same MXL domain.  
    ```sh
@@ -83,7 +83,7 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```
 1. Look at the MXL domain_1 file structure on the host.  
    ```sh
-   ls /mxl/domain_1
+   ls /Volumes/mxl/domain_1
    ```
 1. Use mxl-info to get flow information from the mxl reader to get a list of all flow available in the domain
    ```sh
@@ -93,9 +93,13 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```sh
    docker compose down
    ```
-1. Modify the docker-compose.yaml file to map the second writer to /mxl/domain_2  
+1. Look at the other docker-compose.yaml located in the /data folder and look for the difference in between the two.
    ```sh
-   sed -i '14 s|mxl/domain_1|mxl/domain_2|' docker-compose.yaml
+   cat ./data/docker-compose.yaml
+   ```
+1. Replace the docker-compose.yaml with the new docker-compose.yaml from the /data folder.
+   ```sh
+   sudo cp ./data/docker-compose.yaml .
    ```
 1. Start up the containers with the updated .yaml file  
    ```sh
@@ -107,7 +111,7 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```
 1. Look at the MXL domain_1 and domain_2 file structure on the host and notice that both flows still exist but they are isolated by their MXL domain.  
    ```sh
-   ls /mxl/domain_1 && ls /mxl/domain_2
+   ls /Volumes/mxl/domain_1 && ls /Volumes/mxl/domain_2
    ```
 1. Shudown containers of excercise 2  
    ```sh

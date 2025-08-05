@@ -89,7 +89,7 @@ In order to run these exercises, you need a Linux base system running with Docke
    ```
 1. Creating a mount point in */etc/fstab* to mount */mxl* to *tmpfs*
    ```sh
-   sudo touch /etc/fstab && sudo chmod 666 /etc/fstab && sudo echo 'tmpfs /mxl tmpfs defaults,noatime,size=512M 0 0' > /etc/fstab
+   sudo touch /etc/fstab && sudo chmod 666 /etc/fstab && sudo echo 'tmpfs /Volumes/mxl tmpfs defaults,noatime,size=512M 0 0' > /etc/fstab
    ```
 1. Close your linux terminal windows. Using a Windows PowerShell shutdown you linux instance.
    ```sh
@@ -97,7 +97,7 @@ In order to run these exercises, you need a Linux base system running with Docke
    ```
 1. Restart your linux instance using the arrow down menu of the terminal window and verify that the */mxl* folder is mounted to *tmpfs*
    ```sh
-   df -h /mxl
+   df -h /Volumes/mxl
    ```
 1. You are ready to go!!!
 

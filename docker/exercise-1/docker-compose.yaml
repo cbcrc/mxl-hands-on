@@ -1,17 +1,19 @@
 services:
   writer-media-function:
     image: ghcr.io/cbcrc/mxl-writer:latest
+    platform: linux/amd64
     restart: unless-stopped
     volumes:
       - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
-        source: /mxl/domain_1
+        source: /Volumes/mxl/domain_1
         target: /domain  
   reader-media-function:
     image: ghcr.io/cbcrc/mxl-reader:latest
+    platform: linux/amd64
     restart: unless-stopped
     volumes:
       - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-only mode.
-        source: /mxl/domain_1
+        source: /Volumes/mxl/domain_1
         target: /domain
         read_only: true
     stdin_open: true

@@ -12,7 +12,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
 ```mermaid
    graph
       direction LR
-         subgraph WSL Linux
+         subgraph Node/Host
             subgraph docker_writer [docker]
                   direction LR
                   gstreamer_writer[Gstreamer writer]
@@ -27,7 +27,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
                   mxl_sdk_reader --> gstreamer_reader
             end
 
-            tmpfs([tmpfs<br>/mxl/domain_1])
+            tmpfs([tmpfs<br>/Volumes/mxl/domain_1])
 
             mxl_sdk_writer --> tmpfs
             tmpfs --> mxl_sdk_reader
@@ -80,11 +80,11 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Look at the MXL domain_1 file structure on the host  
    ```sh
-   ls /mxl/domain_1 && ls /mxl/domain_1/$FLOW1_ID.mxl-flow
+   ls /Volumes/mxl/domain_1 && ls /mxl/domain_1/$FLOW1_ID.mxl-flow
    ```
 1. Confirm that the MXL domain file structure is mounted in ram by confirming the filesystem is *tmpfs*  
    ```sh
-   df -h /mxl
+   df -h /Volumes/mxl
    ```
 1. Look at the NMOS IS-04 Flow definition in the /domain/flowId.mxl-flow/video.json and observe the parameters  
    ```sh
@@ -96,7 +96,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Look inside the repository of the grains on the host and confirm that you have all the grain according to the grain count value observed in the step before  
    ```sh
-   ls /mxl/domain_1/$FLOW1_ID.mxl-flow/grains
+   ls /Volumes/mxl/domain_1/$FLOW1_ID.mxl-flow/grains
    ```
 1. Shut down the containers of excercise 1  
    ```sh
@@ -104,7 +104,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. look at the MXL domain file structure on the host again and notice that the file are gone.  
    ```sh
-   ls /mxl/domain_1
+   ls /Volumes/mxl/domain_1
    ```
 
 

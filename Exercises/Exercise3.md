@@ -7,7 +7,7 @@ In Exercise 3, we will enhance our MXL environment by integrating a **VNC client
 ```mermaid
    graph
       direction LR
-         subgraph WSL Linux
+         subgraph Node/Host
             subgraph docker_writer_1 [docker]
                   direction LR
                   gstreamer_writer_1[Gstreamer writer]
@@ -38,7 +38,7 @@ In Exercise 3, we will enhance our MXL environment by integrating a **VNC client
                end           
             end
 
-            tmpfs([tmpfs<br>/mxl/domain_1])
+            tmpfs([tmpfs<br>/Volumes/mxl/domain_1])
 
             mxl_sdk_writer_1 --> tmpfs
             mxl_sdk_writer_2 --> tmpfs
@@ -68,7 +68,7 @@ In Exercise 3, we will enhance our MXL environment by integrating a **VNC client
 
 1. Go to exercise 3 folder  
    ```sh
-   cd /home/user/mxl-hands-on/docker/exercise-3
+   cd ~/mxl-hands-on/docker/exercise-3
    ```
 1. Look at the docker-compose.yaml file and notice the addition of the VNC-Viewer container. This container is there to give you acces to a desktop in order to be able to see video at the end of the exercise.
 On your PC (if you are onsite in MTL), go to VNC web browser <<IP_ADDRESS>>:5900. If you are through VPN or elsewhere in Canada, you can RDP here in order to do so: 10.164.50.197 (credential to be provided)  
