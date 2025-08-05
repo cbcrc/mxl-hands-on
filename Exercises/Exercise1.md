@@ -80,7 +80,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Look at the MXL domain_1 file structure on the host  
    ```sh
-   ls /Volumes/mxl/domain_1 && ls /mxl/domain_1/$FLOW1_ID.mxl-flow
+   ls /Volumes/mxl/domain_1 && ls /Volumes/mxl/domain_1/$FLOW1_ID.mxl-flow
    ```
 1. Confirm that the MXL domain file structure is mounted in ram by confirming the filesystem is *tmpfs*  
    ```sh
