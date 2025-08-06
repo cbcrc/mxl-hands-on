@@ -110,9 +110,9 @@ Commands at a glance
 
 ```sh
 # Build the container
-docker image build -f Dockerfile.looping.txt -t mxl-looping:latest .. 
+docker image build -f Dockerfile.clip-player.txt -t mxl-clip-player:latest .. 
 # run interacive shell bypassing the CMD instruction 
-docker run --entrypoint bash -it -v ~/domain:/domain mxl-looping
+docker run -v /Volumes/mxl:/domain -v ~/clips:/clips mxl-clip-player /app/mxl-gst-looping-filesrc -d /domain -i /clips/default.ts
 # run the app
 /app/mxl-gst-looping-filesrc -d /domain -i /app/city.ts
 # Debug

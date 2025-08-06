@@ -10,17 +10,25 @@ WORKDIR /app
 
 # Use minimal dependencies and clean up in the same layer to reduce image size
 RUN apt-get update && apt-get -y install --no-install-recommends \
+        libgstreamer1.0-dev \
+        libgstreamer-plugins-base1.0-dev \
+        libgstreamer-plugins-bad1.0-dev \
         gstreamer1.0-plugins-base \
         gstreamer1.0-plugins-good \
         gstreamer1.0-plugins-bad \
         gstreamer1.0-plugins-ugly \
-        gstreamer1.0-x \
+        gstreamer1.0-libav \
         gstreamer1.0-tools \
+        gstreamer1.0-x \
+        gstreamer1.0-alsa \
+        gstreamer1.0-gl \
+        gstreamer1.0-gtk3 \
+        gstreamer1.0-qt5 \
+        gstreamer1.0-pulseaudio \
         patchelf \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy only necessary files
-COPY ./build-images/city.ts /app/
 COPY ${BUILD_DIR}/utils/gst-looping-filesrc /gst-plugins/
 COPY ${BUILD_DIR}/lib/*.so* /app/
 COPY ${BUILD_DIR}/lib/tests/data/*.json /app/
@@ -32,4 +40,4 @@ ENV GST_PLUGIN_PATH="/gst-plugins"
 # Set rpath for the executable
 RUN patchelf --set-rpath /app mxl-gst-looping-filesrc
 
-CMD ["/app/mxl-gst-looping-filesrc", "-d", "/domain","-i", "city.ts"]
+CMD ["/app/mxl-gst-looping-filesrc", "-d", "/domain"]
