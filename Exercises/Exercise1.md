@@ -64,7 +64,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Look at the containers running  
    ```sh
-   docker ps
+   docker container ls
    ```
 1. Look at the MXL domain file as seen by the reader app.  
    ```sh

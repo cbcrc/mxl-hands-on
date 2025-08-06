@@ -71,7 +71,7 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```
 1. Look at the containers running  
    ```sh
-   docker ps
+   docker container ls
    ```
 1. Look at the MXL domain file structure as seen by the reader app. Notice the second flow with a new unique ID  
    ```sh
