@@ -33,12 +33,12 @@ for ARCH in "${ARCHITECTURES[@]}"; do
     COMP_LOWER=$(echo ${COMP} | tr '[:upper:]' '[:lower:]')
     
     docker build \
-      --build-arg BASE_IMAGE_VERSION=22.04 \
+      --build-arg BASE_IMAGE_VERSION=24.04 \
       --build-arg USER_UID=${USER_UID} \
       --build-arg USER_GID=${USER_GID} \
       --build-arg ARCHITECTURE=${ARCH} \
       -t mxl_build_container_${ARCH}_${COMP_LOWER} \
-      -f ${MXL_PROJECT_PATH}/.devcontainer/Dockerfile.ubuntu-legacy \
+      -f ${MXL_PROJECT_PATH}/.devcontainer/Dockerfile \
       ${MXL_PROJECT_PATH}/.devcontainer
     
     # Configure CMake

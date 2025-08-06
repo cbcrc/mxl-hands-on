@@ -15,7 +15,7 @@ echo "Script directory: ${SCRIPT_DIR}"
 # Default values
 ARCHITECTURES=("x86_64" "arm64")  # Changed amd64 to x86_64 to match build_all.sh
 COMPILERS=("Linux-GCC-Release" "Linux-Clang-Release")
-DEFAULT_COMPILER="Linux-Clang-Release"
+DEFAULT_COMPILER="Linux-GCC-Release"
 DEFAULT_ARCH="x86_64"  # Changed amd64 to x86_64 to match build_all.sh
 
 # Parse command line arguments
