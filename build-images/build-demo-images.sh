@@ -100,7 +100,13 @@ build_multiarch_image() {
   # Create a temporary Dockerfile for multi-arch build
   # Get the directory of the current script
   local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  local temp_dockerfile="${script_dir}/Dockerfile.${service}.multiarch.tmp"
+  # Create a temporary Dockerfile based on the template
+  local temp_dockerfile="${script_dir}/Dockerfile.${service}.temp"
+  if [ "$service" == "clip-player" ]; then
+    cp "${SCRIPT_DIR}/Dockerfile.clip-player.txt" "$temp_dockerfile"
+  else
+    cp "${SCRIPT_DIR}/Dockerfile.${service}.txt" "$temp_dockerfile"
+  fi
   
   echo "====================================================="
   echo "Building multi-architecture image for: $service"
@@ -121,6 +127,8 @@ build_multiarch_image() {
       
       if [ "$service" == "writer" ]; then
         EXECUTABLE="${BUILD_DIR}/tools/mxl-gst/mxl-gst-videotestsrc"
+      elif [ "$service" == "clip-player" ]; then
+        EXECUTABLE="${BUILD_DIR}/tools/mxl-gst/mxl-gst-looping-filesrc"
       else  # reader
         EXECUTABLE="${BUILD_DIR}/tools/mxl-info/mxl-info"
       fi
@@ -154,9 +162,6 @@ build_multiarch_image() {
     echo "No valid platforms found for $service with compiler $compiler, skipping build"
     return
   fi
-  
-  # Copy the template Dockerfile and modify it to use proper path references
-  cp "${script_dir}/Dockerfile.${service}.txt" "$temp_dockerfile"
   
   # Update the BUILD_DIR path in the Dockerfile to use the correct relative path
   # macOS and Linux handle sed -i differently, use a compatible approach
@@ -198,14 +203,16 @@ for COMPILER in "${COMPILERS[@]}"; do
     PLATFORMS="${PLATFORMS}$(get_platform "$ARCH")"
   done
   
-  # Build multi-architecture images for writer and reader
+  # Build multi-architecture images for writer, reader and clip-player
   build_multiarch_image "writer" "$COMPILER" "$PLATFORMS" "$COMPILER_LOWER"
   build_multiarch_image "reader" "$COMPILER" "$PLATFORMS" "$COMPILER_LOWER"
+  build_multiarch_image "clip-player" "$COMPILER" "$PLATFORMS" "$COMPILER_LOWER"
   
   # Also tag as latest if it's the default compiler
   if [ "$COMPILER" = "$DEFAULT_COMPILER" ]; then
     docker tag "mxl-writer:$COMPILER_LOWER" "mxl-writer:latest"
     docker tag "mxl-reader:$COMPILER_LOWER" "mxl-reader:latest"
+    docker tag "mxl-clip-player:$COMPILER_LOWER" "mxl-clip-player:latest"
   fi
 done
 
@@ -220,15 +227,5 @@ echo "Or specify a specific compiler with:"
 echo "COMPILER=linux-gcc-release docker-compose -f ${SCRIPT_DIR}/docker-compose.yaml up"
 echo ""
 echo "Using build artifacts from: ${ROOT_DIR}/build"
-echo ""
-echo "To verify multi-architecture support, run:"
-echo "docker inspect --format='{{.Architecture}}:{{.Os}}' mxl-writer:latest"
-echo "OR"
-echo "docker buildx imagetools inspect mxl-writer:latest"
-echo ""
-echo "To view image manifest tree structure:"
-echo "docker image ls --tree | grep mxl-"
-echo ""
-echo "See the README.md for instructions on manually uploading images to Docker Hub if needed."
 echo ""
 echo "NOTE: Make sure you've built the project for all target architectures first using build_all.sh"
