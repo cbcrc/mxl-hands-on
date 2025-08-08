@@ -85,7 +85,7 @@ In order to run these exercises, you need a Linux base system running with Docke
 
 1. Creating a folder for MXL media sharing.
    ```sh
-   sudo mkdir /mxl
+   sudo mkdir /Volumes/mxl
    ```
 1. Creating a mount point in */etc/fstab* to mount */mxl* to *tmpfs*
    ```sh
