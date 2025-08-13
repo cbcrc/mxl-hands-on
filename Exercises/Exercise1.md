@@ -58,6 +58,13 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```sh
    cat docker-compose.yaml
    ```
+1. If you did **NOT** do the preparations steps for either WLS or MacOS, make sure you have a /Volumes/mxl mounted in *tmpfs* or *ram*.
+   ```sh
+   mount -t tmpfs -o size=512m tmpfs /Volumes/mxl # on WSL linux
+   ```
+   ```sh
+   diskutil erasevolume HFS+ mxl $(hdiutil attach -nomount ram://1048576) # on MacOS
+   ```
 1. Start the containers with the provided .yaml file  
    ```sh
    docker compose up -d
