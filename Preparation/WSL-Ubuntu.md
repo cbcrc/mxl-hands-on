@@ -85,11 +85,11 @@ In order to run these exercises, you need a Linux base system running with Docke
 
 1. Creating a folder for MXL media sharing.
    ```sh
-   sudo mkdir /mxl
+   sudo mkdir -p /Volumes/mxl
    ```
-1. Creating a mount point in */etc/fstab* to mount */mxl* to *tmpfs*
+1. Creating a mount point in */etc/fstab* to mount */Volumes/mxl* to *tmpfs*
    ```sh
-   sudo touch /etc/fstab && sudo chmod 666 /etc/fstab && sudo echo 'tmpfs /Volumes/mxl tmpfs defaults,noatime,size=512M 0 0' > /etc/fstab
+   echo 'tmpfs /Volumes/mxl tmpfs defaults,noatime,size=512M 0 0' | sudo tee -a /etc/fstab
    ```
 1. Close your linux terminal windows. Using a Windows PowerShell shutdown you linux instance.
    ```sh

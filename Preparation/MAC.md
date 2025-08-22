@@ -8,32 +8,15 @@ In order to run these exercises on a Mac, you need to install Docker and create 
 
 ### Steps
 
-1. Download the Docker.dmg file from the following link
+1. On MacOS with apple silicon it is recommended to install rosetta 2 to work with docker.
    ```sh
-   https://desktop.docker.com/mac/main/arm64/Docker.dmg?utm_source=docker&utm_medium=webreferral&utm_campaign=docs-driven-download-mac-arm64&_gl=1*nqtzhd*_ga*MTA4ODM0MjI1NC4xNzUxOTA4NjEy*_ga_XJWPQMJYHQ*czE3NTMyMDkxODckbzUkZzEkdDE3NTMyMDkyNjAkajYwJGwwJGgw
+   softwareupdate --install-rosetta
    ```
-1. Open a terminal and go to the Downloads folder
-   ```sh
-   cd ./Downloads
-   ```
-1. Find your username
-   ```sh
-   ls /Users
-   ```
-1. Install Docker from CLI
-   ```sh
-   sudo hdiutil attach Docker.dmg
-   ```
-   ```sh
-   sudo /Volumes/Docker/Docker.app/Contents/MacOS/install --accept-license --user=<username>
-   ```
-   ```sh
-   sudo hdiutil detach /Volumes/Docker
-   ```
-1. Go back to your user folder
-   ```sh
-   cd ..
-   ```
+1. Download the Docker.dmg file from the following link https://docs.docker.com/desktop/setup/install/mac-install/. Make sure to select the download link for the right type silicon your Mac is having.
+   
+1. Double click on the Docker.dmg file to mount it.
+1. From the docker volume that just mounted on your desktop. Drag and drop the Docker.app in your Applications folder.
+1. Open a terminal window.
 1. Start Docker Desktop
    ```sh
    open -a Docker
