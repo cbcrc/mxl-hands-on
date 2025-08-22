@@ -104,6 +104,21 @@ To share your multi-architecture images with others via Docker Hub, follow these
 
    Docker will automatically select the appropriate architecture version.
 
+## Building the looping testsrc
+
+Commands at a glance
+
+```sh
+# Build the container
+docker image build -f Dockerfile.clip-player.txt -t mxl-clip-player:latest .. 
+# run interacive shell bypassing the CMD instruction 
+docker run -v /Volumes/mxl:/domain -v ~/clips:/clips mxl-clip-player /app/mxl-gst-looping-filesrc -d /domain -i /clips/default.ts
+# run the app
+/app/mxl-gst-looping-filesrc -d /domain -i /app/city.ts
+# Debug
+gst-inspect-1.0
+```
+
 ## Comparison with Original Examples
 
 These files are enhanced versions of those in the `/examples` directory with the following improvements:
