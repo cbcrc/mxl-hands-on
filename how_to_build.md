@@ -45,15 +45,20 @@ This will:
 ## Step 3: Upload to image repository
 
 ```sh
+   echo <YOUR TOKEN> | docker login ghcr.io -u <YOUR_GITHUB_USERNAME> --password-stdin
    current_date=$(date +%Y-%m-%d)
    docker tag mxl-writer:latest ghcr.io/cbcrc/mxl-writer:latest
    docker tag mxl-writer:latest ghcr.io/cbcrc/mxl-writer:$current_date
    docker tag mxl-reader:latest ghcr.io/cbcrc/mxl-reader:latest
    docker tag mxl-reader:latest ghcr.io/cbcrc/mxl-reader:$current_date
+   docker tag mxl-clip-player:latest ghcr.io/cbcrc/mxl-clip-player:latest
+   docker tag mxl-clip-player:latest ghcr.io/cbcrc/mxl-clip-player:$current_date
    docker push ghcr.io/cbcrc/mxl-writer:latest
    docker push ghcr.io/cbcrc/mxl-writer:$current_date
    docker push ghcr.io/cbcrc/mxl-reader:latest
    docker push ghcr.io/cbcrc/mxl-reader:$current_date
+   docker push ghcr.io/cbcrc/mxl-clip-player:latest
+   docker push ghcr.io/cbcrc/mxl-clip-player:$current_date
 ```
 
 ## Step 4: Create `portable-mxl-reader` for Excercise3
