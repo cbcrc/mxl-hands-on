@@ -1,0 +1,36 @@
+services:
+  writer-media-function:
+    image: mxl-writer:latest
+    # platform: linux/amd64
+    pull_policy: never
+    restart: unless-stopped
+    volumes:
+      - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
+        source: /Volumes/mxl/domain_1
+        target: /domain
+
+  clip-player-function:
+    image: mxl-clip-player:latest
+    # platform: linux/amd64
+    pull_policy: never
+    restart: unless-stopped
+    volumes:
+      - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
+        source: /Volumes/mxl/domain_1
+        target: /domain
+      - ../../build-images/city.ts:/app/city.ts
+    command: ["/app/mxl-gst-looping-filesrc", "-d", "/domain", "-i", "/app/city.ts"]
+  reader-media-function:
+    image: mxl-reader:latest
+    # platform: linux/amd64
+    pull_policy: never
+    restart: unless-stopped
+    volumes:
+      - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-only mode.
+        source: /Volumes/mxl/domain_1
+        target: /domain
+        read_only: true
+    stdin_open: true
+    tty: true
+volumes:
+  domain:  # Defines the named volume "domain"
