@@ -33,7 +33,7 @@ services:
     stdin_open: true
     tty: true
   vnc-viewer:
-    image: tiryoh/ubuntu-desktop-lxde-vnc # VNC viewer to connect to the writer-media-function
+    image: accetto/ubuntu-vnc-xfce-g3:24.04 # VNC viewer to connect to the writer-media-function
     # platform: linux/amd64
     restart: unless-stopped
     volumes:
@@ -43,9 +43,8 @@ services:
         read_only: true
       - ./data:/root  
     ports:
-      - "5900:80"  # Maps port 5900 of the container to port 80 on the host
+      - "36901:6901"  # Maps port 6901 of the container to port 36901 on the host
     working_dir: /root  # Sets the working directory inside the container to /root
-    command: ["/bin/bash", "-c", "install.sh"]  # Keeps the container running
 
 volumes:
   domain:  # Defines the named volume "domain"
