@@ -79,12 +79,14 @@ On your PC (if you are onsite in MTL), go to VNC web browser <<IP_ADDRESS>>:5900
    ```sh
    docker compose up -d
    ```
-1. On your PC, go to VNC web browser 127.0.0.1:5900.
-1. To install all the Gstreamer dependencies on your linux desktop, go to `Start Menu > System Tools > LXTerminal` and do the following commands.
+1. On your PC, go to VNC web browser [127.0.0.1:36901](http://127.0.0.1:36901/vnc.html).
+    - Click on Connect
+    - password: headleass
+1. To install all the Gstreamer dependencies on your linux desktop, go to `Terminal Emulator` in the **Task Bar**.
    ```sh
    cd /root
-   chmod +x install.sh
-   ./install.sh
+   sudo ./install.sh
+   # password: headless
    ```
 1. Look at the available MXL flows as seen by the VNC container 
    ```sh
@@ -96,11 +98,11 @@ On your PC (if you are onsite in MTL), go to VNC web browser <<IP_ADDRESS>>:5900
    ./mxl-gst-videosink -d /domain -f $FLOW1_ID # use one of the flow ID from the ls /domain command
    ```
 1. Close the Gstreamer window and CTRL break the LXTerminal.  
-1. Look at the other flow ID in the the domaine.  
+1. Look at the other flow ID in the the domain.  
    ```sh
    ls /domain
    ```
-Whit what you learned so far, can you look at the video of the other MXL stream? Can you spot the difference and identify where it is comming from?  
+With what you learned so far, can you look at the video of the other MXL stream? Can you spot the difference and identify where it is comming from?  
 
    ``` 
    Hint: Carefully look at the docker-compose.yaml file
