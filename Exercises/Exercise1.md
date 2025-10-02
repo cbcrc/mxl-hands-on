@@ -105,6 +105,13 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```sh
    ls /Volumes/mxl/domain_1/$FLOW1_ID.mxl-flow/grains
    ```
+1. Looking at a specific grain (1 frame of video) using FFMPEG and converting it into a picture. As the video data is packed into memory using v210, it is easy to take FFMPEG to convert the raw video data into a picture. 
+   ```sh
+   ffmpeg  -f rawvideo -pix_fmt yuv422p10le -s 1920x1080 -c:v v210 -i /Volumes/mxl/domain_1/$FLOW1_ID.mxl-flow/grains/data.1 out.png -y
+   ```
+
+1. Use your favorite picture viewer to look at out.png
+
 1. Shut down the containers of excercise 1  
    ```sh
    docker compose down

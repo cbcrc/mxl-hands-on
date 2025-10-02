@@ -79,6 +79,18 @@ In order to run these exercises, you need a Linux base system running with Docke
    docker run hello-world
    ```
 
+### Installing FFMPEG
+
+1. Install FFMPEG.
+   ```sh
+   sudo apt install ffmpeg
+   ```
+
+1. Check ffmpeg installation by generatig a clip.
+   ```sh
+   ffmpeg -f lavfi -i testsrc -t 10 -pix_fmt yuv420p output.mp4
+   ```
+
 ### Creating a folder that is mounted in *tmpfs*. By default, WSL 2 is mounting /tmp and /dev on disk, not on RAM. We need to create a Folder that is mounted in RAM in order for MXL to be able to share media through memory. **If you are not using WSL but a regular linux installation, you still need to do these steps. This is where the MXL writers and readers will put media in the next exercises.**
 
 ### Steps
