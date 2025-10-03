@@ -105,11 +105,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```sh
    ls /Volumes/mxl/domain_1/$FLOW1_ID.mxl-flow/grains
    ```
-1. Looking at a specific grain (1 frame of video) using FFMPEG and converting it into a picture. As the video data is packed into memory using v210, it is easy to take FFMPEG to convert the raw video data into a picture. 
-   ```sh
-   ffmpeg  -f rawvideo -pix_fmt yuv422p10le -s 1920x1080 -c:v v210 -i /Volumes/mxl/domain_1/$FLOW1_ID.mxl-flow/grains/data.1 out.png
-   ```
-1. For an unknow reason (under investigation), the reading of the v210 raw grain need to be offset by 8192 bytes.
+1. Looking at a specific grain (1 frame of video) using FFMPEG and converting it into a picture. As the video data is packed into memory using v210, it is easy to take FFMPEG to convert the raw video data into a picture. It is important to note that we have to skip the first 8192 bytes of the grain. They are reserved for the mxl info structure.
    ```sh
     dd if=/Volumes/mxl/domain_1/$FLOW1_ID.mxl-flow/grains/data.1  skip=8192 ibs=1 | ffmpeg -f rawvideo -pix_fmt yuv422p10le -s 1920x1080 -c:v v210 -i pipe:0 out.png
     ```
