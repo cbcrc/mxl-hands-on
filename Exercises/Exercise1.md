@@ -109,6 +109,10 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```sh
    ffmpeg  -f rawvideo -pix_fmt yuv422p10le -s 1920x1080 -c:v v210 -i /Volumes/mxl/domain_1/$FLOW1_ID.mxl-flow/grains/data.1 out.png -y
    ```
+1. For an unknow reason (under investigation), the reading of the v210 raw grain need to be offset by 8192 bytes.
+   ```sh
+    dd if=/Volumes/mxl/domain_1/$FLOW1_ID.mxl-flow/grains/data.1  skip=8192 ibs=1 | ffmpeg -f rawvideo -pix_fmt yuv422p10le -s 1920x1080 -c:v v210 -i pipe:0 out.png -y
+    ```
 
 1. Use your favorite picture viewer to look at out.png
 
