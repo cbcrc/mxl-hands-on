@@ -20,6 +20,9 @@ As the media industry transitions from traditional hardware-based setups to virt
 
 ### [Excercise 3 - Add VNC client for GUI and changing the attribute of one of the writer app](./Exercises/Exercise3.md)
 
+### [Exercise 4 - Exploring the MXL plugin for OBS studio](./Exercises/Exercise4.md)
+
+
 ## TODO
 
 * Upgrade images to latest MXL version
