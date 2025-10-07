@@ -9,7 +9,7 @@ services:
         target: /domain
     command: ["/app/mxl-gst-videotestsrc", "-d", "/domain", "-f", "/app/v210_flow.json", "-t", "Original Flow"]
   clip-player-function:
-    image: ghcr.io/cbcrc/mxl-clip-player:latest
+    image: ghcr.io/cbcrc/mxl-clip-player:2025-08-25
     platform: linux/amd64
     restart: unless-stopped
     volumes:

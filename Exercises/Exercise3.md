@@ -90,7 +90,7 @@ This exercise also showcases the gstreamer clip player plugin (added in [PR #22]
 
 1. On your PC, go to VNC web browser [127.0.0.1:36901](http://127.0.0.1:36901/vnc.html).
     - Click on Connect
-    - password: headleass
+    - password: headless
 1. To install all the Gstreamer dependencies on your linux desktop, go to `Terminal Emulator` in the **Task Bar**.
 
    ```sh
