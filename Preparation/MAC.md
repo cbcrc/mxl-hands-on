@@ -33,6 +33,13 @@ In order to run these exercises on a Mac, you need to install Docker and create 
    xcode-select --install
    ```
 
+### Installing Brew
+
+1. Installing Brew, an optional package manager.
+   ```sh
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   ```
+
 ### Creating a 512MB RamDisk on your MAC
 
 ### Steps
