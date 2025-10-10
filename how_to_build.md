@@ -61,7 +61,7 @@ This will:
    docker push ghcr.io/cbcrc/mxl-clip-player:$current_date
 ```
 
-## Step 4: Create `portable-mxl-reader` for Excercise3
+## Step 4: Create `portable-mxl-reader` for Exercise3
 
 ```sh
    cd ~/mxl-hands-on

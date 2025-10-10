@@ -9,7 +9,7 @@ services:
         target: /domain
     command: ["/app/mxl-gst-videotestsrc", "-d", "/domain", "-f", "/app/v210_flow.json", "-t", "Original Flow"]
   clip-player-function:
-    image: ghcr.io/cbcrc/mxl-clip-player:2025-08-25
+    image: ghcr.io/cbcrc/mxl-clip-player:latest
     platform: linux/amd64
     restart: unless-stopped
     volumes:
@@ -38,7 +38,7 @@ services:
         source: /Volumes/mxl/domain_1
         target: /domain
         read_only: true
-      - ./data:/root  
+      - ./data:/root
     ports:
       - "36901:6901"  # Maps port 6901 of the container to port 36901 on the host
     working_dir: /root  # Sets the working directory inside the container to /root

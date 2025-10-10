@@ -14,11 +14,11 @@ As the media industry transitions from traditional hardware-based setups to virt
 
 ### [Preparation Mac - Getting Docker installed and creating a RamDisk (Currently not working on ARM CPU)](./Preparation/MAC.md)
 
-### [Excercise 1 - Single writer and single domain](./Exercises/Exercise1.md)
+### [Exercise 1 - Single writer and single domain](./Exercises/Exercise1.md)
 
-### [Excercise 2 - Multiple writers and multiple domains](./Exercises/Exercise2.md)
+### [Exercise 2 - Multiple writers and multiple domains](./Exercises/Exercise2.md)
 
-### [Excercise 3 - Add VNC client for GUI and changing the attribute of one of the writer app](./Exercises/Exercise3.md)
+### [Exercise 3 - Add VNC client for GUI and changing the attribute of one of the writer app](./Exercises/Exercise3.md)
 
 ## TODO
 
@@ -28,6 +28,6 @@ As the media industry transitions from traditional hardware-based setups to virt
 ## Authors
 
 * Felix Poulin: initial idea
-* Mathieu Rochon: Excercise design
-* Anthony Royer: Excercise design
-* Sunday Nyamweno: Excercise design and implementation 
+* Mathieu Rochon: Exercise design
+* Anthony Royer: Exercise design
+* Sunday Nyamweno: Exercise design and implementation 
