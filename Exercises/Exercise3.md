@@ -1,4 +1,4 @@
-## Excercise 3 - Add VNC client for GUI and changing the attribute of one of the writer app
+## Exercise 3 - Add VNC client for GUI and changing the attribute of one of the writer app
 
 ### Synopsis
 
@@ -76,7 +76,7 @@ This exercise also showcases the gstreamer clip player plugin (added in [PR #22]
    cd ~/mxl-hands-on/docker/exercise-3
    ```
 
-1. Look at the docker-compose.yaml file and notice the addition of the VNC-Viewer container. This container is there to give you acces to a desktop in order to be able to see video at the end of the exercise.
+1. Look at the docker-compose.yaml file and notice the addition of the VNC-Viewer container. This container is there to give you access to a desktop in order to be able to see video at the end of the exercise.
 
    ```sh
    cat docker-compose.yaml
@@ -109,7 +109,7 @@ This exercise also showcases the gstreamer clip player plugin (added in [PR #22]
 
    ```sh
    FLOW1_ID=5fbec3b1-1b0f-417d-9059-8b94a47197ed
-   ./mxl-gst-videosink -d /domain -f $FLOW1_ID # use one of the flow ID from the ls /domain command
+   ./mxl-gst-videosink -d /domain -v $FLOW1_ID # use one of the flow ID from the ls /domain command
    ```
 
 1. Close the Gstreamer window and CTRL break the LXTerminal.  
@@ -119,12 +119,12 @@ This exercise also showcases the gstreamer clip player plugin (added in [PR #22]
    ls /domain
    ```
 
-With what you learned so far, can you look at the video of the other MXL stream? Can you spot the difference and identify where it is comming from?  
+With what you learned so far, can you look at the video of the other MXL stream? Can you spot the difference and identify where it is coming from?  
 
 > [!TIP]
 > Hint: Carefully look at the docker-compose.yaml file
 
-Can you change the text ident of flow 2 for you first name and look at it again to proove that it changed?
+Can you change the text ident of flow 2 for you first name and look at it again to prove that it changed?
 
 ### Extra information for Exercise 3
 

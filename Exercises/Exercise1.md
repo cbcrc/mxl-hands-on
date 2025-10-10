@@ -1,4 +1,4 @@
-## Excercise 1 - Single writer and single domain
+## Exercise 1 - Single writer and single domain
 
 ### Synopsis
 
@@ -105,7 +105,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```sh
    ls /Volumes/mxl/domain_1/$FLOW1_ID.mxl-flow/grains
    ```
-1. Shut down the containers of excercise 1  
+1. Shut down the containers of exercise 1  
    ```sh
    docker compose down
    ```
@@ -140,7 +140,7 @@ As noted, `tmpfs` is a temporary file storage facility in Unix-like operating sy
 You can read more about `tmpfs` here: https://www.kernel.org/doc/html/latest/filesystems/tmpfs.html
 
 
-#### NMOS IS04 flow definiion  
+#### NMOS IS04 flow definition    
 `${mxlDomain}/<flowId>.mxl-flow/.json`: This JSON file is the NMOS IS-04 Flow Resource Definition. It is crucial as it uniquely describes the characteristics of the MXL flow. Key parameters you observed include:  
 
 * `id`: The unique identifier (flowId) for this specific flow.
@@ -155,6 +155,6 @@ Step 11 introduces you to the `mxl-info` tool, which is invaluable for inspectin
 * `grain count`: This value represents the depth of the circular buffer for that particular flow. It indicates how many historical grains (frames in this exercise) are currently available in the MXL domain for that flow. The mxl-writer continuously overwrites older grains once the buffer depth is reached.
 * `latency`: It represents the time difference between the capture/generation timestamp of the latest available grain and the current time when mxl-info is executed.
 In this exercise, with the writer generating grains @ 29.97 frames per second (30000/1001), each grain represents 33.36 milliseconds of video.
-Therefore, the latency value will fluctuate between 0 and approximately 33 msec. A value close to 0 msec indicates you are very close to when the current grain was completed by the MXL writer, while a value closer to 33 msec means the current grain has been available for almost a full frame interval. This could potentially inticate issue in the system if this value goes beyond the time value of a grain.
+Therefore, the latency value will fluctuate between 0 and approximately 33 msec. A value close to 0 msec indicates you are very close to when the current grain was completed by the MXL writer, while a value closer to 33 msec means the current grain has been available for almost a full frame interval. This could potentially indicate issue in the system if this value goes beyond the time value of a grain.
 * `grain rate`: Displays the nominal framerate of the flow, derived from the NMOS IS-04 definition.
 ### [Back to main page](../README.md)
