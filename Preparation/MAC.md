@@ -40,20 +40,6 @@ In order to run these exercises on a Mac, you need to install Docker and create 
    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
    ```
 
-### Installing FFMPEG
-
-1. Installing FFMPEG with brew.
-   ```sh
-   brew install ffmpeg
-   ```
-
-1. Check ffmpeg installation by generatig a clip.
-   ```sh
-   ffmpeg -f lavfi -i testsrc -t 10 -pix_fmt yuv420p output.mp4
-   ```
-
-1. Check the output.mp4 with your favorite clip player.
-
 ### Creating a 512MB RamDisk on your MAC
 
 ### Steps
