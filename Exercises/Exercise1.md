@@ -114,7 +114,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
 
 1. Use your favorite picture viewer to look at out.png
 
-1. Shut down the containers of excercise 1  
+1. Shut down the containers of exercise 1  
    ```sh
    docker compose down
    ```
