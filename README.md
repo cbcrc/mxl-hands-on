@@ -31,3 +31,12 @@ As the media industry transitions from traditional hardware-based setups to virt
 * Mathieu Rochon: Exercise design
 * Anthony Royer: Exercise design
 * Sunday Nyamweno: Exercise design and implementation 
+
+## ⚖️ License
+
+This repository is dual-licensed.
+
+* All **code, configuration, and script files** (e.g., `.sh`, `.yaml`, Dockerfiles) are licensed under the [Apache License 2.0](LICENSES/Apache-2.0.txt).
+* All **documentation and media files** (e.g., `.md`, `.jpg`, `.ts`) are licensed under the [Creative Commons Attribution 4.0 International License](LICENSES/CC-BY-4.0.txt).
+
+Please see the main `LICENSE` file for more details.
