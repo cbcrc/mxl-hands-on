@@ -12,7 +12,7 @@ As the media industry transitions from traditional hardware-based setups to virt
 
 ### [Preparation Windows 11 - Getting WSL (Ubuntu) and Docker ready](./Preparation/WSL-Ubuntu.md)
 
-### [Preparation Mac - Getting Docker installed and creating a RamDisk (Currently not working on ARM CPU)](./Preparation/MAC.md)
+### [Preparation Mac - Getting Docker installed and creating a RamDisk](./Preparation/MAC.md)
 
 ### [Exercise 1 - Single writer and single domain](./Exercises/Exercise1.md)
 
