@@ -15,6 +15,6 @@ A full copy of this license is available in the `LICENSES/Apache-2.0.txt` file.
 
 All documentation and media files are licensed under the Creative Commons Attribution 4.0 International License (CC BY 4.0). This includes, but is not limited to:
 - Markdown files (`.md`)
-- Image files and video (`.jpg`, `.png`, `.ts`, etc.)
+- Image files and videos (`.jpg`, `.png`, `.ts`, etc.)
 
 A full copy of this license is available in the `LICENSES/CC-BY-4.0.txt` file.
