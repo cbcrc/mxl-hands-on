@@ -46,7 +46,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
 
 ### Steps
 
-- [x]: Clone repo  
+- [ ]: Clone repo  
    ```sh
    git clone https://github.com/cbcrc/mxl-hands-on
    ```
