@@ -46,11 +46,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
 
 ### Steps
 
-<style>span[class="checked"]{color: green;}</style>
-<style>span[class="unchecked"]{color: red;}</style>
-
-
-- [ ] Clone repo  
+1. Clone repo  
    ```sh
    git clone https://github.com/cbcrc/mxl-hands-on
    ```
