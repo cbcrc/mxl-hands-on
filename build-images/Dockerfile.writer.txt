@@ -3,8 +3,10 @@ ARG BASE_IMAGE=debian:trixie-slim
 
 FROM ${BASE_IMAGE}
 
-# Declare build arguments after FROM
-ARG BUILD_DIR=../build/Linux-Clang-Release_x86_64
+# --- Final Path provided by shell script ---
+ARG FULL_BUILD_PATH
+# --- END Final Path provided by shell script ---
+
 
 WORKDIR /app
 
@@ -13,14 +15,24 @@ RUN apt-get update && apt-get -y install --no-install-recommends \
         gstreamer1.0-plugins-good \
         gstreamer1.0-x \
         patchelf \
+        # Add bash and coreutils for complex file movement
+        bash \
+        coreutils \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy only necessary files
-COPY ${BUILD_DIR}/lib/*.so* /app/
-COPY ${BUILD_DIR}/lib/tests/data/*.json /app/
-COPY ${BUILD_DIR}/tools/mxl-gst/mxl-gst-videotestsrc /app/
+# Copy the entire build directory content into a temporary location within the image
+# This avoids BuildX wild card expansion issues
+COPY ${FULL_BUILD_PATH} /tmp/build/
+
+# Move only necessary files from the temp directory to /app and clean up
+RUN mv /tmp/build/lib/*.so* /app/ \
+    && mv /tmp/build/lib/internal/libmxl-common.* /app/ \
+    && mv /tmp/build/lib/tests/data/*.json /app/ \
+    && mv /tmp/build/tools/mxl-gst/mxl-gst-videotestsrc /app/ \
+    # Clean up the temp directory
+    && rm -rf /tmp/build
 
 # Set rpath for the executable
 RUN patchelf --set-rpath /app mxl-gst-videotestsrc
 
-CMD ["/app/mxl-gst-videotestsrc", "-d", "/domain", "-f", "/app/v210_flow.json"]
+CMD ["/app/mxl-gst-videotestsrc", "-d", "/domain", "-v", "/app/v210_flow.json", "-a", "/app/audio_flow.json"]

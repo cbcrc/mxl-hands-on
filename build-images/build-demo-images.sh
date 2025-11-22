@@ -3,20 +3,43 @@
 # macOS ships with Bash 3.2 by default
 
 # This script builds multi-architecture Docker images for the MXL project
-# It can be used to create smaller demonstration images
-# Creates proper multi-arch manifests that show up as a single image with multiple platforms
+# by explicitly building each architecture and then combining them into a manifest.
 
 set -e
+
+# --- USER INPUT AND SETUP ---
+
+# Function to prompt for GHCR username
+prompt_for_username() {
+  read -p "Enter your GHCR.io username (e.g., myuser): " USERNAME
+  if [ -z "$USERNAME" ]; then
+    echo "Username cannot be empty. Exiting."
+    exit 1
+  fi
+  # Set the full registry path
+  GHCR_REGISTRY="ghcr.io/$USERNAME"
+  echo "Using GHCR Registry: ${GHCR_REGISTRY}"
+}
+
+# Get current date for tagging
+CURRENT_DATE=$(date +%Y-%m-%d)
+echo "Using date tag: ${CURRENT_DATE}"
+echo ""
+
+# Ask the user for their GHCR username
+prompt_for_username
+
+# --- END USER INPUT AND SETUP ---
 
 # Script location detection
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "Script directory: ${SCRIPT_DIR}"
 
 # Default values
-ARCHITECTURES=("x86_64" "arm64")  # Changed amd64 to x86_64 to match build_all.sh
+ARCHITECTURES=("x86_64" "arm64")  
 COMPILERS=("Linux-GCC-Release" "Linux-Clang-Release")
-DEFAULT_COMPILER="Linux-GCC-Release"
-DEFAULT_ARCH="x86_64"  # Changed amd64 to x86_64 to match build_all.sh
+DEFAULT_COMPILER="Linux-Clang-Release"
+DEFAULT_ARCH="x86_64"  
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -51,7 +74,7 @@ echo "Building Docker images for architectures: ${ARCHITECTURES[*]}"
 echo "Using compilers: ${COMPILERS[*]}"
 echo ""
 
-# Create platform mapping using a simpler approach compatible with older Bash versions
+# Create platform mapping
 get_platform() {
   local arch=$1
   if [ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ]; then
@@ -64,7 +87,8 @@ get_platform() {
   fi
 }
 
-# Ensure we have Docker BuildX with proper driver for multi-arch builds
+# Ensure we have Docker BuildX with proper driver
+# We still use buildx to ensure cross-compilation is possible and to push.
 docker buildx inspect mxl-builder > /dev/null 2>&1 || docker buildx create --name mxl-builder --driver docker-container --bootstrap --use
 
 # Determine the correct path to the project root
@@ -87,20 +111,34 @@ if [ ! -d "${ROOT_DIR}/build" ]; then
   exit 1
 fi
 
-# Create a function to build multi-arch images
-build_multiarch_image() {
+# Create a function to build a single-arch image
+build_single_arch_image() {
   local service=$1
   local compiler=$2
-  local platforms=$3
-  local tag=$4
-
-  # Build arguments to pass to buildx
-  local build_args=""
+  local arch=$3
+  local platform=$4
+  local tag=$5 # This is the unique tag: compiler-arch
   
-  # Create a temporary Dockerfile for multi-arch build
-  # Get the directory of the current script
+  # Calculate the full, final path string (relative to build context, which is ROOT_DIR)
+  # Example: build/GCC-Release_x86_64
+  FULL_BUILD_PATH="build/${compiler}_${arch}"
+
+  # Determine the executable path to verify existence
+  if [ "$service" == "writer" ]; then
+    EXECUTABLE="${ROOT_DIR}/${FULL_BUILD_PATH}/tools/mxl-gst/mxl-gst-videotestsrc"
+  elif [ "$service" == "clip-player" ]; then
+    EXECUTABLE="${ROOT_DIR}/${FULL_BUILD_PATH}/tools/mxl-gst/mxl-gst-looping-filesrc"
+  else  # reader
+    EXECUTABLE="${ROOT_DIR}/${FULL_BUILD_PATH}/tools/mxl-info/mxl-info"
+  fi
+
+  if [ ! -f "$EXECUTABLE" ]; then
+    echo "WARNING: Executable for $service not found at ${EXECUTABLE}. Skipping platform $platform."
+    return 1
+  fi
+  
+  # Create a temporary Dockerfile for the build
   local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  # Create a temporary Dockerfile based on the template
   local temp_dockerfile="${script_dir}/Dockerfile.${service}.temp"
   if [ "$service" == "clip-player" ]; then
     cp "${SCRIPT_DIR}/Dockerfile.clip-player.txt" "$temp_dockerfile"
@@ -108,124 +146,127 @@ build_multiarch_image() {
     cp "${SCRIPT_DIR}/Dockerfile.${service}.txt" "$temp_dockerfile"
   fi
   
+  # Define the full tag for the push, including the GHCR registry
+  FULL_TAG="$GHCR_REGISTRY/mxl-$service:$tag"
+  
   echo "====================================================="
-  echo "Building multi-architecture image for: $service"
-  echo "Using compiler: $compiler"
-  echo "For platforms: $platforms"
-  echo "Tag: $tag"
-  echo "Root directory: ${ROOT_DIR}"
+  echo "Building single-architecture image for: $service"
+  echo "Compiler: $compiler, Architecture: $arch, Platform: $platform"
+  echo "Pushing tag: $FULL_TAG"
+  echo "Build path argument: $FULL_BUILD_PATH"
   echo "====================================================="
   
-  # Create platform-specific build context directories
-  for ARCH in "${ARCHITECTURES[@]}"; do
-    PLATFORM=$(get_platform "$ARCH")
-    
-    # Only include platforms that are requested and have build artifacts
-    if [[ $platforms == *"$PLATFORM"* ]]; then
-      # Check if build artifacts exist using absolute path
-      BUILD_DIR="${ROOT_DIR}/build/${compiler}_${ARCH}"
-      
-      if [ "$service" == "writer" ]; then
-        EXECUTABLE="${BUILD_DIR}/tools/mxl-gst/mxl-gst-videotestsrc"
-      elif [ "$service" == "clip-player" ]; then
-        EXECUTABLE="${BUILD_DIR}/tools/mxl-gst/mxl-gst-looping-filesrc"
-      else  # reader
-        EXECUTABLE="${BUILD_DIR}/tools/mxl-info/mxl-info"
-      fi
-      
-      if [ ! -f "$EXECUTABLE" ]; then
-        echo "ERROR: Executable for $service not found at ${EXECUTABLE}"
-        echo "       Please build the project first using build_all.sh"
-        echo "       Make sure dmf-mxl directory contains the build artifacts"
-        echo "       Skipping platform $PLATFORM for $service"
-        
-        # Remove this platform from the platforms list
-        platforms=${platforms//$PLATFORM/}
-        # Clean up any remaining commas
-        platforms=${platforms//,,/,}
-        platforms=${platforms/%,/}
-        platforms=${platforms/#,/}
-        
-        continue
-      fi
-      
-      # We don't need to pass BUILD_DIR as we're modifying the Dockerfile directly with sed
-      # This is just a check to verify the path exists
-      if [ -d "${BUILD_DIR}" ]; then
-        echo "Found build directory at: ${BUILD_DIR}"
-      fi
-    fi
-  done
-  
-  # If we have no platforms left, skip this build
-  if [ -z "$platforms" ]; then
-    echo "No valid platforms found for $service with compiler $compiler, skipping build"
-    return
-  fi
-  
-  # Update the BUILD_DIR path in the Dockerfile to use the correct relative path
-  # macOS and Linux handle sed -i differently, use a compatible approach
-  if [[ "$(uname)" == "Darwin" ]]; then
-    sed -i '' "s|ARG BUILD_DIR=.*|ARG BUILD_DIR=build/${compiler}_${ARCH}|g" "$temp_dockerfile"
-  else
-    sed -i "s|ARG BUILD_DIR=.*|ARG BUILD_DIR=build/${compiler}_${ARCH}|g" "$temp_dockerfile"
-  fi
-  
-  # Build the multi-arch image directly with Docker BuildX
+  # Build and push the single-arch image using the platform and path as build-arg
   docker buildx build \
-    --platform "$platforms" \
-    $build_args \
-    --tag "mxl-$service:$tag" \
+    --platform "$platform" \
+    --build-arg FULL_BUILD_PATH="$FULL_BUILD_PATH" \
+    --tag "$FULL_TAG" \
     --file "$temp_dockerfile" \
-    --push=false \
-    --load \
-    --build-arg ROOT_DIR="." \
-    ${ROOT_DIR}
+    --push=true \
+    "${ROOT_DIR}"
   
   # Clean up temporary Dockerfile
   rm -f "$temp_dockerfile"
   
-  echo "Completed building multi-arch image mxl-$service:$tag"
-  echo ""
+  echo "Completed pushing single-arch image $FULL_TAG"
+  return 0
 }
 
-# Build multi-arch images for each compiler
+# Map to store successfully pushed tags for manifest creation
+declare -A IMAGE_TAGS
+
+# Main loop to build all individual arch images
 for COMPILER in "${COMPILERS[@]}"; do
-  # Convert compiler name to lowercase for Docker tag
+  # Convert compiler name to lowercase for unique tagging
   COMPILER_LOWER=$(echo ${COMPILER} | tr '[:upper:]' '[:lower:]')
   
-  # Create platform list from all architectures
-  PLATFORMS=""
-  for ARCH in "${ARCHITECTURES[@]}"; do
-    if [ -n "$PLATFORMS" ]; then
-      PLATFORMS="$PLATFORMS,"
+  for SERVICE in "writer" "reader" "clip-player"; do
+    
+    # Initialize the array for this specific service and compiler base tag
+    MANIFEST_TAGS_ARRAY=()
+    
+    for ARCH in "${ARCHITECTURES[@]}"; do
+      PLATFORM=$(get_platform "$ARCH")
+      
+      # Tag is unique to compiler and architecture
+      UNIQUE_TAG="${COMPILER_LOWER}-${ARCH}"
+      
+      # Build the image and check if successful (return 0)
+      if build_single_arch_image "$SERVICE" "$COMPILER" "$ARCH" "$PLATFORM" "$UNIQUE_TAG"; then
+        # If successful, add the unique tag to the manifest list
+        MANIFEST_TAGS_ARRAY+=("$GHCR_REGISTRY/mxl-$SERVICE:$UNIQUE_TAG")
+      fi
+    done
+    
+    # Check if we have any successful builds for this service/compiler combination
+    if [ ${#MANIFEST_TAGS_ARRAY[@]} -gt 0 ]; then
+      
+      # The base tag for the multi-arch manifest is just the compiler name
+      BASE_TAG="$GHCR_REGISTRY/mxl-$SERVICE:$COMPILER_LOWER"
+      
+      # Join the array elements with spaces for the imagetools create command
+      MANIFEST_SOURCES=$(IFS=$' '; echo "${MANIFEST_TAGS_ARRAY[*]}")
+      
+      echo "====================================================="
+      echo "Creating multi-arch manifest $BASE_TAG"
+      echo "Sources: ${MANIFEST_SOURCES}"
+      echo "====================================================="
+      
+      # Use the first successful image as the base and add the others
+      docker buildx imagetools create "${MANIFEST_TAGS_ARRAY[0]}" "${MANIFEST_TAGS_ARRAY[@]:1}" -t "$BASE_TAG"
+      
+      echo "Successfully pushed multi-arch manifest $BASE_TAG"
+      echo ""
+
+      # Store the successful base manifest tag for 'latest' creation
+      if [ "$COMPILER" = "$DEFAULT_COMPILER" ]; then
+        # Store the base tag for later creation of 'latest' and 'date' tags
+        IMAGE_TAGS["$SERVICE"]="$BASE_TAG"
+      fi
+      
+    else
+      echo "WARNING: Could not build any architecture for $SERVICE with compiler $COMPILER. Skipping manifest creation."
+      echo ""
     fi
-    PLATFORMS="${PLATFORMS}$(get_platform "$ARCH")"
   done
-  
-  # Build multi-architecture images for writer, reader and clip-player
-  build_multiarch_image "writer" "$COMPILER" "$PLATFORMS" "$COMPILER_LOWER"
-  build_multiarch_image "reader" "$COMPILER" "$PLATFORMS" "$COMPILER_LOWER"
-  build_multiarch_image "clip-player" "$COMPILER" "$PLATFORMS" "$COMPILER_LOWER"
-  
-  # Also tag as latest if it's the default compiler
-  if [ "$COMPILER" = "$DEFAULT_COMPILER" ]; then
-    docker tag "mxl-writer:$COMPILER_LOWER" "mxl-writer:latest"
-    docker tag "mxl-reader:$COMPILER_LOWER" "mxl-reader:latest"
-    docker tag "mxl-clip-player:$COMPILER_LOWER" "mxl-clip-player:latest"
-  fi
 done
+
+# Create 'latest' and 'date' manifests for the default compiler
+if [ "$DEFAULT_COMPILER" = "$COMPILER" ]; then
+    echo "====================================================="
+    echo "Creating 'latest' and 'date' manifests for default compiler: $DEFAULT_COMPILER"
+    echo "====================================================="
+
+    for SERVICE in "writer" "reader" "clip-player"; do
+        BASE_TAG="${IMAGE_TAGS[$SERVICE]}"
+        
+        if [ -z "$BASE_TAG" ]; then
+          echo "Skipping 'latest' and 'date' manifests for $SERVICE as no valid manifest was created with the default compiler."
+          continue
+        fi
+
+        # Create 'latest' manifest and push it
+        LATEST_TAG="$GHCR_REGISTRY/mxl-$SERVICE:latest"
+        echo "Creating manifest $LATEST_TAG pointing to $BASE_TAG"
+        docker buildx imagetools create "$BASE_TAG" -t "$LATEST_TAG"
+        
+        # Create 'current_date' manifest and push it
+        DATE_TAG="$GHCR_REGISTRY/mxl-$SERVICE:$CURRENT_DATE"
+        echo "Creating manifest $DATE_TAG pointing to $BASE_TAG"
+        echo "Source: $BASE_TAG"
+        docker buildx imagetools create "$BASE_TAG" -t "$DATE_TAG"
+    done
+fi
 
 # Reset to default for convenience
 export COMPILER=$DEFAULT_COMPILER
 export COMPILER_LOWER=$(echo ${COMPILER} | tr '[:upper:]' '[:lower:]')
 
-echo "All builds completed!"
-echo "You can now run the demo with: docker-compose -f ${SCRIPT_DIR}/docker-compose.yaml up"
-echo ""
-echo "Or specify a specific compiler with:"
-echo "COMPILER=linux-gcc-release docker-compose -f ${SCRIPT_DIR}/docker-compose.yaml up"
-echo ""
-echo "Using build artifacts from: ${ROOT_DIR}/build"
-echo ""
-echo "NOTE: Make sure you've built the project for all target architectures first using build_all.sh"
+echo "All builds and pushes completed!"
+echo "---"
+echo "To run the demo locally, use the images you pushed to GHCR.io. Example:"
+echo "  docker pull $GHCR_REGISTRY/mxl-writer:latest"
+echo "The docker-compose.yaml you provided already uses the tag variable convention, assuming your shell is set up:"
+echo "  image: $GHCR_REGISTRY/mxl-writer:\${COMPILER_LOWER:-linux-clang-release}"
+echo "And run the demo:"
+echo "  docker-compose -f ${SCRIPT_DIR}/docker-compose.yaml up"

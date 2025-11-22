@@ -61,17 +61,10 @@ This will:
    docker push ghcr.io/cbcrc/mxl-clip-player:$current_date
 ```
 
-## Step 4: Create `portable-mxl-reader` for Exercise3
+## Step 4: Creating `portable mxl app`
 
 ```sh
-   cd ~/mxl-hands-on
-   mkdir ../portable-mxl-reader
-   cp ./dmf-mxl/build/Linux-Clang-Release_x86_64/lib/*.so* ../portable-mxl-reader/
-   cp ./dmf-mxl/build/Linux-Clang-Release_x86_64/tools/mxl-info/mxl-info ../portable-mxl-reader/
-   cp ./dmf-mxl/build/Linux-Clang-Release_x86_64/tools/mxl-gst/mxl-gst-videosink ../portable-mxl-reader/
-   cp ./dmf-mxl/build/Linux-Clang-Release_x86_64/lib/tests/data/*.json ../portable-mxl-reader/
-   tar czf ../portable-mxl-reader.tar.gz --directory=../portable-mxl-reader/ .
-   cp ../portable-mxl-reader.tar.gz ./docker/exercise-3/data/
+   ./create_portables.sh
 ```
 
 ## Step 5 Test with Exercises
