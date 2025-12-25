@@ -1,0 +1,68 @@
+PREREQUISITE:
+create a tmpfs mounted volume for your MXL domain.
+
+mount -t tmpfs -o size=512m tmpfs /Volumes/mxl
+
+mxl-gst-testsrc
+
+
+./mxl-gst-testsrc [OPTIONS]
+
+
+OPTIONS:
+  -h,     --help              Print this help message and exit
+  -v,     --video-config-file TEXT
+                              The json file which contains the Video NMOS Flow configuration
+          --video-options-file TEXT
+                              The json file which contains the Video Flow options.
+  -a,     --audio-config-file TEXT
+                              The json file which contains the Audio NMOS Flow configuration
+          --audio-options-file TEXT
+                              The json file which contains the Audio Flow options.
+          --audio-offset INT [0]
+                              Audio sample offset in number of samples. Positive value means
+                              you are adding a delay (commit in the past).
+          --video-offset INT [0]
+                              Video frame offset in number of frames. Positive value means you
+                              are adding a delay (commit in the past).
+  -d,     --domain TEXT:DIR REQUIRED
+                              The MXL domain directory
+  -p,     --pattern TEXT [smpte]
+                              Test pattern to use. For available options see
+                              https://gstreamer.freedesktop.org/documentation/videotestsrc/index.html?gi-language=c#GstVideoTestSrcPattern
+  -t,     --overlay-text TEXT [EBU DMF MXL]
+                              Change the text overlay of the test source
+  -g,     --group-hint TEXT [mxl-gst-testsrc-group]  
+                              The group-hint value to use in the flow json definition                               
+
+Example to run with video only:
+
+./mxl-gst-testsrc -d /Volumes/mxl -v v210_flow.json
+
+Example to run with audio only:
+
+./mxl-gst-testsrc -d /Volumes/mxl -a audio_flow.json
+
+Example to run with both video and audio:
+
+./mxl-gst-testsrc -d /Volumes/mxl -v v210_flow.json -a audio_flow.json
+
+By default, videotestsrc produces one slice and one sample at a time because it relies on themaxSyncBatchSizeHint field in the flow options to determine batch size, which defaults to 1 when not configured. To modify this behavior, create separate flow option files for video and audio.
+
+video_options.json
+{
+  "maxCommitBatchSizeHint": 60,
+  "maxSyncBatchSizeHint": 60
+}
+
+audio_options.json
+{
+  "maxCommitBatchSizeHint": 512,
+  "maxSyncBatchSizeHint": 512
+}
+
+You can run the full example with:
+
+***The 2 options files need to be manually created***
+
+./mxl-gst-testsrc -d /Volumes/mxl -v v210_flow.json --video-options-file video_options.json -a audio_flow.json --audio-options-file audio_options.json

@@ -1,0 +1,24 @@
+PREREQUISITE:
+create a tmpfs mounted volume for your MXL domain.
+
+mount -t tmpfs -o size=512m tmpfs /Volumes/mxl
+
+mxl-gst-looping-filesrc
+
+**To run this app you need to use the shell script run-loop-player.sh because of a Gstreamer library dependency.
+
+mxl-gst-looping-filesrc 
+
+./mxl-gst-looping-filesrc [OPTIONS]
+
+
+OPTIONS:
+  -h,     --help              Print this help message and exit 
+  -d,     --domain TEXT REQUIRED 
+                              The MXL domain directory 
+  -i,     --input TEXT:FILE REQUIRED 
+                              MPEGTS media file location 
+
+This app only do video for now, here is an example to run it with the sizzle.ts file provided.
+
+./run-loop-player.sh -d /Volumes/mxl -i sizzle.ts

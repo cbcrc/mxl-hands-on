@@ -1,0 +1,41 @@
+PREREQUISITE:
+create a tmpfs mounted volume for your MXL domain.
+
+mount -t tmpfs -o size=512m tmpfs /Volumes/mxl
+
+mxl-gst-sink
+
+./mxl-gst-sink [OPTIONS]
+
+
+OPTIONS:
+  -h,     --help              Print this help message and exit
+  -v,     --video-flow-id TEXT
+                              The video flow ID
+  -a,     --audio-flow-id TEXT
+                              The audio flow ID
+  -d,     --domain TEXT:DIR REQUIRED
+                              The MXL domain directory.
+  -l,     --listen-channels UINT [[0,1]]  ...
+                              Audio channels to listen.
+          --read-delay INT [40000000]
+                              How far in the past/future to read (in nanoseconds). A positive
+                              values means you are delaying the read.
+          --playback-delay INT [0]
+                              The time in nanoseconds, by which to delay playback of audio
+                              and/or video.
+          --av-delay INT [0]  The time in nanoseconds, by which to delay the audio relative to
+                              video. A positive value means you are delaying audio, a negative
+                              value means you are delaying video.
+
+Example to run with video only:
+
+./mxl-gst-sink -d /Volumes/mxl -v 5fbec3b1-1b0f-417d-9059-8b94a47197ed
+
+Example to run with audio only:
+
+./mxl-gst-sink -d /Volumes/mxl -a b3bb5be7-9fe9-4324-a5bb-4c70e1084449
+
+Example to run with both video and audio:
+
+./mxl-gst-sink -d /Volumes/mxl -v 5fbec3b1-1b0f-417d-9059-8b94a47197ed -a b3bb5be7-9fe9-4324-a5bb-4c70e1084449

@@ -2,8 +2,8 @@
 
 # --- Configuration Variables ---
 # Define the source base directories for both architectures
-SOURCE_DIR_X86_64="./dmf-mxl/build/Linux-Clang-Release"
-
+SOURCE_DIR_VAR="./dmf-mxl/build/Linux-Clang-Release_x86_64"
+ARCHITECTURE="x86_64"
 
 # Define component paths relative to the specific SOURCE_DIR (simplified for reuse)
 LIB_PATH="lib/*.so*"
@@ -11,6 +11,7 @@ COMMON_LIB_PATH="lib/internal/libmxl-common.*"
 INFO_TOOL_PATH="tools/mxl-info/mxl-info"
 DATA_FILES_PATH="lib/tests/data/*.json"
 GST_TOOL_PATH="tools/mxl-gst/"
+LOOPING_LIB="utils/gst-looping-filesrc/liblooping_filesrc.so"
 
 # --- Setup ---
 echo "Starting portable MXL creation script..."
@@ -50,15 +51,33 @@ function build_portable() {
     # 3. Copy specific tool binary
     cp "${SOURCE_DIR}/${GST_TOOL_PATH}/${TOOL_BINARY}" "${TARGET_DIR}/"
 
-    # 4. Create compressed archive
+    # 4. Copy addon files to the tools like a clip for the clip player and readme file for each app.
+    
+    if [ "${TOOL_NAME}" == "loop-player" ]; then
+        cp ~/mxl-hands-on/build-images/sizzle.ts "${TARGET_DIR}/"
+        cp ~/mxl-hands-on/Portable-mxl-app/data/x86_64/run-loop-player.sh "${TARGET_DIR}/"
+        cp ~/mxl-hands-on/Portable-mxl-app/data/x86_64/README-looping-filesrc "${TARGET_DIR}"
+        cp ${SOURCE_DIR}/${LOOPING_LIB} "${TARGET_DIR}"
+    fi
+
+    if [ "${TOOL_NAME}" == "reader" ]; then
+        cp ~/mxl-hands-on/Portable-mxl-app/data/x86_64/README-sink "${TARGET_DIR}"
+    fi
+
+    if [ "${TOOL_NAME}" == "writer" ]; then
+        cp ~/mxl-hands-on/Portable-mxl-app/data/x86_64/README-testsrc "${TARGET_DIR}"
+
+    fi
+
+    # 5. Create compressed archive
     # The -C flag changes the directory before archiving, ensuring the contents are at the root of the tar file.
     tar -czf "${TAR_FILE}" -C "${TARGET_DIR}" .
 
-    # 5. Copy archive to final destination
+    # 6. Copy archive to final destination
     cp "${TAR_FILE}" "${FINAL_DEST}/"
 
     # Special case for the reader's second destination (assuming this is only needed for the primary x86_64 build)
-    if [ "${TOOL_NAME}" == "reader" ] && [ "${ARCHITECTURE}" == "x86_64" ]; then
+    if [ "${TOOL_NAME}" == "reader" ]; then
         mkdir -p "./docker/exercise-3/data/"
         cp "${TAR_FILE}" "./docker/exercise-3/data/portable-mxl-${TOOL_NAME}-${ARCHITECTURE}.tar.gz"
     fi
@@ -70,37 +89,21 @@ function build_portable() {
 
 # Define the list of applications and their binaries to package
 APP_CONFIGS=(
-    "reader mxl-gst-videosink"
-    "writer mxl-gst-videotestsrc"
+    "reader mxl-gst-sink"
+    "writer mxl-gst-testsrc"
     "loop-player mxl-gst-looping-filesrc"
 )
 
-# Define the architectures to build
-ARCHITECTURES=(
-    "x86_64"
-)
-
-# Loop through all architectures and applications to build everything
-for arch in "${ARCHITECTURES[@]}"; do
-    SOURCE_DIR_VAR=""
-    if [ "$arch" == "x86_64" ]; then
-        SOURCE_DIR_VAR="$SOURCE_DIR_X86_64"
-    elif [ "$arch" == "arm64" ]; then
-        SOURCE_DIR_VAR="$SOURCE_DIR_ARM64"
-    fi
-
-    # Check if the source directory exists before trying to build
-    if [ -d "$SOURCE_DIR_VAR" ]; then
-        for app_config in "${APP_CONFIGS[@]}"; do
-            # Read the tool name and binary name from the configuration string
-            read TOOL_NAME TOOL_BINARY <<< "$app_config"
-            build_portable "$TOOL_NAME" "$TOOL_BINARY" "$arch" "$SOURCE_DIR_VAR"
-        done
-    else
-        echo "Warning: Source directory for ${arch} (${SOURCE_DIR_VAR}) not found. Skipping builds for this architecture."
-    fi
-done
-
+# Check if the source directory exists before trying to build
+if [ -d "$SOURCE_DIR_VAR" ]; then
+    for app_config in "${APP_CONFIGS[@]}"; do
+        # Read the tool name and binary name from the configuration string
+        read TOOL_NAME TOOL_BINARY <<< "$app_config"
+        build_portable "$TOOL_NAME" "$TOOL_BINARY" "$ARCHITECTURE" "$SOURCE_DIR_VAR"
+    done
+else
+    echo "Warning: Source directory for ${arch} (${SOURCE_DIR_VAR}) not found. Skipping builds for this architecture."
+fi
 
 # --- Cleanup ---
 echo "Cleaning up temporary tar files from parent directory..."
