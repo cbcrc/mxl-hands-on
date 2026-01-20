@@ -16,9 +16,10 @@ RUN apt-get update && apt-get -y install --no-install-recommends \
 
 # Copy only necessary files
 COPY ${BUILD_DIR}/lib/*.so* /app/
+COPY ${BUILD_DIR}/lib/internal/*.so* /app/
 COPY ${BUILD_DIR}/tools/mxl-info/mxl-info /app/
 
 # Set rpath for the executable
 RUN patchelf --set-rpath /app mxl-info
 
-CMD ["watch", "/app/mxl-info", "-d", "/domain", "-l"]
+CMD ["sh", "-c", "while true; do /app/mxl-info -d /domain -l || true; sleep 2; done"]

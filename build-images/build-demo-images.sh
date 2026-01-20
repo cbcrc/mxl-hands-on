@@ -126,7 +126,7 @@ build_multiarch_image() {
       BUILD_DIR="${ROOT_DIR}/build/${compiler}_${ARCH}"
       
       if [ "$service" == "writer" ]; then
-        EXECUTABLE="${BUILD_DIR}/tools/mxl-gst/mxl-gst-videotestsrc"
+        EXECUTABLE="${BUILD_DIR}/tools/mxl-gst/mxl-gst-testsrc"
       elif [ "$service" == "clip-player" ]; then
         EXECUTABLE="${BUILD_DIR}/tools/mxl-gst/mxl-gst-looping-filesrc"
       else  # reader

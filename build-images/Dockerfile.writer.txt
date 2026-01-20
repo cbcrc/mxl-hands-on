@@ -17,10 +17,10 @@ RUN apt-get update && apt-get -y install --no-install-recommends \
 
 # Copy only necessary files
 COPY ${BUILD_DIR}/lib/*.so* /app/
+COPY ${BUILD_DIR}/lib/internal/*.so* /app/
 COPY ${BUILD_DIR}/lib/tests/data/*.json /app/
-COPY ${BUILD_DIR}/tools/mxl-gst/mxl-gst-videotestsrc /app/
+COPY ${BUILD_DIR}/tools/mxl-gst/mxl-gst-testsrc /app/
 
-# Set rpath for the executable
-RUN patchelf --set-rpath /app mxl-gst-videotestsrc
+RUN patchelf --set-rpath /app mxl-gst-testsrc
 
-CMD ["/app/mxl-gst-videotestsrc", "-d", "/domain", "-f", "/app/v210_flow.json"]
+CMD ["/app/mxl-gst-testsrc", "-d", "/domain", "-v", "/app/v210_flow.json", "-a", "/app/audio_flow.json"]
