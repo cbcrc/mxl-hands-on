@@ -1,0 +1,95 @@
+services:
+  ffmpeg-writer:
+    # image: ghcr.io/cbcrc/mxl-ffmpeg:latest
+    image: mxl-ffmpeg:latest
+    pull_policy: never
+    # platform: linux/amd64
+    container_name: ffmpeg-writer
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: /Volumes/mxl/domain_1
+        target: /domain
+      - type: bind
+        source: ./data
+        target: /data
+        read_only: true
+    # Write video file to MXL domain  
+    # Using a test pattern - replace with actual video file from /data directory
+    # command: >
+      # ffmpeg -re -f lavfi -i testsrc2=size=1920x1080:rate=30:duration=300
+      # -c:v v210
+      # -f mxl
+      # -video_flow_id 11111111-2222-3333-4444-555555555555
+      # /domain
+    # Alternative command for using a video file from the data directory:
+    command: >
+      ffmpeg -stream_loop -1 -re -i /data/sizzle.ts
+      -c:v v210 -pix_fmt yuv422p10le
+      -f mxl
+      -video_flow_id 11111111-2222-3333-4444-555555555555
+      /domain
+
+  ffmpeg-rtp-streamer:
+    # image: ghcr.io/cbcrc/mxl-ffmpeg:latest
+    image: mxl-ffmpeg:latest
+    pull_policy: never
+    # platform: linux/amd64
+    container_name: ffmpeg-rtp-streamer
+    restart: unless-stopped
+    depends_on:
+      - ffmpeg-writer
+    environment:
+      - LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu
+    volumes:
+      - type: bind
+        source: /Volumes/mxl/domain_1
+        target: /domain
+        read_only: true
+    ports:
+      - "5004:5004/udp"  # Expose RTP stream port
+    # Wait for flow to become active before reading
+    command: >
+      sh -c "
+      echo 'Waiting for MXL flow to become active...' &&
+      while [ ! -d /domain/11111111-2222-3333-4444-555555555555.mxl-flow ]; do
+        echo 'Flow not found, waiting...' &&
+        sleep 2
+      done &&
+      echo 'Flow directory found, waiting 15 seconds for writer to start streaming...' &&
+      sleep 15 &&
+      echo 'Attempting to attach to active flow from tail (grain_index_init=tail)...' &&
+      while true; do
+        ffmpeg -grain_index_init tail -i /domain/11111111-2222-3333-4444-555555555555.mxl-flow -c:v libx264 -preset ultrafast -tune zerolatency -b:v 2000k -f rtp rtp://0.0.0.0:5004 && break ||
+        (echo 'Failed to read flow, retrying in 10 seconds...' && sleep 10)
+      done
+      "
+    # Alternative: Stream with more detailed RTP options
+    # command: >
+    #   sh -c "
+    #   sleep 5 &&
+    #   ffmpeg -re
+    #   -i /domain/11111111-2222-3333-4444-555555555555.mxl-flow
+    #   -c:v libx264
+    #   -preset ultrafast
+    #   -tune zerolatency
+    #   -b:v 2000k
+    #   -maxrate 2000k
+    #   -bufsize 4000k
+    #   -pix_fmt yuv420p
+    #   -g 30
+    #   -f rtp
+    #   -sdp_file /data/stream.sdp
+    #   rtp://0.0.0.0:5004
+    #   "
+
+volumes:
+  domain:
+
+# Usage Notes:
+# 1. Create the MXL domain: sudo mkdir -p /Volumes/mxl/domain_1
+# 2. Build the image: docker build -f ../build-images/Dockerfile.ffmpeg-mxl.txt -t mxl-ffmpeg:latest ../build-images
+# 3. Start services: docker compose up -d
+# 4. View stream: ffplay -protocol_whitelist file,udp,rtp -i rtp://127.0.0.1:5004
+# 5. Check logs: docker logs ffmpeg-writer && docker logs ffmpeg-rtp-streamer
+# 6. Stop services: docker compose down
