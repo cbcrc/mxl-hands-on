@@ -132,3 +132,22 @@ rm ~/portable-mxl-reader.tar.gz
 ```
 
 These commands will free up a significant amount of disk space, but you'll need to rebuild from scratch if you want to make changes later. You can also use the Git exclusion file to keep these directories ignored:
+
+## Optional: build image for excercise-4
+
+```sh
+# 1. Create the MXL domain (if it does not exist already)
+sudo mkdir -p /Volumes/mxl/domain_1
+
+# 2. Build the Docker image
+cd build-images
+docker build -f Dockerfile.ffmpeg-mxl.txt -t mxl-ffmpeg:latest .
+
+# 3. Run Exercise 4
+cd ../docker/exercise-4
+docker compose up -d
+
+# 4. View the RTP stream
+ffplay -protocol_whitelist file,udp,rtp -i rtp://127.0.0.1:5004
+
+```

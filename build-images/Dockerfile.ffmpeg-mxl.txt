@@ -1,0 +1,137 @@
+# Multi-stage Dockerfile for FFmpeg with MXL support
+# This dockerfile assumes MXL has been built on the host
+# Build MXL first: ./build_all.sh --arch x86_64
+
+ARG BASE_IMAGE=ubuntu:24.04
+ARG INSTALL_DIR=dmf-mxl/install_x86_64
+
+FROM ${BASE_IMAGE} AS builder
+
+ARG INSTALL_DIR
+
+WORKDIR /build
+
+# Install build dependencies for FFmpeg
+RUN apt-get update && apt-get -y install --no-install-recommends \
+        git \
+        ca-certificates \
+        build-essential \
+        pkg-config \
+        yasm \
+        nasm \
+        libx264-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy pre-built MXL libraries and headers from host
+# Note: libmxl-common.so is already in install_x86_64/lib, no need for internal/ path
+COPY ${INSTALL_DIR}/lib/*.so* /usr/local/lib/
+COPY ${INSTALL_DIR}/bin/mxl-info /usr/local/bin/mxl-info
+COPY ${INSTALL_DIR}/include/mxl /usr/local/include/mxl
+
+# Create a proper pkg-config file for libmxl with correct paths
+# Note: Removing spdlog dependency as it's already linked into the shared library
+RUN mkdir -p /usr/local/lib/pkgconfig && \
+    cat > /usr/local/lib/pkgconfig/libmxl.pc << 'EOF'
+prefix=/usr/local
+exec_prefix=${prefix}
+libdir=/usr/local/lib
+includedir=/usr/local/include
+
+Name: libmxl
+Version: 1.1.0.0
+Description: Media eXchange Layer SDK
+Libs: -L${libdir} -lmxl
+Cflags: -I${includedir}
+EOF
+
+# Update library cache
+RUN ldconfig
+
+# Verify pkg-config can find libmxl and show details
+RUN echo "Verifying libmxl pkg-config..." && \
+    PKG_CONFIG_PATH=/usr/local/lib/pkgconfig pkg-config --exists libmxl && \
+    echo "✓ libmxl version: $(PKG_CONFIG_PATH=/usr/local/lib/pkgconfig pkg-config --modversion libmxl)" && \
+    echo "✓ Cflags: $(PKG_CONFIG_PATH=/usr/local/lib/pkgconfig pkg-config --cflags libmxl)" && \
+    echo "✓ Libs: $(PKG_CONFIG_PATH=/usr/local/lib/pkgconfig pkg-config --libs libmxl)"
+
+# Clone and build FFmpeg with MXL support
+RUN export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig && \
+    git clone https://github.com/cbcrc/FFmpeg.git && \
+    cd FFmpeg && \
+    git checkout a8441ff && \
+    echo "Testing pkg-config in FFmpeg directory..." && \
+    pkg-config --exists libmxl && \
+    pkg-config --modversion libmxl && \
+    pkg-config --libs libmxl && \
+    pkg-config --cflags libmxl && \
+    (./configure \
+        --prefix=/build/ffmpeg-install \
+        --disable-everything \
+        --enable-demuxer=mxl \
+        --enable-muxer=mxl \
+        --enable-libmxl \
+        --enable-muxer=framemd5 \
+        --enable-encoder=pcm_f32le \
+        --enable-decoder=pcm_f32le \
+        --enable-encoder=pcm_s16le \
+        --enable-decoder=pcm_s16le \
+        --enable-encoder=rawvideo \
+        --enable-decoder=rawvideo \
+        --enable-encoder=v210 \
+        --enable-decoder=v210 \
+        --enable-decoder=wrapped_avframe \
+        --enable-indev=lavfi \
+        --enable-filter=scale \
+        --enable-filter=testsrc2 \
+        --enable-filter=anoisesrc \
+        --enable-filter=sine \
+        --enable-filter=aresample \
+        --enable-protocol=pipe \
+        --enable-encoder=libx264 \
+        --enable-decoder=libx264 \
+        --enable-decoder=hevc \
+        --enable-decoder=aac \
+        --enable-demuxer=mpegts \
+        --enable-muxer=rtp \
+        --enable-protocol=rtp \
+        --enable-protocol=udp \
+        --enable-protocol=file \
+        --enable-filter=format \
+        --enable-gpl \
+        --enable-libx264 \
+        --disable-static \
+        --enable-shared || (echo "=== Config.log ===" && tail -100 ffbuild/config.log && exit 1)) && \
+    make -j$(nproc) && \
+    make install
+
+# Stage 2: Runtime image
+FROM ${BASE_IMAGE}
+
+WORKDIR /app
+
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get -y install --no-install-recommends \
+        libboost-filesystem1.83.0 \
+        libboost-program-options1.83.0 \
+        libboost-system1.83.0 \
+        libx264-164 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy MXL libraries from builder
+COPY --from=builder /usr/local/lib/*.so* /usr/local/lib/
+
+# Copy MXL utilities from builder
+COPY --from=builder /usr/local/bin/mxl-info /usr/local/bin/mxl-info
+
+# Copy FFmpeg binaries and libraries from builder
+COPY --from=builder /build/ffmpeg-install /usr/local/
+
+# Update library cache
+RUN ldconfig
+
+# Set environment variables
+ENV PATH=/usr/local/bin:$PATH
+
+# Default command - can be overridden in docker-compose
+CMD ["ffmpeg", "-version"]
+
