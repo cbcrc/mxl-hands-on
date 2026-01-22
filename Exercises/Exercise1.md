@@ -95,7 +95,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Look at the NMOS IS-04 Flow definition in the /domain/flowId.mxl-flow/video.json and observe the parameters  
    ```sh
-   docker exec exercise-1-reader-media-function-1 cat /domain/$FLOW1_ID.mxl-flow/.json
+   docker exec exercise-1-reader-media-function-1 cat /domain/$FLOW1_ID.mxl-flow/flow_def.json
    ```
 1. Use mxl-info to get flow information from the mxl reader, you can use watch in front of the command to have live update  
    ```sh
@@ -136,8 +136,8 @@ The MXL domain follows a specific hierarchy to organize flows and their data. He
 |${mxlDomain}/|Base directory of the MXL domain|
 |${mxlDomain}/${flowId}.mxl-flow/|Directory containing resources associated with a flow with uuid ${flowId}|
 |${mxlDomain}/${flowId}.mxl-flow/data|Flow header. contains metadata for a flow ring buffer. Memory mapped by readers and writers.|
-|${mxlDomain}/${flowId}.mxl-flow/.json|NMOS IS-04 Flow resource definition.|
-|${mxlDomain}/${flowId}.mxl-flow/.access|File 'touched' by readers (if permissions allow it) to notify flow access. Enables reliable 'lastReadTime' metadata update.|
+|${mxlDomain}/${flowId}.mxl-flow/flow_def.json|NMOS IS-04 Flow resource definition.|
+|${mxlDomain}/${flowId}.mxl-flow/access|File 'touched' by readers (if permissions allow it) to notify flow access. Enables reliable 'lastReadTime' metadata update.|
 |${mxlDomain}/${flowId}.mxl-flow/grains/|Directory where individual grains are stored.|
 |${mxlDomain}/${flowId}.mxl-flow/grains/${grainIndex}|Grain Header and optional payload (if payload is in host memory and not device memory ). Memory mapped by readers and writers|
 

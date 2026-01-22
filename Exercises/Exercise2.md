@@ -105,6 +105,10 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```sh
    docker compose up -d
    ```
+1. Copy the domain configuration file into domain 2.
+   ```sh
+   sudo cp ./data/options.json /Volumes/mxl/domain_2
+   ```
 1. Look at the MXL domain file structure as seen by the reader app. Notice that we only see the flow of the first writer app after we change the domain of writer 2.  
    ```sh
    docker exec exercise-2-reader-media-function-1 ls /domain
@@ -113,6 +117,10 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```sh
    ls /Volumes/mxl/domain_1 && ls /Volumes/mxl/domain_2
    ```
+1. Look at the grain count for flows in domain 2. The change is the result of the applied options.json file to domain 2.
+   ```sh
+   ls /Volumes/mxl/domain_2/$FLOW2_ID.mxl-flow/grains
+   ```
 1. Shutdown containers of exercise 2  
    ```sh
    docker compose down
@@ -120,22 +128,22 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
 
 
 ### Extra information exercise 2
-This exercise expands on the foundational concepts introduced in Exercise 1 by demonstrating how MXL handles multiple media flows. Understanding how these flows coexist and how domains can provide isolation.
+This exercise expands on the foundational concepts introduced in Exercise 1 by demonstrating how MXL handles multiple media flows. Understanding how these flows coexist and how domains can provide isolation. We also saw the domain options configuration file that is defining the depth of the mxl buffers for the domain.
 
 #### Coexistence of Multiple Flows within a Single Domain
-In the initial setup of Exercise 2 (Steps 2 through 7), you observed two MXL writers contributing distinct video flows to the same MXL domain (`/dev/shm/mxl/domain_1`).  
+In the initial setup of Exercise 2 (Steps 2 through 7), you observed two MXL writers contributing distinct video flows to the same MXL domain (`Volumes/mxl/domain_1`).  
 
 * Unique Flow Identification: Even though both flows share the same root domain, MXL maintains strict separation and identification of each flow. This is achieved through:
 	* Unique `flowIds`: As you observed in Step 5 (l`s /domain`), each flow gets its own distinct `flowId` (a UUID), which serves as its unique identifier within the domain.
-	* Dedicated Flow Directories: Each `flowId` corresponds to its own dedicated directory (`<flowId>.mxl-flow`) within the domain's file structure. This ensures that the flow definition (e.g., `.json`) and the actual media grains for one flow are completely separate from another.
+	* Dedicated Flow Directories: Each `flowId` corresponds to its own dedicated directory (`<flowId>.mxl-flow`) within the domain's file structure. This ensures that the flow definition (e.g., `flow_def.json`) and the actual media grains for one flow are completely separate from another.
 * `mxl-info -l` for Domain-Wide Overview: Step 7 introduces the `mxl-info -l` command. The `-l` (list) flag is useful; it instructs mxl-info to scan the specified MXL domain and list all active flows within it. 
 
 #### The Power of MXL Domains for Isolation
 The core learning objective of the latter part of Exercise 2 (Steps 8 through 12) is to understand the concept of domain separation in MXL.
 
-* **Logical and Physical Isolation:** By modifying the `docker-compose.yaml` file to map writer-2 to `/dev/shm/mxl/domain_2`, you effectively writing to a second, entirely separate MXL domain.
+* **Logical and Physical Isolation:** By modifying the `docker-compose.yaml` file to map writer-2 to `/Volumes/mxl/domain_2`, you effectively writing to a second, entirely separate MXL domain.
 	* **Logical Isolation:** From the perspective of applications, a flow existing in `domain_1` is completely distinct and inaccessible to an application configured only to read from `domain_2`, and vice-versa.
-	* **Physical Isolation:** As you confirmed in Step 12 (`ls /dev/shm/mxl/domain_1` and `ls /dev/shm/mxl/domain_2`), the two domains exist as independent directory structures on the host's `tmpfs` filesystem.
+	* **Physical Isolation:** As you confirmed in Step 12 (`ls /Volumes/mxl/domain_1` and `ls /Volumes/mxl/domain_2`), the two domains exist as independent directory structures on the host's `tmpfs` filesystem.
 * **Use Cases for Multiple Domains:** The ability to establish multiple, isolated MXL domains is a fundamental feature for various architectural patterns:
 	* **Security:** Different applications or user groups can be granted access only to specific domains, ensuring that sensitive media flows are isolated from less secure ones.
 	* **Workload Separation:** High-sensitivity workflows, like playout, can be isolated in their own domain to prevent interference from other, less critical workflows, ensuring consistent operation of critical systems.
