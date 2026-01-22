@@ -1,7 +1,8 @@
 PREREQUISITE:
 create a tmpfs mounted volume for your MXL domain.
 
-mount -t tmpfs -o size=512m tmpfs /Volumes/mxl
+sudo mkdir -p /Volumes/mxl
+sudo mount -t tmpfs -o size=512m tmpfs /Volumes/mxl
 
 mxl-gst-testsrc
 

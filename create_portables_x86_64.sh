@@ -2,7 +2,7 @@
 
 # --- Configuration Variables ---
 # Define the source base directories for both architectures
-SOURCE_DIR_VAR="./dmf-mxl/build/Linux-Clang-Release_x86_64"
+SOURCE_DIR_VAR="./dmf-mxl/build/Linux-Clang-Release"
 ARCHITECTURE="x86_64"
 
 # Define component paths relative to the specific SOURCE_DIR (simplified for reuse)
