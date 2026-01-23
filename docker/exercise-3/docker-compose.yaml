@@ -1,6 +1,6 @@
 services:
   writer-media-function:
-    image: mxl-writer:latest
+    image: ghcr.io/cbcrc/mxl-writer:latest
     platform: linux/amd64
     restart: unless-stopped
     volumes:
@@ -9,7 +9,7 @@ services:
         target: /domain
     command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-v", "/app/v210_flow.json", "-t", "Original Flow"]
   clip-player-function:
-    image: mxl-clip-player:latest
+    image: ghcr.io/cbcrc/mxl-clip-player:latest
     platform: linux/amd64
     restart: unless-stopped
     volumes:
@@ -19,7 +19,7 @@ services:
       - ../../build-images/sizzle.ts:/app/sizzle.ts
     command: ["/app/mxl-gst-looping-filesrc", "-d", "/domain", "-i", "/app/sizzle.ts"]
   reader-media-function:
-    image: mxl-reader:latest
+    image: ghcr.io/cbcrc/mxl-reader:latest
     platform: linux/amd64
     restart: unless-stopped
     volumes:
