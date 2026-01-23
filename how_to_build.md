@@ -9,33 +9,40 @@ This guide explains how to build multi-architecture Docker images for the MXL pr
 
 ## Step 1: Build the MXL Project
 
-First, build the project for all required architectures:
+First, build the project, if you build on linux under x86-amd64 use the following
 
 ```bash
 # Run from the repository root for amd64 build on an amd64 linux based system.
-./build_all.sh
+./build_linux.sh
 ```
+
+If you are building on Mac os on an amr64 use the following
 
 ```bash
 # Run this on a arm based mac for arm based build
 # This need Homebrew, doxygen, ccache and Gstreamer runtime installer and development installer found here:
 # https://gstreamer.freedesktop.org/download/#macos
-cd dmf-mxl
-mkdir build
-cd build
-cmake .. --preset Darwin-Clang-Release
-cd ..
-cmake --build build/Darwin-Clang-Release --target all
+build_darwin.sh
 ```
 
-This script will:
+These scripts will:
 
-- Determine the correct architecture (x86_64 or arm64)
-- Create Docker build containers for each architecture and compiler
 - Build the project in the dmf-mxl directory
 - Place build artifacts in dmf-mxl/build/
 
-## Step 2: Build Docker Images
+## Step 2: Creating `portable mxl app`
+
+```sh
+   # Creating amd64 portable app
+   # Must be run on an x86_64-amd64 machine
+   ./create_portables_amd64.sh
+
+   # Creating arm based portable app
+   # Must be run on an arm based mac machine
+   ./create_portable_arm.sh
+```
+
+## Step 3: Build Docker Images. ONLY WORK UNDER LINUX
 
 After the project is built, create the Docker images:
 
@@ -54,7 +61,7 @@ This will:
 - Generate both reader and writer images for each compiler
 - Tag the images appropriately
 
-## Step 3: Upload to image repository
+## Step 4: Upload to image repository
 
 ```sh
    echo <YOUR TOKEN> | docker login ghcr.io -u <YOUR_GITHUB_USERNAME> --password-stdin
@@ -71,18 +78,6 @@ This will:
    docker push ghcr.io/cbcrc/mxl-reader:$current_date
    docker push ghcr.io/cbcrc/mxl-clip-player:latest
    docker push ghcr.io/cbcrc/mxl-clip-player:$current_date
-```
-
-## Step 4: Creating `portable mxl app`
-
-```sh
-   # Creating amd64 portable app
-   # Must be run on an x86_64-amd64 machine
-   ./create_portables_amd64.sh
-
-   # Creating arm based portable app
-   # Must be run on an arm based mac machine
-   ./create_portable_arm.sh
 ```
 
 ## Step 5 Test with Exercises
