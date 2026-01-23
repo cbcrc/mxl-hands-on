@@ -92,27 +92,27 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Look at the MXL domain_1 file structure on the host  
    ```sh
-   ls /Volumes/mxl/domain_1 && ls /Volumes/mxl/domain_1/$FLOW1V_ID.mxl-flow && ls /Volumes/mxl/domain_1/$FLOW1A_ID
+   ls /Volumes/mxl/domain_1 && ls /Volumes/mxl/domain_1/$FLOW1V_ID.mxl-flow && ls /Volumes/mxl/domain_1/$FLOW1A_ID.mxl-flow
    ```
 1. Confirm that the MXL domain file structure is mounted in ram by confirming the filesystem is *tmpfs*  
    ```sh
    df -h /Volumes/mxl
    ```
-1. Look at the NMOS IS-04 Flow definition in the /domain/flowId.mxl-flow/flow_def.json and observe the parameters  
+1. Look at the NMOS IS-04 Flow definition in the /domain/flowid.mxl-flow/flow_def.json and observe the parameters of a video flow.  
    ```sh
-   docker exec exercise-1-reader-media-function-1 cat /domain/$FLOW1V_ID.mxl-flow/flow_def.json
+   docker exec exercise-1-reader-media-function-1 cat /domain/$FLOW1V_ID.mxl-flow/flow_def.json | python3 -m json.tool
    ```
 1. Do the same for the audio flow.
    ```sh
-   docker exec exercise-1-reader-media-function-1 cat /domain/$FLOW1A_ID.mxl-flow/flow_def.json
-   ```
-1. Use mxl-info to get flow information from the mxl reader, you can use watch in front of the command to have live update  
-   ```sh
-   docker exec exercise-1-reader-media-function-1 /app/mxl-info -d /domain -f $FLOW1V_ID
+   docker exec exercise-1-reader-media-function-1 cat /domain/$FLOW1A_ID.mxl-flow/flow_def.json | python3 -m json.tool
    ```
 1. Look inside the repository of the grains on the host and confirm that you have all the grain according to the grain count value observed in the step before. Keen observer will have noticed that there is no grain folder for an audio flow. Instead, we have a channels file that contain all grain of all audio channels of a flow in a continous buffer. [Click here for more explanation](https://github.com/dmf-mxl/mxl/blob/main/docs/Architecture.md) 
    ```sh
    ls /Volumes/mxl/domain_1/$FLOW1V_ID.mxl-flow/grains
+   ```
+1. Use mxl-info to get flow information from the mxl reader, you can use watch in front of the command to have live update  
+   ```sh
+   docker exec exercise-1-reader-media-function-1 /app/mxl-info -d /domain -f $FLOW1V_ID
    ```
 1. Let's have a look at the audio flow with mxl-info.
    ```sh

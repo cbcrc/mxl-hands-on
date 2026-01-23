@@ -114,10 +114,6 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```sh
    docker compose up -d
    ```
-1. Copy the domain configuration file into domain 2.
-   ```sh
-   sudo cp ./data/options.json /Volumes/mxl/domain_2
-   ```
 1. Look at the MXL domain file structure as seen by the reader app. Notice that we only see the flow of the first writer app after we change the domain of writer 2.  
    ```sh
    docker exec exercise-2-reader-media-function-1 ls /domain
