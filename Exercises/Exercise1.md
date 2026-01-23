@@ -77,37 +77,50 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```sh
    docker exec exercise-1-reader-media-function-1 ls /domain
    ```
-1. Store the flow ID of flow 1 in a local variable called **FLOW1_ID**
+1. Store the flow IDs of writer 1 (video and audio) in two local variable called **FLOW1V_ID** and **FLOW1A_ID**
    ```sh
-   FLOW1_ID=5fbec3b1-1b0f-417d-9059-8b94a47197ed
+   FLOW1V_ID=5fbec3b1-1b0f-417d-9059-8b94a47197ed
+   FLOW1A_ID=b3bb5be7-9fe9-4324-a5bb-4c70e1084449
    ```
-1. Have a look in all the sub repository of /domain  
+1. Have a look of all the sub repository of a video flow folder. 
    ```sh
-   docker exec exercise-1-reader-media-function-1 ls /domain/$FLOW1_ID.mxl-flow
+   docker exec exercise-1-reader-media-function-1 ls /domain/$FLOW1V_ID.mxl-flow
+   ```
+1. Have a look of all the sub repository of an audio flow folder.
+   ```sh
+   docker exec exercise-1-reader-media-function-1 ls /domain/$FLOW1A_ID.mxl-flow
    ```
 1. Look at the MXL domain_1 file structure on the host  
    ```sh
-   ls /Volumes/mxl/domain_1 && ls /Volumes/mxl/domain_1/$FLOW1_ID.mxl-flow
+   ls /Volumes/mxl/domain_1 && ls /Volumes/mxl/domain_1/$FLOW1V_ID.mxl-flow && ls /Volumes/mxl/domain_1/$FLOW1A_ID
    ```
 1. Confirm that the MXL domain file structure is mounted in ram by confirming the filesystem is *tmpfs*  
    ```sh
    df -h /Volumes/mxl
    ```
-1. Look at the NMOS IS-04 Flow definition in the /domain/flowId.mxl-flow/video.json and observe the parameters  
+1. Look at the NMOS IS-04 Flow definition in the /domain/flowId.mxl-flow/flow_def.json and observe the parameters  
    ```sh
-   docker exec exercise-1-reader-media-function-1 cat /domain/$FLOW1_ID.mxl-flow/flow_def.json
+   docker exec exercise-1-reader-media-function-1 cat /domain/$FLOW1V_ID.mxl-flow/flow_def.json
+   ```
+1. Do the same for the audio flow.
+   ```sh
+   docker exec exercise-1-reader-media-function-1 cat /domain/$FLOW1A_ID.mxl-flow/flow_def.json
    ```
 1. Use mxl-info to get flow information from the mxl reader, you can use watch in front of the command to have live update  
    ```sh
-   docker exec exercise-1-reader-media-function-1 /app/mxl-info -d /domain -f $FLOW1_ID
+   docker exec exercise-1-reader-media-function-1 /app/mxl-info -d /domain -f $FLOW1V_ID
    ```
-1. Look inside the repository of the grains on the host and confirm that you have all the grain according to the grain count value observed in the step before  
+1. Look inside the repository of the grains on the host and confirm that you have all the grain according to the grain count value observed in the step before. Keen observer will have noticed that there is no grain folder for an audio flow. Instead, we have a channels file that contain all grain of all audio channels of a flow in a continous buffer. [Click here for more explanation](https://github.com/dmf-mxl/mxl/blob/main/docs/Architecture.md) 
    ```sh
-   ls /Volumes/mxl/domain_1/$FLOW1_ID.mxl-flow/grains
+   ls /Volumes/mxl/domain_1/$FLOW1V_ID.mxl-flow/grains
+   ```
+1. Let's have a look at the audio flow with mxl-info.
+   ```sh
+   docker exec exercise-1-reader-media-function-1 /app/mxl-info -d /domain -f $FLOW1A_ID
    ```
 1. Looking at a specific grain (1 frame of video) using FFMPEG and converting it into a picture. As the video data is packed into memory using v210, it is easy to take FFMPEG to convert the raw video data into a picture. It is important to note that we have to skip the first 8192 bytes of the grain. They are reserved for the mxl info structure. We also use a ephemeral container to run FFMPEG instead of installing it on our host. You can check this cool image here: https://hub.docker.com/r/linuxserver/ffmpeg
    ```sh
-   dd if=/Volumes/mxl/domain_1/$FLOW1_ID.mxl-flow/grains/data.1  skip=8192 ibs=1  |  \
+   dd if=/Volumes/mxl/domain_1/$FLOW1V_ID.mxl-flow/grains/data.1  skip=8192 ibs=1  |  \
    docker run --rm -i -v $(pwd):/config linuxserver/ffmpeg \
    -f rawvideo -pix_fmt yuv422p10le -s 1920x1080 -c:v v210 -i pipe:0 /config/out.png
    ```

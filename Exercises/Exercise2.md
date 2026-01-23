@@ -77,9 +77,9 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```sh
    docker exec exercise-2-reader-media-function-1 ls /domain
    ```
-1. Store the second Flow ID into a local variable called **FLOW2_ID**
+1. Store the second video Flow ID into a local variable called **FLOW2V_ID**. From what we observed in the docker-compose.yaml file, can you explain why we have only 3 flows in our MXL domain?
    ```sh
-   FLOW2_ID=93abcf83-c7e8-41b5-a388-fe0f511abc12
+   FLOW2V_ID=93abcf83-c7e8-41b5-a388-fe0f511abc12
    ```
 1. Look at the MXL domain_1 file structure on the host.  
    ```sh
@@ -101,6 +101,15 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```sh
    sudo cp ./data/docker-compose.yaml .
    ```
+1. Create a second mxl domain in the mxl tmpfs drive.
+   ```sh
+   mkdir /Volumes/mxl/domain_2
+   ```
+1. Copy the domain configuration file into domain 2 and look at it.
+   ```sh
+   sudo cp ./data/options.json /Volumes/mxl/domain_2
+   cat /Volumes/mxl/domain_2/options.json
+   ```
 1. Start up the containers with the updated .yaml file  
    ```sh
    docker compose up -d
@@ -119,7 +128,7 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```
 1. Look at the grain count for flows in domain 2. The change is the result of the applied options.json file to domain 2.
    ```sh
-   ls /Volumes/mxl/domain_2/$FLOW2_ID.mxl-flow/grains
+   ls /Volumes/mxl/domain_2/$FLOW2V_ID.mxl-flow/grains
    ```
 1. Shutdown containers of exercise 2  
    ```sh

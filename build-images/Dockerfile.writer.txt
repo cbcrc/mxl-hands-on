@@ -28,11 +28,11 @@ COPY ${FULL_BUILD_PATH} /tmp/build/
 RUN mv /tmp/build/lib/*.so* /app/ \
     && mv /tmp/build/lib/internal/libmxl-common.* /app/ \
     && mv /tmp/build/lib/tests/data/*.json /app/ \
-    && mv /tmp/build/tools/mxl-gst/mxl-gst-videotestsrc /app/ \
+    && mv /tmp/build/tools/mxl-gst/mxl-gst-testsrc /app/ \
     # Clean up the temp directory
     && rm -rf /tmp/build
 
 # Set rpath for the executable
-RUN patchelf --set-rpath /app mxl-gst-videotestsrc
+RUN patchelf --set-rpath /app mxl-gst-testsrc
 
-CMD ["/app/mxl-gst-videotestsrc", "-d", "/domain", "-v", "/app/v210_flow.json", "-a", "/app/audio_flow.json"]
+CMD ["/app/mxl-gst-testsrc", "-d", "/domain", "-v", "/app/v210_flow.json", "-a", "/app/audio_flow.json"]

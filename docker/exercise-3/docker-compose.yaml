@@ -1,15 +1,15 @@
 services:
   writer-media-function:
-    image: ghcr.io/cbcrc/mxl-writer:latest
+    image: mxl-writer:latest
     platform: linux/amd64
     restart: unless-stopped
     volumes:
       - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
         source: /Volumes/mxl/domain_1
         target: /domain
-    command: ["/app/mxl-gst-videotestsrc", "-d", "/domain", "-v", "/app/v210_flow.json", "-t", "Original Flow"]
+    command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-v", "/app/v210_flow.json", "-t", "Original Flow"]
   clip-player-function:
-    image: ghcr.io/cbcrc/mxl-clip-player:latest
+    image: mxl-clip-player:latest
     platform: linux/amd64
     restart: unless-stopped
     volumes:
@@ -19,7 +19,7 @@ services:
       - ../../build-images/sizzle.ts:/app/sizzle.ts
     command: ["/app/mxl-gst-looping-filesrc", "-d", "/domain", "-i", "/app/sizzle.ts"]
   reader-media-function:
-    image: ghcr.io/cbcrc/mxl-reader:latest
+    image: mxl-reader:latest
     platform: linux/amd64
     restart: unless-stopped
     volumes:

@@ -109,7 +109,7 @@ This exercise also showcases the gstreamer clip player plugin (added in [PR #22]
 
    ```sh
    FLOW1_ID=5fbec3b1-1b0f-417d-9059-8b94a47197ed
-   ./mxl-gst-videosink -d /domain -v $FLOW1_ID # use one of the flow ID from the ls /domain command
+   ./mxl-gst-sink -d /domain -v $FLOW1_ID # use one of the flow ID from the ls /domain command
    ```
 
 1. Close the Gstreamer window and CTRL break the LXTerminal.  
