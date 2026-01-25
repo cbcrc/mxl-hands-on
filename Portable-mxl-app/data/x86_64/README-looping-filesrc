@@ -6,7 +6,7 @@ sudo mount -t tmpfs -o size=512m tmpfs /Volumes/mxl
 
 install prerequisite Gstreamer plugin. (this is the only extra plugin required from a fresh Ubuntu 24.04 install. It may vary depending of your linux installation)
 
-sudo apt-get install gstreamer1.0-plugins-bad
+apt-get install -y gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-x
 
 
 **To run this app you need to use the shell script run-loop-player.sh because of a Gstreamer library dependency.
