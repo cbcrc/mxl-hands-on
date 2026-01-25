@@ -35,7 +35,7 @@ These scripts will:
 ```sh
    # Creating amd64 portable app
    # Must be run on an x86_64-amd64 machine
-   ./create_portables_amd64.sh
+   ./create_portables_x86_64.sh
 
    # Creating arm based portable app
    # Must be run on an arm based mac machine
