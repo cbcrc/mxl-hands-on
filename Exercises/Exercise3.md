@@ -126,6 +126,11 @@ With what you learned so far, can you look at the video of the other MXL stream?
 
 Can you change the text ident of flow 2 for you first name and look at it again to prove that it changed?
 
+When you are done experimenting, do not forget to shutdown your containers.
+   ```sh
+   docker compose down
+   ```
+
 ### Extra information for Exercise 3
 
 Exercise 3 is transitioning from theoretical understanding and command-line inspection to direct visual confirmation of MXL's functionality. It also introduces the concept of dynamically influencing media flows, a key aspect of real-time broadcast and production environments.
