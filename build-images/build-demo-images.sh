@@ -1,81 +1,34 @@
 #!/bin/bash
-# Ensure this script runs with a compatible version of bash
-# macOS ships with Bash 3.2 by default
-
-# This script builds multi-architecture Docker images for the MXL project
-# It can be used to create smaller demonstration images
-# Creates proper multi-arch manifests that show up as a single image with multiple platforms
+# ==============================================================================
+# SCRIPT: build-demo-images.sh (Local Build - Clean Tags)
+# PURPOSE: Builds amd64 Docker images locally using artifacts from build_linux.sh
+#          Images are tagged simply (e.g., mxl-writer:latest) and loaded locally.
+# ==============================================================================
 
 set -e
+
+# --- SETUP ---
+
+# Get current date for tagging
+CURRENT_DATE=$(date +%Y-%m-%d)
 
 # Script location detection
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "Script directory: ${SCRIPT_DIR}"
 
-# Default values
-ARCHITECTURES=("x86_64" "arm64")  # Changed amd64 to x86_64 to match build_all.sh
+# Configuration
+ARCH="x86_64"               # Fixed to x86_64 for Linux build
+PLATFORM="linux/amd64"      # Docker platform target
 COMPILERS=("Linux-GCC-Release" "Linux-Clang-Release")
-DEFAULT_COMPILER="Linux-GCC-Release"
-DEFAULT_ARCH="x86_64"  # Changed amd64 to x86_64 to match build_all.sh
-
-# Parse command line arguments
-while [[ $# -gt 0 ]]; do
-  key="$1"
-  case $key in
-    --arch)
-      ARCHITECTURES=("$2")
-      shift 2
-      ;;
-    --compiler)
-      COMPILERS=("$2")
-      shift 2
-      ;;
-    --help)
-      echo "Usage: $0 [OPTIONS]"
-      echo "Build multi-architecture Docker images for MXL demonstrations"
-      echo ""
-      echo "Options:"
-      echo "  --arch ARCH         Architecture to build (x86_64 or arm64, default: both)"
-      echo "  --compiler COMPILER Compiler to use (Linux-GCC-Release or Linux-Clang-Release, default: both)"
-      echo "  --help              Display this help message"
-      exit 0
-      ;;
-    *)
-      echo "Unknown option: $1"
-      exit 1
-      ;;
-  esac
-done
-
-echo "Building Docker images for architectures: ${ARCHITECTURES[*]}"
-echo "Using compilers: ${COMPILERS[*]}"
-echo ""
-
-# Create platform mapping using a simpler approach compatible with older Bash versions
-get_platform() {
-  local arch=$1
-  if [ "$arch" = "x86_64" ] || [ "$arch" = "amd64" ]; then
-    echo "linux/amd64"
-  elif [ "$arch" = "arm64" ]; then
-    echo "linux/arm64"
-  else
-    echo "Unknown architecture: $arch" >&2
-    exit 1
-  fi
-}
-
-# Ensure we have Docker BuildX with proper driver for multi-arch builds
-docker buildx inspect mxl-builder > /dev/null 2>&1 || docker buildx create --name mxl-builder --driver docker-container --bootstrap --use
+DEFAULT_COMPILER="Linux-Clang-Release"
 
 # Determine the correct path to the project root
 ROOT_DIR="../dmf-mxl"
 if [ ! -d "${ROOT_DIR}" ]; then
-  # Check if we're in the project root directory
   if [ -d "./dmf-mxl" ]; then
     ROOT_DIR="./dmf-mxl"
   else
-    echo "ERROR: Could not locate dmf-mxl directory with build artifacts."
-    echo "       Please run this script from the build-images directory or the parent directory of dmf-mxl."
+    echo "ERROR: Could not locate dmf-mxl directory."
     exit 1
   fi
 fi
@@ -83,149 +36,109 @@ fi
 # Verify build directory exists
 if [ ! -d "${ROOT_DIR}/build" ]; then
   echo "ERROR: No build directory found in ${ROOT_DIR}."
-  echo "       Please run build_all.sh first to generate build artifacts."
+  echo "       Please run build_linux.sh first to generate build artifacts."
   exit 1
 fi
 
-# Create a function to build multi-arch images
-build_multiarch_image() {
-  local service=$1
-  local compiler=$2
-  local platforms=$3
-  local tag=$4
+echo "Building Docker images for Architecture: ${ARCH}"
+echo "Using compilers: ${COMPILERS[*]}"
+echo ""
 
-  # Build arguments to pass to buildx
-  local build_args=""
+# Function to build image
+build_image() {
+  local service=$1      # e.g., reader, writer, clip-player
+  local compiler=$2     # e.g., Linux-GCC-Release
   
-  # Create a temporary Dockerfile for multi-arch build
-  # Get the directory of the current script
-  local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  # Create a temporary Dockerfile based on the template
-  local temp_dockerfile="${script_dir}/Dockerfile.${service}.temp"
+  # Convert compiler name to lowercase for tagging
+  local compiler_lower=$(echo ${compiler} | tr '[:upper:]' '[:lower:]')
+
+  # 1. Determine Build Path
+  # build_linux.sh outputs to build/${COMPILER}
+  FULL_BUILD_PATH="/build/${compiler}"
+
+  # 2. Determine Executable Path (for validation)
+  if [ "$service" == "writer" ]; then
+    EXECUTABLE="${ROOT_DIR}/${FULL_BUILD_PATH}/tools/mxl-gst/mxl-gst-testsrc"
+  elif [ "$service" == "clip-player" ]; then
+    EXECUTABLE="${ROOT_DIR}/${FULL_BUILD_PATH}/tools/mxl-gst/mxl-gst-looping-filesrc"
+  else  # reader
+    EXECUTABLE="${ROOT_DIR}/${FULL_BUILD_PATH}/tools/mxl-info/mxl-info"
+  fi
+
+  if [ ! -f "$EXECUTABLE" ]; then
+    echo "WARNING: Executable for $service not found at ${EXECUTABLE}."
+    echo "         Skipping build for $service ($compiler)."
+    return 1
+  fi
+  
+  # 3. Prepare Dockerfile
+  local temp_dockerfile="${SCRIPT_DIR}/Dockerfile.${service}.temp"
   if [ "$service" == "clip-player" ]; then
+    # Maps user's 'mxl_loop_player' request to the existing 'clip-player' file
     cp "${SCRIPT_DIR}/Dockerfile.clip-player.txt" "$temp_dockerfile"
   else
     cp "${SCRIPT_DIR}/Dockerfile.${service}.txt" "$temp_dockerfile"
   fi
+
+  # 4. Build Tags
+  # Tag 1: Specific compiler version (e.g., mxl-writer:linux-gcc-release)
+  TAG_COMPILER="mxl-$service:$compiler_lower"
   
-  echo "====================================================="
-  echo "Building multi-architecture image for: $service"
-  echo "Using compiler: $compiler"
-  echo "For platforms: $platforms"
-  echo "Tag: $tag"
-  echo "Root directory: ${ROOT_DIR}"
-  echo "====================================================="
-  
-  # Create platform-specific build context directories
-  for ARCH in "${ARCHITECTURES[@]}"; do
-    PLATFORM=$(get_platform "$ARCH")
-    
-    # Only include platforms that are requested and have build artifacts
-    if [[ $platforms == *"$PLATFORM"* ]]; then
-      # Check if build artifacts exist using absolute path
-      BUILD_DIR="${ROOT_DIR}/build/${compiler}_${ARCH}"
-      
-      if [ "$service" == "writer" ]; then
-        EXECUTABLE="${BUILD_DIR}/tools/mxl-gst/mxl-gst-videotestsrc"
-      elif [ "$service" == "clip-player" ]; then
-        EXECUTABLE="${BUILD_DIR}/tools/mxl-gst/mxl-gst-looping-filesrc"
-      else  # reader
-        EXECUTABLE="${BUILD_DIR}/tools/mxl-info/mxl-info"
-      fi
-      
-      if [ ! -f "$EXECUTABLE" ]; then
-        echo "ERROR: Executable for $service not found at ${EXECUTABLE}"
-        echo "       Please build the project first using build_all.sh"
-        echo "       Make sure dmf-mxl directory contains the build artifacts"
-        echo "       Skipping platform $PLATFORM for $service"
-        
-        # Remove this platform from the platforms list
-        platforms=${platforms//$PLATFORM/}
-        # Clean up any remaining commas
-        platforms=${platforms//,,/,}
-        platforms=${platforms/%,/}
-        platforms=${platforms/#,/}
-        
-        continue
-      fi
-      
-      # We don't need to pass BUILD_DIR as we're modifying the Dockerfile directly with sed
-      # This is just a check to verify the path exists
-      if [ -d "${BUILD_DIR}" ]; then
-        echo "Found build directory at: ${BUILD_DIR}"
-      fi
-    fi
-  done
-  
-  # If we have no platforms left, skip this build
-  if [ -z "$platforms" ]; then
-    echo "No valid platforms found for $service with compiler $compiler, skipping build"
-    return
+  # Note: --load is used to keep images local
+  BUILD_ARGS=(
+    "--platform" "$PLATFORM"
+    "--build-arg" "FULL_BUILD_PATH=$FULL_BUILD_PATH"
+    "--tag" "$TAG_COMPILER"
+    "--file" "$temp_dockerfile"
+    "--load" 
+  )
+
+  # If this is the default compiler, add :latest and :date tags
+  if [ "$compiler" == "$DEFAULT_COMPILER" ]; then
+    TAG_LATEST="mxl-$service:latest"
+    TAG_DATE="mxl-$service:$CURRENT_DATE"
+    BUILD_ARGS+=("--tag" "$TAG_LATEST")
+    BUILD_ARGS+=("--tag" "$TAG_DATE")
+    echo "   -> Marking as 'latest' and '$CURRENT_DATE'"
   fi
+
+  echo "-----------------------------------------------------"
+  echo "Building (Local): mxl-$service"
+  echo "Compiler: $compiler | Path: $FULL_BUILD_PATH"
+  echo "Tags: ${TAG_COMPILER} ..."
+  echo "-----------------------------------------------------"
+
+  # 5. Run Docker BuildX
+  # Ensure builder exists
+  docker buildx inspect mxl-builder > /dev/null 2>&1 || docker buildx create --name mxl-builder --driver docker-container --bootstrap --use
+
+  docker buildx build "${BUILD_ARGS[@]}" "${ROOT_DIR}"
   
-  # Update the BUILD_DIR path in the Dockerfile to use the correct relative path
-  # macOS and Linux handle sed -i differently, use a compatible approach
-  if [[ "$(uname)" == "Darwin" ]]; then
-    sed -i '' "s|ARG BUILD_DIR=.*|ARG BUILD_DIR=build/${compiler}_${ARCH}|g" "$temp_dockerfile"
-  else
-    sed -i "s|ARG BUILD_DIR=.*|ARG BUILD_DIR=build/${compiler}_${ARCH}|g" "$temp_dockerfile"
-  fi
-  
-  # Build the multi-arch image directly with Docker BuildX
-  docker buildx build \
-    --platform "$platforms" \
-    $build_args \
-    --tag "mxl-$service:$tag" \
-    --file "$temp_dockerfile" \
-    --push=false \
-    --load \
-    --build-arg ROOT_DIR="." \
-    ${ROOT_DIR}
-  
-  # Clean up temporary Dockerfile
+  # Cleanup
   rm -f "$temp_dockerfile"
-  
-  echo "Completed building multi-arch image mxl-$service:$tag"
-  echo ""
+  echo "Done."
 }
 
-# Build multi-arch images for each compiler
+# --- Main Loop ---
+
 for COMPILER in "${COMPILERS[@]}"; do
-  # Convert compiler name to lowercase for Docker tag
-  COMPILER_LOWER=$(echo ${COMPILER} | tr '[:upper:]' '[:lower:]')
+  # Build mapped services:
+  # mxl_writer      -> writer
+  # mxl_reader      -> reader
+  # mxl_loop_player -> clip-player
   
-  # Create platform list from all architectures
-  PLATFORMS=""
-  for ARCH in "${ARCHITECTURES[@]}"; do
-    if [ -n "$PLATFORMS" ]; then
-      PLATFORMS="$PLATFORMS,"
-    fi
-    PLATFORMS="${PLATFORMS}$(get_platform "$ARCH")"
-  done
-  
-  # Build multi-architecture images for writer, reader and clip-player
-  build_multiarch_image "writer" "$COMPILER" "$PLATFORMS" "$COMPILER_LOWER"
-  build_multiarch_image "reader" "$COMPILER" "$PLATFORMS" "$COMPILER_LOWER"
-  build_multiarch_image "clip-player" "$COMPILER" "$PLATFORMS" "$COMPILER_LOWER"
-  
-  # Also tag as latest if it's the default compiler
-  if [ "$COMPILER" = "$DEFAULT_COMPILER" ]; then
-    docker tag "mxl-writer:$COMPILER_LOWER" "mxl-writer:latest"
-    docker tag "mxl-reader:$COMPILER_LOWER" "mxl-reader:latest"
-    docker tag "mxl-clip-player:$COMPILER_LOWER" "mxl-clip-player:latest"
-  fi
+  build_image "writer" "$COMPILER"
+  build_image "reader" "$COMPILER"
+  build_image "clip-player" "$COMPILER"
 done
 
-# Reset to default for convenience
-export COMPILER=$DEFAULT_COMPILER
-export COMPILER_LOWER=$(echo ${COMPILER} | tr '[:upper:]' '[:lower:]')
-
-echo "All builds completed!"
-echo "You can now run the demo with: docker-compose -f ${SCRIPT_DIR}/docker-compose.yaml up"
 echo ""
-echo "Or specify a specific compiler with:"
-echo "COMPILER=linux-gcc-release docker-compose -f ${SCRIPT_DIR}/docker-compose.yaml up"
+echo "=================================================================="
+echo "All images built locally."
+echo "Verify them with: docker images | grep mxl-"
 echo ""
-echo "Using build artifacts from: ${ROOT_DIR}/build"
-echo ""
-echo "NOTE: Make sure you've built the project for all target architectures first using build_all.sh"
+echo "To run the demo, ensure your docker-compose.yaml uses these clean image names:"
+echo "  image: mxl-writer:latest"
+echo "  image: mxl-reader:latest"
+echo "  image: mxl-clip-player:latest"
+echo "=================================================================="

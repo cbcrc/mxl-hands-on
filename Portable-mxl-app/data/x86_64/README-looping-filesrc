@@ -1,0 +1,28 @@
+PREREQUISITE:
+create a tmpfs mounted volume for your MXL domain.
+
+sudo mkdir -p /Volumes/mxl
+sudo mount -t tmpfs -o size=512m tmpfs /Volumes/mxl
+
+install prerequisite Gstreamer plugin. (this is the only extra plugin required from a fresh Ubuntu 24.04 install. It may vary depending of your linux installation)
+
+apt-get install -y gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-x
+
+
+**To run this app you need to use the shell script run-loop-player.sh because of a Gstreamer library dependency.
+
+run-loop-player.sh
+
+./run-loop-player.sh [OPTIONS]
+
+
+OPTIONS:
+  -h,     --help              Print this help message and exit 
+  -d,     --domain TEXT REQUIRED 
+                              The MXL domain directory 
+  -i,     --input TEXT:FILE REQUIRED 
+                              MPEGTS media file location 
+
+This app only do video for now, here is an example to run it with the sizzle.ts file provided.
+
+./run-loop-player.sh -d /Volumes/mxl -i sizzle.ts

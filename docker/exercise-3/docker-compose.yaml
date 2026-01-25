@@ -7,7 +7,7 @@ services:
       - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
         source: /Volumes/mxl/domain_1
         target: /domain
-    command: ["/app/mxl-gst-videotestsrc", "-d", "/domain", "-f", "/app/v210_flow.json", "-t", "Original Flow"]
+    command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-v", "/app/v210_flow.json", "-t", "Original Flow"]
   clip-player-function:
     image: ghcr.io/cbcrc/mxl-clip-player:latest
     platform: linux/amd64
