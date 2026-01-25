@@ -1,0 +1,11 @@
+services:
+  writer-media-function:
+    image: ghcr.io/cbcrc/mxl-writer:latest
+    platform: linux/amd64
+    restart: unless-stopped
+    volumes:
+      - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
+        source: /Volumes/mxl/domain_1
+        target: /domain
+volumes:
+  domain:  # Defines the named volume "domain"
