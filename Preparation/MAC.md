@@ -40,6 +40,9 @@ In order to run these exercises on a Mac, you need to install Docker and create 
    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
    ```
 
+1. ```sh
+   brew install jq
+   ```
 ### Creating a 512MB RamDisk on your MAC
 
 ### Steps

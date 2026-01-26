@@ -100,11 +100,11 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Look at the NMOS IS-04 Flow definition in the /domain/flowid.mxl-flow/flow_def.json and observe the parameters of a video flow.  
    ```sh
-   docker exec exercise-1-reader-media-function-1 cat /domain/$FLOW1V_ID.mxl-flow/flow_def.json | python3 -m json.tool
+   docker exec exercise-1-reader-media-function-1 cat /domain/$FLOW1V_ID.mxl-flow/flow_def.json | jq
    ```
 1. Do the same for the audio flow.
    ```sh
-   docker exec exercise-1-reader-media-function-1 cat /domain/$FLOW1A_ID.mxl-flow/flow_def.json | python3 -m json.tool
+   docker exec exercise-1-reader-media-function-1 cat /domain/$FLOW1A_ID.mxl-flow/flow_def.json | jq
    ```
 1. Look inside the repository of the grains on the host and confirm that you have all the grain according to the grain count value observed in the step before. Keen observer will have noticed that there is no grain folder for an audio flow. Instead, we have a channels file that contain all grain of all audio channels of a flow in a continous buffer. [Click here for more explanation](https://github.com/dmf-mxl/mxl/blob/main/docs/Architecture.md) 
    ```sh
