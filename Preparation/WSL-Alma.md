@@ -55,7 +55,7 @@ In order to run these exercises, you need a Linux base system running with Docke
    ```
 1. Install Docker Engine
    ```sh
-   sudo dnf install docker-ce docker-ce-cli containerd.io -y
+   sudo dnf install docker-ce docker-ce-cli containerd.io jq -y
    ```
 1. Start and enable Docker
    ```sh

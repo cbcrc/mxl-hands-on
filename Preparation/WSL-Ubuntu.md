@@ -67,7 +67,7 @@ In order to run these exercises, you need a Linux base system running with Docke
    ```
 1. Install the latest version of Docker
    ```sh
-   sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+   sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin jq
    ```
 1. Add your user to the docker group so that you can run docker command without using `sudo`
    ```sh
