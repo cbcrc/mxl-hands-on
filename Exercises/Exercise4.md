@@ -1,10 +1,12 @@
-## Exercise 1 - Exploring portable mxl reference apps in a simple setup.
+## Exercise 4 - Exploring portable mxl reference apps in a simple setup.
 
 ### Synopsis
 
 In Exercise 4, we will set up one Docker containers: one MXL writer container to generate a video flow and an audio flow. We will then use the portables apps to consume both flows and generate an extra flow. The portable apps will be used directly in CLI.
 
 This leverage all other concepts learned in previous exercises.
+
+### Audio does not work well with type 2 hypervisors.
 
 ```mermaid
    graph
