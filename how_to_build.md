@@ -5,7 +5,17 @@ This guide explains how to build multi-architecture Docker images for the MXL pr
 ## Prerequisites
 
 - Docker with BuildX support
-- Git with the dmf-mxl repository checked out as a submodule
+
+## Step 0: Checkout dmf-mxl/mxl git repo
+
+mxl lib is integrated as submodule, i.e. an external repo that needs to be initialized:
+
+```bash
+git submodule update --init
+```
+
+This means hands-on repo is tied to a specific version of the mxl library.
+It is possible to [upgrade the mlx lib version](./how_to_build.md#-Upgrade-mxl-lib).
 
 ## Step 1: Build the MXL Project
 
@@ -27,8 +37,8 @@ build_darwin.sh
 
 These scripts will:
 
-- Build the project in the dmf-mxl directory
-- Place build artifacts in dmf-mxl/build/
+- Build the project in the ./dmf-mxl/ directory
+- Place build artifacts in ./dmf-mxl/build/
 
 ## Step 2: Creating `portable mxl app`
 
@@ -50,9 +60,6 @@ After the project is built, create the Docker images:
 # Navigate to the build-images directory first
 cd build-images
 ./build-demo-images.sh
-
-# Or from the repository root (alternative)
-bash build-images/build-demo-images.sh
 ```
 
 This will:
@@ -138,3 +145,19 @@ rm ~/portable-mxl-reader.tar.gz
 ```
 
 These commands will free up a significant amount of disk space, but you'll need to rebuild from scratch if you want to make changes later. You can also use the Git exclusion file to keep these directories ignored:
+
+## Upgrade mxl lib
+
+It is possible to upgrade or checkout any version of mxl.
+
+```bash
+git submodule 
+ 28994489abb332af15a4a13466f89086540adb7a dmf-mxl <ref--commit-hash>
+cd ./dmf-mxl
+git pull # or checkout the targetted version of mxl
+git describe  --tags
+v1.0.0-rc1-3-g2899448 # recent tag + actual commit hash>
+cd ..
+git add mxl-dmf # commit this upgrade in the hands-on repo
+git commit -m "Upgrade mxl to v1.0.0-rc1-3-g2899448"
+```
