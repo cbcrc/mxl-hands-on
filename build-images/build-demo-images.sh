@@ -9,29 +9,15 @@ set -e
 
 # --- SETUP ---
 
-# Get current date for tagging
-CURRENT_DATE=$(date +%Y-%m-%d)
-
-# Script location detection
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-echo "Script directory: ${SCRIPT_DIR}"
-
 # Configuration
 ARCH="x86_64"               # Fixed to x86_64 for Linux build
 PLATFORM="linux/amd64"      # Docker platform target
 COMPILERS=("Linux-GCC-Release" "Linux-Clang-Release")
 DEFAULT_COMPILER="Linux-Clang-Release"
 
-# Determine the correct path to the project root
-ROOT_DIR="../dmf-mxl"
-if [ ! -d "${ROOT_DIR}" ]; then
-  if [ -d "./dmf-mxl" ]; then
-    ROOT_DIR="./dmf-mxl"
-  else
-    echo "ERROR: Could not locate dmf-mxl directory."
-    exit 1
-  fi
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="${SCRIPT_DIR}/../dmf-mxl"
+MXL_TAG=$(cd ${ROOT_DIR}; git describe --tags; cd ..) # Get mxl lib version for image tags
 
 # Verify build directory exists
 if [ ! -d "${ROOT_DIR}/build" ]; then
@@ -82,30 +68,27 @@ build_image() {
 
   # 4. Build Tags
   # Tag 1: Specific compiler version (e.g., mxl-writer:linux-gcc-release)
-  TAG_COMPILER="mxl-$service:$compiler_lower"
+  BUILD_TAG="mxl-$service:${MXL_TAG}-$compiler_lower"
   
   # Note: --load is used to keep images local
   BUILD_ARGS=(
     "--platform" "$PLATFORM"
     "--build-arg" "FULL_BUILD_PATH=$FULL_BUILD_PATH"
-    "--tag" "$TAG_COMPILER"
+    "--tag" "$BUILD_TAG"
     "--file" "$temp_dockerfile"
     "--load" 
   )
 
   # If this is the default compiler, add :latest and :date tags
   if [ "$compiler" == "$DEFAULT_COMPILER" ]; then
-    TAG_LATEST="mxl-$service:latest"
-    TAG_DATE="mxl-$service:$CURRENT_DATE"
-    BUILD_ARGS+=("--tag" "$TAG_LATEST")
-    BUILD_ARGS+=("--tag" "$TAG_DATE")
-    echo "   -> Marking as 'latest' and '$CURRENT_DATE'"
+    BUILD_ARGS+=("--tag" "latest")
+    echo "   -> Marking as 'latest'"
   fi
 
   echo "-----------------------------------------------------"
   echo "Building (Local): mxl-$service"
   echo "Compiler: $compiler | Path: $FULL_BUILD_PATH"
-  echo "Tags: ${TAG_COMPILER} ..."
+  echo "Tags: ${BUILD_TAG} ..."
   echo "-----------------------------------------------------"
 
   # 5. Run Docker BuildX
@@ -135,8 +118,12 @@ done
 echo ""
 echo "=================================================================="
 echo "All images built locally."
-echo "Verify them with: docker images | grep mxl-"
+docker images | grep "^mxl-"
 echo ""
+echo "vs remote images:"
+docker images | grep "/mxl-"
+echo ""
+echo "=================================================================="
 echo "To run the demo, ensure your docker-compose.yaml uses these clean image names:"
 echo "  image: mxl-writer:latest"
 echo "  image: mxl-reader:latest"

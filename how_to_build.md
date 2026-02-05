@@ -68,6 +68,11 @@ This will:
 - Generate both reader and writer images for each compiler
 - Tag the images appropriately
 
+Tag nomenclature is:
+```<service>:<mxl_recent_ta>-<num_of_commit_since_tag>-<actual_commit_hash>-<compiler>```
+Exemple:
+```mxl-reader:v1.0.0-rc1-24-g8d280db-linux-clang-release```
+
 ## Step 4: Upload to image repository
 
 ```sh
@@ -156,7 +161,7 @@ git submodule
 cd ./dmf-mxl
 git pull # or checkout the targetted version of mxl
 git describe  --tags
-v1.0.0-rc1-3-g2899448 # recent tag + actual commit hash>
+v1.0.0-rc1-3-g2899448 # recent_tag - num_of_commit_since_tag - actual_commit_hash>
 cd ..
 git add mxl-dmf # commit this upgrade in the hands-on repo
 git commit -m "Upgrade mxl to v1.0.0-rc1-3-g2899448"
