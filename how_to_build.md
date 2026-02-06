@@ -68,28 +68,37 @@ This will:
 - Generate both reader and writer images for each compiler
 - Tag the images appropriately
 
-Tag nomenclature is:
-```<service>:<mxl_recent_ta>-<num_of_commit_since_tag>-<actual_commit_hash>-<compiler>```
+the nomenclature of the generated tag is:
+```<service>:<mxl_recent_tag>-<num_of_commit_since_tag>-<actual_commit_hash>-<compiler>```
 Exemple:
 ```mxl-reader:v1.0.0-rc1-24-g8d280db-linux-clang-release```
 
 ## Step 4: Upload to image repository
 
+Let's push the freshly built images with the fixed tag `v1.0.0-rc2..` and push to Github Container Registry.
+
 ```sh
-   echo <YOUR TOKEN> | docker login ghcr.io -u <YOUR_GITHUB_USERNAME> --password-stdin
-   current_date=$(date +%Y-%m-%d)
-   docker tag mxl-writer:latest ghcr.io/cbcrc/mxl-writer:latest
-   docker tag mxl-writer:latest ghcr.io/cbcrc/mxl-writer:$current_date
-   docker tag mxl-reader:latest ghcr.io/cbcrc/mxl-reader:latest
-   docker tag mxl-reader:latest ghcr.io/cbcrc/mxl-reader:$current_date
-   docker tag mxl-clip-player:latest ghcr.io/cbcrc/mxl-clip-player:latest
-   docker tag mxl-clip-player:latest ghcr.io/cbcrc/mxl-clip-player:$current_date
+   docker login ghcr.io -u <YOUR_GITHUB_USERNAME>
+   # enter your personnal Github token (permission scope: Workflows, Write+Delete Package
+   TAG=v1.0.0-rc2-linux-gcc-release
+   docker tag mxl-writer:$TAG ghcr.io/cbcrc/mxl-writer:$TAG
+   docker tag mxl-reader:$TAG ghcr.io/cbcrc/mxl-reader:$TAG
+   docker tag mxl-clip-player:$TAG ghcr.io/cbcrc/mxl-clip-player:$TAG
+   docker push ghcr.io/cbcrc/mxl-writer:$TAG
+   docker push ghcr.io/cbcrc/mxl-reader:$TAG
+   docker push ghcr.io/cbcrc/mxl-clip-player:$TAG
+```
+
+Let's consider this versions as the **latest stable** version of mxl that we want to deploy by default.
+Let's attach the moving tag `latest` and push.
+
+```sh
+   docker tag mxl-writer:$TAG ghcr.io/cbcrc/mxl-writer:latest
+   docker tag mxl-reader:$TAG ghcr.io/cbcrc/mxl-reader:latest
+   docker tag mxl-clip-player:$TAG ghcr.io/cbcrc/mxl-clip-player:latest
    docker push ghcr.io/cbcrc/mxl-writer:latest
-   docker push ghcr.io/cbcrc/mxl-writer:$current_date
    docker push ghcr.io/cbcrc/mxl-reader:latest
-   docker push ghcr.io/cbcrc/mxl-reader:$current_date
    docker push ghcr.io/cbcrc/mxl-clip-player:latest
-   docker push ghcr.io/cbcrc/mxl-clip-player:$current_date
 ```
 
 ## Step 5 Test with Exercises
