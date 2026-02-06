@@ -15,7 +15,7 @@ PLATFORM="linux/amd64"      # Docker platform target
 COMPILERS=("Linux-GCC-Release" "Linux-Clang-Release")
 DEFAULT_COMPILER="Linux-Clang-Release"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(dirname $(readlink -f $0))"
 ROOT_DIR="${SCRIPT_DIR}/../dmf-mxl"
 MXL_TAG=$(cd ${ROOT_DIR}; git describe --tags; cd ..) # Get mxl lib version for image tags
 

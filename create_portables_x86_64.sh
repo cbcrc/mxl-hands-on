@@ -17,7 +17,8 @@ LOOPING_LIB="utils/gst-looping-filesrc/liblooping_filesrc.so"
 echo "Starting portable MXL creation script..."
 
 # Change to the root directory once
-cd ~/mxl-hands-on || { echo "Error: mxl-hands-on directory not found. Exiting."; exit 1; }
+SCRIPT_DIR="$(dirname $(readlink -f $0))"
+cd $SCRIPT_DIR || { echo "Error: mxl-hands-on directory not found. Exiting."; exit 1; }
 
 # --- Function for Building and Archiving ---
 # $1: tool name (e.g., 'reader')
@@ -54,9 +55,9 @@ function build_portable() {
     # 4. Copy addon files to the tools like a clip for the clip player and readme file for each app.
     
     if [ "${TOOL_NAME}" == "loop-player" ]; then
-        cp ~/mxl-hands-on/build-images/sizzle.ts "${TARGET_DIR}/"
-        cp ~/mxl-hands-on/Portable-mxl-app/data/x86_64/run-loop-player.sh "${TARGET_DIR}/"
-        cp ~/mxl-hands-on/Portable-mxl-app/data/x86_64/README-looping-filesrc "${TARGET_DIR}"
+        cp ${SCRIPT_DIR}/build-images/sizzle.ts "${TARGET_DIR}/"
+        cp ${SCRIPT_DIR}/Portable-mxl-app/data/x86_64/run-loop-player.sh "${TARGET_DIR}/"
+        cp ${SCRIPT_DIR}/Portable-mxl-app/data/x86_64/README-looping-filesrc "${TARGET_DIR}"
         cp ${SOURCE_DIR}/${LOOPING_LIB} "${TARGET_DIR}"
     fi
 
