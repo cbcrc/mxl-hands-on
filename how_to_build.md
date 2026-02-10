@@ -20,7 +20,7 @@ git submodule update --init
 
 Setting up the TAG variable according to the version you are building:
 ```sh
-   TAG=[version_tag]  # ex: TAG=v1.0.0-rc2-linux-Clang-release
+   TAG=[version_tag]  # ex: TAG=v1.0.0-rc2-Clang
 ```
 
 This means hands-on repo is tied to a specific version of the mxl library.
@@ -110,7 +110,7 @@ This will:
 the nomenclature of the generated tag is:
 ```<service>:<mxl_recent_tag>-<num_of_commit_since_tag>-<actual_commit_hash>-<compiler>```
 Exemple:
-```mxl-reader:v1.0.0-rc1-24-g8d280db-linux-clang-release```
+```mxl-reader:v1.0.0-rc1-24-g8d280db-Clang```
 
 ## Step 5: Upload to image repository
 
