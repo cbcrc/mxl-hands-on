@@ -5,9 +5,29 @@ This guide explains how to build multi-architecture Docker images for the MXL pr
 ## Prerequisites
 
 - Docker with BuildX support
-- Git with the dmf-mxl repository checked out as a submodule
+- GitHub CLI
+```sh
+   sudo apt install gh
+```
+
+## Step 0: Checkout dmf-mxl/mxl git repo
+
+mxl lib is integrated as submodule, i.e. an external repo that needs to be initialized:
+
+```bash
+git submodule update --init
+```
+
+Setting up the TAG variable according to the version you are building:
+```sh
+   TAG=[version_tag]  # ex: TAG=v1.0.0-rc2-Clang
+```
+
+This means hands-on repo is tied to a specific version of the mxl library.
+It is possible to [upgrade the mlx lib version](./how_to_build.md#-Upgrade-mxl-lib).
 
 ## Step 1: Build the MXL Project
+
 
 First, build the project, if you build on linux under x86-amd64 use the following
 
@@ -27,8 +47,8 @@ build_darwin.sh
 
 These scripts will:
 
-- Build the project in the dmf-mxl directory
-- Place build artifacts in dmf-mxl/build/
+- Build the project in the ./dmf-mxl/ directory
+- Place build artifacts in ./dmf-mxl/build/
 
 ## Step 2: Creating `portable mxl app`
 
@@ -42,7 +62,36 @@ These scripts will:
    ./create_portable_arm.sh
 ```
 
-## Step 3: Build Docker Images. ONLY WORK UNDER LINUX
+## Step 3: Upload portable apps in the release of the repository
+
+This will upload the tar.gz portable apps to the release using a proper tag.
+
+Log into github in you terminal and follow the prompt:
+```sh
+   gh auth login
+```
+
+If you upload to a new release:
+```sh
+   gh release create $TAG \
+   ./Portable-mxl-app/mxl-loop-player/x86_64/portable-mxl-loop-player-x86_64.tar.gz \
+   ./Portable-mxl-app/mxl-reader/x86_64/portable-mxl-reader-x86_64.tar.gz \
+   ./Portable-mxl-app/mxl-writer/x86_64/portable-mxl-writer-x86_64.tar.gz \
+   --title $TAG \
+   --notes "MXL portable apps for linux under x86_64" \
+   --draft
+```
+
+If you are happy with the release you can use the web UI on GitHub to publish them.
+
+Cleaning up tar.gz files
+```sh
+   rm ./Portable-mxl-app/mxl-loop-player/x86_64/portable-mxl-loop-player-x86_64.tar.gz \
+   ./Portable-mxl-app/mxl-reader/x86_64/portable-mxl-reader-x86_64.tar.gz \
+   ./Portable-mxl-app/mxl-writer/x86_64/portable-mxl-writer-x86_64.tar.gz \
+```
+
+## Step 4: Build Docker Images. ONLY WORK UNDER LINUX
 
 After the project is built, create the Docker images:
 
@@ -50,9 +99,6 @@ After the project is built, create the Docker images:
 # Navigate to the build-images directory first
 cd build-images
 ./build-demo-images.sh
-
-# Or from the repository root (alternative)
-bash build-images/build-demo-images.sh
 ```
 
 This will:
@@ -61,26 +107,39 @@ This will:
 - Generate both reader and writer images for each compiler
 - Tag the images appropriately
 
-## Step 4: Upload to image repository
+the nomenclature of the generated tag is:
+```<service>:<mxl_recent_tag>-<num_of_commit_since_tag>-<actual_commit_hash>-<compiler>```
+Exemple:
+```mxl-reader:v1.0.0-rc1-24-g8d280db-Clang```
+
+## Step 5: Upload to image repository
+
+Let's push the freshly built images with the fixed tag `v1.0.0-rc2..` and push to Github Container Registry.
 
 ```sh
-   echo <YOUR TOKEN> | docker login ghcr.io -u <YOUR_GITHUB_USERNAME> --password-stdin
-   current_date=$(date +%Y-%m-%d)
-   docker tag mxl-writer:latest ghcr.io/cbcrc/mxl-writer:latest
-   docker tag mxl-writer:latest ghcr.io/cbcrc/mxl-writer:$current_date
-   docker tag mxl-reader:latest ghcr.io/cbcrc/mxl-reader:latest
-   docker tag mxl-reader:latest ghcr.io/cbcrc/mxl-reader:$current_date
-   docker tag mxl-clip-player:latest ghcr.io/cbcrc/mxl-clip-player:latest
-   docker tag mxl-clip-player:latest ghcr.io/cbcrc/mxl-clip-player:$current_date
-   docker push ghcr.io/cbcrc/mxl-writer:latest
-   docker push ghcr.io/cbcrc/mxl-writer:$current_date
-   docker push ghcr.io/cbcrc/mxl-reader:latest
-   docker push ghcr.io/cbcrc/mxl-reader:$current_date
-   docker push ghcr.io/cbcrc/mxl-clip-player:latest
-   docker push ghcr.io/cbcrc/mxl-clip-player:$current_date
+   docker login ghcr.io -u <YOUR_GITHUB_USERNAME>
+   # enter your personnal Github token (permission scope: Workflows, Write+Delete Package   
+   docker tag mxl-writer:$TAG ghcr.io/cbcrc/mxl-writer:$TAG
+   docker tag mxl-reader:$TAG ghcr.io/cbcrc/mxl-reader:$TAG
+   docker tag mxl-clip-player:$TAG ghcr.io/cbcrc/mxl-clip-player:$TAG
+   docker push ghcr.io/cbcrc/mxl-writer:$TAG
+   docker push ghcr.io/cbcrc/mxl-reader:$TAG
+   docker push ghcr.io/cbcrc/mxl-clip-player:$TAG
 ```
 
-## Step 5 Test with Exercises
+Let's consider this versions as the **latest stable** version of mxl that we want to deploy by default.
+Let's attach the moving tag `latest` and push.
+
+```sh
+   docker tag mxl-writer:$TAG ghcr.io/cbcrc/mxl-writer:latest
+   docker tag mxl-reader:$TAG ghcr.io/cbcrc/mxl-reader:latest
+   docker tag mxl-clip-player:$TAG ghcr.io/cbcrc/mxl-clip-player:latest
+   docker push ghcr.io/cbcrc/mxl-writer:latest
+   docker push ghcr.io/cbcrc/mxl-reader:latest
+   docker push ghcr.io/cbcrc/mxl-clip-player:latest
+```
+
+## Step 6 Test with Exercises
 
 After building the Docker images, follow the exercises in the repository to test and explore MXL functionality:
 
@@ -138,3 +197,19 @@ rm ~/portable-mxl-reader.tar.gz
 ```
 
 These commands will free up a significant amount of disk space, but you'll need to rebuild from scratch if you want to make changes later. You can also use the Git exclusion file to keep these directories ignored:
+
+## Upgrade mxl lib
+
+It is possible to upgrade or checkout any version of mxl.
+
+```bash
+git submodule 
+ 28994489abb332af15a4a13466f89086540adb7a dmf-mxl <ref--commit-hash>
+cd ./dmf-mxl
+git pull # or checkout the targetted version of mxl
+git describe  --tags
+v1.0.0-rc1-3-g2899448 # recent_tag - num_of_commit_since_tag - actual_commit_hash>
+cd ..
+git add mxl-dmf # commit this upgrade in the hands-on repo
+git commit -m "Upgrade mxl to v1.0.0-rc1-3-g2899448"
+```
