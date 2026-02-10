@@ -5,6 +5,10 @@ This guide explains how to build multi-architecture Docker images for the MXL pr
 ## Prerequisites
 
 - Docker with BuildX support
+- GitHub CLI
+```sh
+   sudo apt install gh
+```
 
 ## Step 0: Checkout dmf-mxl/mxl git repo
 
@@ -14,10 +18,16 @@ mxl lib is integrated as submodule, i.e. an external repo that needs to be initi
 git submodule update --init
 ```
 
+Setting up the TAG variable according to the version you are building:
+```sh
+   TAG=[version_tag]  # ex: TAG=v1.0.0-rc2-linux-Clang-release
+```
+
 This means hands-on repo is tied to a specific version of the mxl library.
 It is possible to [upgrade the mlx lib version](./how_to_build.md#-Upgrade-mxl-lib).
 
 ## Step 1: Build the MXL Project
+
 
 First, build the project, if you build on linux under x86-amd64 use the following
 
@@ -52,7 +62,36 @@ These scripts will:
    ./create_portable_arm.sh
 ```
 
-## Step 3: Build Docker Images. ONLY WORK UNDER LINUX
+## Step 3: Upload portable apps in the release of the repository
+
+This will upload the tar.gz portable apps to the release using a proper tag.
+
+Log into github in you terminal and follow the prompt:
+```sh
+   gh auth login
+```
+
+If you upload to a new release:
+```sh
+   gh release create $TAG \
+   ./Portable-mxl-app/mxl-loop-player/x86_64/portable-mxl-loop-player-x86_64.tar.gz \
+   ./Portable-mxl-app/mxl-reader/x86_64/portable-mxl-reader-x86_64.tar.gz \
+   ./Portable-mxl-app/mxl-writer/x86_64/portable-mxl-writer-x86_64.tar.gz \
+   --title $TAG \
+   --notes "MXL portable apps for linux under x86_64" \
+   --draft
+```
+
+If you are happy with the release you can use the web UI on GitHub to publish them.
+
+Cleaning up tar.gz files
+```sh
+   rm ./Portable-mxl-app/mxl-loop-player/x86_64/portable-mxl-loop-player-x86_64.tar.gz \
+   ./Portable-mxl-app/mxl-reader/x86_64/portable-mxl-reader-x86_64.tar.gz \
+   ./Portable-mxl-app/mxl-writer/x86_64/portable-mxl-writer-x86_64.tar.gz \
+```
+
+## Step 4: Build Docker Images. ONLY WORK UNDER LINUX
 
 After the project is built, create the Docker images:
 
@@ -73,14 +112,13 @@ the nomenclature of the generated tag is:
 Exemple:
 ```mxl-reader:v1.0.0-rc1-24-g8d280db-linux-clang-release```
 
-## Step 4: Upload to image repository
+## Step 5: Upload to image repository
 
 Let's push the freshly built images with the fixed tag `v1.0.0-rc2..` and push to Github Container Registry.
 
 ```sh
    docker login ghcr.io -u <YOUR_GITHUB_USERNAME>
-   # enter your personnal Github token (permission scope: Workflows, Write+Delete Package
-   TAG=v1.0.0-rc2-linux-gcc-release
+   # enter your personnal Github token (permission scope: Workflows, Write+Delete Package   
    docker tag mxl-writer:$TAG ghcr.io/cbcrc/mxl-writer:$TAG
    docker tag mxl-reader:$TAG ghcr.io/cbcrc/mxl-reader:$TAG
    docker tag mxl-clip-player:$TAG ghcr.io/cbcrc/mxl-clip-player:$TAG
@@ -101,7 +139,7 @@ Let's attach the moving tag `latest` and push.
    docker push ghcr.io/cbcrc/mxl-clip-player:latest
 ```
 
-## Step 5 Test with Exercises
+## Step 6 Test with Exercises
 
 After building the Docker images, follow the exercises in the repository to test and explore MXL functionality:
 

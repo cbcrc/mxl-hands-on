@@ -109,6 +109,6 @@ fi
 # --- Cleanup ---
 echo "Cleaning up temporary tar files from parent directory..."
 # This cleans up the temporary tar files created in the parent directory (../)
-rm -f ../portable-mxl-*.tar.gz
+rm -rf ../portable-mxl-*
 
 echo "Script finished successfully! Check Portable-mxl-app/ for your archives."
