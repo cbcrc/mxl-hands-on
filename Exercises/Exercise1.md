@@ -175,8 +175,10 @@ Step 11 introduces you to the `mxl-info` tool, which is invaluable for inspectin
 
 * `Flow[FlowId]`: Confirms the ID of the flow being inspected.
 * `grain count`: This value represents the depth of the circular buffer for that particular flow. It indicates how many historical grains (frames in this exercise) are currently available in the MXL domain for that flow. The mxl-writer continuously overwrites older grains once the buffer depth is reached.
-* `latency`: It represents the time difference between the capture/generation timestamp of the latest available grain and the current time when mxl-info is executed.
+* `latency`: It is expressed in grain for video and samples for audio.
+It represents the time difference between the capture/generation timestamp of the latest available grain and the current time when mxl-info is executed.
 In this exercise, with the writer generating grains @ 29.97 frames per second (30000/1001), each grain represents 33.36 milliseconds of video.
-Therefore, the latency value will fluctuate between 0 and approximately 33 msec. A value close to 0 msec indicates you are very close to when the current grain was completed by the MXL writer, while a value closer to 33 msec means the current grain has been available for almost a full frame interval. This could potentially indicate issue in the system if this value goes beyond the time value of a grain.
+Therefore, the latency expressed in grain will have a value in time that represent grain * 33.36 ms. It is to note that the actual latency can be in between 2 grains, ex: if the value read 2 grain, it can be anywhere between 66 ms to 99 ms.
+For audio, you have to multiply the value by the period of a sample. In case of 48khz a sample is equal to 20.883 us. If your value is displaying 720 (samples) it mean a latency of 15 ms.
 * `grain rate`: Displays the nominal framerate of the flow, derived from the NMOS IS-04 definition.
 ### [Back to main page](../README.md)
