@@ -1,11 +1,19 @@
 services:
   writer-media-function:
     image: ghcr.io/cbcrc/mxl-writer:latest
-    platform: linux/amd64
-    restart: unless-stopped
+    privileged: true
+    user: "root"
+    environment:
+      - HOST_UID=${HOST_UID}
+      - HOST_GID=${HOST_GID}
     volumes:
-      - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
-        source: /Volumes/mxl/domain_1
-        target: /domain
-volumes:
-  domain:  # Defines the named volume "domain"
+      - /Volumes/mxl:/Volumes/mxl:rw,shared
+    entrypoint: >
+      sh -c "
+        mount -o remount,strictatime /Volumes/mxl && 
+        groupadd -g \${HOST_GID:-1000} mxlgroup || true &&
+        useradd -u \${HOST_UID:-1000} -g \${HOST_GID:-1000} mxluser || true &&
+        mkdir -p /Volumes/mxl/domain_1 &&
+        chown mxluser:mxlgroup /Volumes/mxl/domain_1 &&
+        exec su mxluser -c '/app/mxl-gst-testsrc -d /Volumes/mxl/domain_1 -v /app/v210_flow.json -a /app/audio_flow.json'
+      "

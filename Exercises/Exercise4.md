@@ -66,7 +66,7 @@ This leverage all other concepts learned in previous exercises.
    ```
 1. Start the container with the provided .yaml file  
    ```sh
-   docker compose up -d
+   HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose up -d
    ```
 1. Make sure the container is running correctly.  
    ```sh

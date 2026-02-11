@@ -67,7 +67,7 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```
 1. Start the containers with the provided .yaml file  
    ```sh
-   docker compose up -d
+   HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose up -d
    ```
 1. Look at the containers running  
    ```sh
@@ -112,7 +112,7 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```
 1. Start up the containers with the updated .yaml file  
    ```sh
-   docker compose up -d
+   HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose up -d
    ```
 1. Look at the MXL domain file structure as seen by the reader app. Notice that we only see the flow of the first writer app after we change the domain of writer 2.  
    ```sh

@@ -85,7 +85,7 @@ This exercise also showcases the gstreamer clip player plugin (added in [PR #22]
 1. Start the containers
 
    ```sh
-   docker compose up -d
+   HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose up -d
    ```
 
 1. On your PC, go to VNC web browser [127.0.0.1:36901](http://127.0.0.1:36901/vnc.html).
