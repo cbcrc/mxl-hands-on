@@ -1,47 +1,70 @@
 services:
   writer-media-function:
     image: ghcr.io/cbcrc/mxl-writer:latest
-    platform: linux/amd64
-    restart: unless-stopped
+    privileged: true
+    user: "root"
+    environment:
+      - HOST_UID=${HOST_UID}
+      - HOST_GID=${HOST_GID}
     volumes:
-      - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
-        source: /Volumes/mxl/domain_1
-        target: /domain
-    command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-v", "/app/v210_flow.json", "-t", "Original Flow"]
+      - /Volumes/mxl:/Volumes/mxl:rw,shared
+    entrypoint: >
+      sh -c "
+        mount -o remount,strictatime /Volumes/mxl && 
+        groupadd -g \${HOST_GID:-1000} mxlgroup || true &&
+        useradd -u \${HOST_UID:-1000} -g \${HOST_GID:-1000} mxluser || true &&
+        mkdir -p /Volumes/mxl/domain_1 &&
+        chown mxluser:mxlgroup /Volumes/mxl/domain_1 &&
+        exec su mxluser -c '/app/mxl-gst-testsrc -d /Volumes/mxl/domain_1 -v /app/v210_flow.json -t \"Original Flow\"'
+      "
+
   clip-player-function:
     image: ghcr.io/cbcrc/mxl-clip-player:latest
-    platform: linux/amd64
-    restart: unless-stopped
+    privileged: true
+    user: "root"
+    environment:
+      - HOST_UID=${HOST_UID}
+      - HOST_GID=${HOST_GID}
     volumes:
-      - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
-        source: /Volumes/mxl/domain_1
-        target: /domain
+      - /Volumes/mxl:/Volumes/mxl:rw,shared
       - ../../build-images/sizzle.ts:/app/sizzle.ts
-    command: ["/app/mxl-gst-looping-filesrc", "-d", "/domain", "-i", "/app/sizzle.ts"]
+    entrypoint: >
+      sh -c "
+        mount -o remount,strictatime /Volumes/mxl && 
+        groupadd -g \${HOST_GID:-1000} mxlgroup || true &&
+        useradd -u \${HOST_UID:-1000} -g \${HOST_GID:-1000} mxluser || true &&
+        mkdir -p /Volumes/mxl/domain_1 &&
+        chown mxluser:mxlgroup /Volumes/mxl/domain_1 &&
+        exec su mxluser -c '/app/mxl-gst-looping-filesrc -d /Volumes/mxl/domain_1 -i /app/sizzle.ts'
+      "
+
   reader-media-function:
     image: ghcr.io/cbcrc/mxl-reader:latest
-    platform: linux/amd64
-    restart: unless-stopped
+    privileged: true
+    user: "root"
+    environment:
+      - HOST_UID=${HOST_UID}
+      - HOST_GID=${HOST_GID}
     volumes:
-      - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
-        source: /Volumes/mxl/domain_1
-        target: /domain
-        read_only: true
-    stdin_open: true
-    tty: true
+      - /Volumes/mxl:/Volumes/mxl:rw,shared
+    entrypoint: >
+      sh -c "
+        mount -o remount,strictatime /Volumes/mxl && 
+        groupadd -g \${HOST_GID:-1000} mxlgroup || true &&
+        useradd -u \${HOST_UID:-1000} -g \${HOST_GID:-1000} mxluser || true &&
+        exec su mxluser -c 'while true; do /app/mxl-info -d /Volumes/mxl/domain_1 -l; sleep 1; done'
+      "
+
   vnc-viewer:
-    image: accetto/ubuntu-vnc-xfce-g3:24.04 # VNC viewer to connect to the writer-media-function
+    image: accetto/ubuntu-vnc-xfce-g3:24.04
     platform: linux/amd64
     restart: unless-stopped
+    privileged: true
+    # Note: We do NOT override entrypoint here as it breaks VNC startup.
+    # We just ensure it sees the same volume path.
     volumes:
-      - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
-        source: /Volumes/mxl/domain_1
-        target: /domain
-        read_only: true
+      - /Volumes/mxl:/Volumes/mxl:rw,shared
       - ./data:/root
     ports:
-      - "36901:6901"  # Maps port 6901 of the container to port 36901 on the host
-    working_dir: /root  # Sets the working directory inside the container to /root
-
-volumes:
-  domain:  # Defines the named volume "domain"
+      - "36901:6901"
+    working_dir: /root
