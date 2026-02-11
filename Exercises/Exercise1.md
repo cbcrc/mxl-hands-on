@@ -67,7 +67,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. Start the containers with the provided .yaml file  
    ```sh
-   docker compose up -d
+   HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose up -d
    ```
 1. Look at the containers running  
    ```sh
