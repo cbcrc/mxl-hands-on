@@ -60,7 +60,9 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
 1. If you did **NOT** do the preparations steps for either WLS or MacOS, make sure you have a /Volumes/mxl mounted in *tmpfs* or *ram*.
    ```sh
-   mount -t tmpfs -o size=512m tmpfs /Volumes/mxl # on WSL linux
+   mount -t tmpfs -o size=512m,uid=1000,gid=1000,mode=0755 tmpfs /Volumes/mxl # on WSL linux
+   sudo mkdir -p /Volumes/mxl/domain_1
+   sudo chown 1000:1000 /Volumes/mxl/domain_1
    ```
    ```sh
    diskutil erasevolume HFS+ mxl $(hdiutil attach -nomount ram://1048576) # on MacOS
