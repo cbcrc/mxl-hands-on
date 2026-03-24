@@ -4,7 +4,7 @@ volumes:
     driver_opts:
       type: none
       device: /Volumes/mxl/domain_1
-      o: "bind,nosuid,strictatime,uid=1000,gid=1000,mode=0755"
+      o: "bind,nosuid,strictatime"
 services:
   writer-media-function:
     image: ghcr.io/cbcrc/mxl-writer:latest
