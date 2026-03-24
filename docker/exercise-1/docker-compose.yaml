@@ -3,9 +3,9 @@ volumes:
   mxl-domain:
     driver: local
     driver_opts:
-      device: none
-      type: tmpfs
-      o: nosuid,strictatime,uid=1000,gid=1000,mode=0755
+      type: none
+      device: /Volumes/mxl/domain_1
+      o: "bind,nosuid,strictatime,uid=1000,gid=1000,mode=0755"
 services:
   writer-media-function:
     image: ghcr.io/cbcrc/mxl-writer:latest
@@ -13,7 +13,7 @@ services:
     restart: unless-stopped
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
-        source: /Volumes/mxl/domain_1
+        source: mxl-domain
         target: /mxl-domain  
   reader-media-function:
     image: ghcr.io/cbcrc/mxl-reader:latest
@@ -21,7 +21,7 @@ services:
     restart: unless-stopped
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-only mode.
-        source: /Volumes/mxl/domain_1
+        source: mxl-domain
         target: /mxl-domain
         read_only: true
     stdin_open: true
