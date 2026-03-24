@@ -42,8 +42,10 @@ services:
   vnc-viewer:
     image: accetto/ubuntu-vnc-xfce-g3:24.04 # VNC viewer to connect to the writer-media-function
     platform: linux/amd64
-    user: 1000:1000
     restart: unless-stopped
+    environment:
+      - USER_ID=1000
+      - GROUP_ID=1000
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
         source: mxl-domain
