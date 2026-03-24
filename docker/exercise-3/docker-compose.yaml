@@ -50,7 +50,6 @@ services:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
         source: mxl-domain
         target: /domain
-        read_only: true
       - ./data:/root
     ports:
       - "36901:6901"  # Maps port 6901 of the container to port 36901 on the host
