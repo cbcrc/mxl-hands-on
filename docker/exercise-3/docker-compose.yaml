@@ -1,30 +1,40 @@
+volumes:
+  mxl-domain:
+    driver: local
+    driver_opts:
+      type: none
+      device: /Volumes/mxl/domain_1
+      o: "bind,nosuid,strictatime"
 services:
   writer-media-function:
     image: ghcr.io/cbcrc/mxl-writer:latest
     platform: linux/amd64
+    user: 1000:1000
     restart: unless-stopped
     volumes:
-      - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
-        source: /Volumes/mxl/domain_1
+      - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
+        source: mxl-domain
         target: /domain
     command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-v", "/app/v210_flow.json", "-t", "Original Flow"]
   clip-player-function:
     image: ghcr.io/cbcrc/mxl-clip-player:latest
     platform: linux/amd64
+    user: 1000:1000
     restart: unless-stopped
     volumes:
-      - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
-        source: /Volumes/mxl/domain_1
+      - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
+        source: mxl-domain
         target: /domain
       - ../../build-images/sizzle.ts:/app/sizzle.ts
     command: ["/app/mxl-gst-looping-filesrc", "-d", "/domain", "-i", "/app/sizzle.ts"]
   reader-media-function:
     image: ghcr.io/cbcrc/mxl-reader:latest
     platform: linux/amd64
+    user: 1000:1000
     restart: unless-stopped
     volumes:
-      - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
-        source: /Volumes/mxl/domain_1
+      - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
+        source: mxl-domain
         target: /domain
         read_only: true
     stdin_open: true
@@ -32,16 +42,14 @@ services:
   vnc-viewer:
     image: accetto/ubuntu-vnc-xfce-g3:24.04 # VNC viewer to connect to the writer-media-function
     platform: linux/amd64
+    user: 1000:1000
     restart: unless-stopped
     volumes:
-      - type: bind   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
-        source: /Volumes/mxl/domain_1
+      - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
+        source: mxl-domain
         target: /domain
         read_only: true
       - ./data:/root
     ports:
       - "36901:6901"  # Maps port 6901 of the container to port 36901 on the host
     working_dir: /root  # Sets the working directory inside the container to /root
-
-volumes:
-  domain:  # Defines the named volume "domain"
