@@ -106,10 +106,6 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```sh
    sudo cp ./data/docker-compose.yaml .
    ```
-1. Create a second mxl domain in the mxl tmpfs drive.
-   ```sh
-   mkdir /Volumes/mxl/domain_2
-   ```
 1. Copy the domain configuration file into domain 2 and look at it.
    ```sh
    sudo cp ./data/options.json /Volumes/mxl/domain_2
