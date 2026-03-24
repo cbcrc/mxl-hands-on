@@ -9,6 +9,7 @@ services:
   writer-media-function:
     image: ghcr.io/cbcrc/mxl-writer:latest
     platform: linux/amd64
+    user: "1000:1000"
     restart: unless-stopped
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
@@ -17,6 +18,7 @@ services:
   reader-media-function:
     image: ghcr.io/cbcrc/mxl-reader:latest
     platform: linux/amd64
+    user: "1000:1000"
     restart: unless-stopped
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-only mode.
