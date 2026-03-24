@@ -1,4 +1,3 @@
-name: hands-on-exercise-1
 volumes:
   mxl-domain:
     driver: local
