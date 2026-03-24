@@ -14,7 +14,7 @@ services:
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
         source: mxl-domain
-        target: /mxl-domain  
+        target: /domain  
   reader-media-function:
     image: ghcr.io/cbcrc/mxl-reader:latest
     platform: linux/amd64
@@ -22,7 +22,7 @@ services:
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-only mode.
         source: mxl-domain
-        target: /mxl-domain
+        target: /domain
         read_only: true
     stdin_open: true
     tty: true
