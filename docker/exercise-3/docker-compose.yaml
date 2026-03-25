@@ -2,14 +2,13 @@ volumes:
   mxl-domain:
     driver: local
     driver_opts:
-      type: none
-      device: /Volumes/mxl/domain_1
-      o: "bind,nosuid,strictatime"
+      device: none
+      type: tmpfs
+      o: nosuid,strictatime,uid=1000,gid=1000,mode=0755
 services:
   writer-media-function:
     image: ghcr.io/cbcrc/mxl-writer:latest
     platform: linux/amd64
-    user: 1000:1000
     restart: unless-stopped
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
@@ -19,7 +18,6 @@ services:
   clip-player-function:
     image: ghcr.io/cbcrc/mxl-clip-player:latest
     platform: linux/amd64
-    user: 1000:1000
     restart: unless-stopped
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
@@ -30,7 +28,6 @@ services:
   reader-media-function:
     image: ghcr.io/cbcrc/mxl-reader:latest
     platform: linux/amd64
-    user: 1000:1000
     restart: unless-stopped
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
@@ -43,9 +40,6 @@ services:
     image: accetto/ubuntu-vnc-xfce-g3:24.04 # VNC viewer to connect to the writer-media-function
     platform: linux/amd64
     restart: unless-stopped
-    environment:
-      - USER_ID=1000
-      - GROUP_ID=1000
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
         source: mxl-domain
