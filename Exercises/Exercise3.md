@@ -76,7 +76,7 @@ This exercise also showcases the gstreamer clip player plugin (added in [PR #22]
    cd ~/mxl-hands-on/docker/exercise-3
    ```
 
-1. Look at the docker-compose.yaml file and notice the addition of the VNC-Viewer container. This container is there to give you access to a desktop in order to be able to see video at the end of the exercise.
+1. Look at the docker-compose.yaml file and notice the addition of the VNC-Viewer container. This container is there to give you access to a desktop in order to be able to see video at the end of the exercise. Clever observer will have notice that we do not bind the mount in this exercise. This is aligned with the recommendation in the MXL repository. As a result of this the file will not show in your host file system.
 
    ```sh
    cat docker-compose.yaml
