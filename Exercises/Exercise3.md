@@ -105,11 +105,11 @@ This exercise also showcases the gstreamer clip player plugin (added in [PR #22]
    ls /domain
    ```
 
-1. Store the first flow ID in a local variable and use it to start the Gstreamer sink app and actually see some video strait out of memory!!!
+1. Store the first flow ID in a local variable and use it to start the Gstreamer sink app and actually see some video strait out of memory!!! The sudo -u '#1000' part is to run the sink as user id 1000. It allow the reader to touch the access file in the flow folder to update the last read time of the flow.
 
    ```sh
    FLOW1_ID=5fbec3b1-1b0f-417d-9059-8b94a47197ed
-   ./mxl-gst-sink -d /domain -v $FLOW1_ID # use one of the flow ID from the ls /domain command
+   sudo -u '#1000' ./mxl-gst-sink -d /domain -v $FLOW1_ID # use one of the flow ID from the ls /domain command
    ```
 
 1. Close the Gstreamer window and CTRL break the LXTerminal.  
