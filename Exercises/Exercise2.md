@@ -61,6 +61,11 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
    ```sh
    cd ~/mxl-hands-on/docker/exercise-2
    ```
+1. Creating the floder for the second mxl domain
+   ```sh
+   sudo mkdir -p /Volumes/mxl/domain_2
+   sudo chown 1000:1000 /Volumes/mxl/domain_2
+   ```
 1. Look at the docker-compose.yaml file and notice that we now have 2 writers and that all containers are mapped to the same MXL domain.  
    ```sh
    cat docker-compose.yaml
@@ -100,10 +105,6 @@ You will deploy three Docker containers: two MXL writers, each generating a uniq
 1. Replace the docker-compose.yaml with the new docker-compose.yaml from the /data folder.
    ```sh
    sudo cp ./data/docker-compose.yaml .
-   ```
-1. Create a second mxl domain in the mxl tmpfs drive.
-   ```sh
-   mkdir /Volumes/mxl/domain_2
    ```
 1. Copy the domain configuration file into domain 2 and look at it.
    ```sh
