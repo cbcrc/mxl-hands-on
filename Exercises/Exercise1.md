@@ -66,6 +66,8 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```
    ```sh
    diskutil erasevolume HFS+ mxl $(hdiutil attach -nomount ram://1048576) # on MacOS
+   sudo mkdir -p /Volumes/mxl/domain_1
+   sudo chown 1000:1000 /Volumes/mxl/domain_1
    ```
 1. Start the containers with the provided .yaml file  
    ```sh
