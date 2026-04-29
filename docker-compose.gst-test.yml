@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2025 Contributors to the Media eXchange Layer project.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Runs the GStreamer MXL resolution test suite inside a container.
+#
+# Prerequisites:
+#   - C MXL library already built: ./dmf-mxl/build/Linux-Clang-Release/
+#   - Rust plugin already built:   ./dmf-mxl/rust/target/release/libgstmxl.so
+#     (run `docker compose -f docker-compose.rust-build.yml run --rm rust-build` first)
+#   - MXL domain directory exists on host: /Volumes/mxl
+#
+# Usage:
+#   UID=$(id -u) GID=$(id -g) docker compose -f docker-compose.gst-test.yml run --rm gst-test
+
+services:
+  gst-test:
+    # Reuse the same image built for the Rust bindings — it already has the
+    # full GStreamer runtime and dev libraries installed.
+    image: mxl_rust_build_container
+
+    # Run as the host user so any files written to the MXL domain are owned
+    # by you rather than root.
+    user: "${UID:-1000}:${GID:-1000}"
+
+    volumes:
+      # MXL submodule: provides libmxl.so and the compiled Rust plugin
+      - ./dmf-mxl:/workspace/mxl:ro
+
+      # MXL domain: shared memory area where flows are stored
+      - /Volumes/mxl:/Volumes/mxl
+
+      # Test script (read-only)
+      - ./test-gst-mxl-resolution.sh:/test-gst-mxl-resolution.sh:ro
+
+    environment:
+      # libmxl.so location
+      - LD_LIBRARY_PATH=/workspace/mxl/build/Linux-Clang-Release/lib:/workspace/mxl/build/Linux-Clang-Release/lib/internal
+      # libgstmxl.so location (GStreamer plugin registry)
+      - GST_PLUGIN_PATH=/workspace/mxl/rust/target/release
+      # Suppress non-essential GStreamer log noise; set to DEBUG for troubleshooting
+      - GST_DEBUG=1
+
+    command: bash -c "/test-gst-mxl-resolution.sh /Volumes/mxl"

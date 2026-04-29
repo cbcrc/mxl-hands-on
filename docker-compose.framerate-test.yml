@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2025 Contributors to the Media eXchange Layer project.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Runs the GStreamer MXL frame rate test suite inside a container.
+# All writers start simultaneously so every flow is live in the domain at
+# the same time before any reader begins verifying.
+#
+# Prerequisites:
+#   - C MXL library already built: ./dmf-mxl/build/Linux-Clang-Release/
+#   - Rust plugin already built:   ./dmf-mxl/rust/target/release/libgstmxl.so
+#   - MXL domain directory exists on host: /Volumes/mxl
+#
+# Usage:
+#   UID=$(id -u) GID=$(id -g) docker compose -f docker-compose.framerate-test.yml run --rm framerate-test
+
+services:
+  framerate-test:
+    image: mxl_rust_build_container
+
+    user: "${UID:-1000}:${GID:-1000}"
+
+    volumes:
+      - ./dmf-mxl:/workspace/mxl:ro
+      - /Volumes/mxl:/Volumes/mxl
+      - ./test-gst-mxl-framerate.sh:/test-gst-mxl-framerate.sh:ro
+
+    environment:
+      - LD_LIBRARY_PATH=/workspace/mxl/build/Linux-Clang-Release/lib:/workspace/mxl/build/Linux-Clang-Release/lib/internal
+      - GST_PLUGIN_PATH=/workspace/mxl/rust/target/release
+      - GST_DEBUG=1
+
+    command: bash -c "/test-gst-mxl-framerate.sh /Volumes/mxl"

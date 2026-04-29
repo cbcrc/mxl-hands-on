@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: 2025 Contributors to the Media eXchange Layer project.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Builds the Rust bindings (mxl, mxl-sys) and GStreamer plugin (gst-mxl-rs)
+# against an already-built C MXL library.
+#
+# Prerequisites:
+#   - The C MXL library must already be built (e.g. via ./build_linux.sh)
+#     and present at ./dmf-mxl/build/Linux-Clang-Release/
+#
+# Usage:
+#   docker compose -f docker-compose.rust-build.yml build
+#   docker compose -f docker-compose.rust-build.yml run --rm rust-build
+#
+# Build artifacts will be written to:
+#   ./dmf-mxl/rust/target/release/   (same location as a local cargo build)
+
+services:
+  rust-build:
+    build:
+      # Context is the repo root so Dockerfile.rust-build can copy the
+      # devcontainer scripts from ./dmf-mxl/.devcontainer/scripts/
+      context: .
+      dockerfile: Dockerfile.rust-build
+      args:
+        BASE_IMAGE_VERSION: "24.04"
+        USER_UID: ${UID:-1000}
+        USER_GID: ${GID:-1000}
+    image: mxl_rust_build_container
+    # Run as the host user so files written into the bind-mounted workspace
+    # (target/, .cargo-docker/) are owned by you, not root.
+    # Pass UID/GID explicitly: UID=$(id -u) GID=$(id -g) docker compose ...
+    user: "${UID:-1000}:${GID:-1000}"
+
+    # Mount the entire dmf-mxl submodule at the same path the build script uses,
+    # so that relative paths in build.rs (lib/include, build/Linux-Clang-Release/)
+    # resolve correctly inside the container.
+    volumes:
+      # Mount the entire dmf-mxl submodule — this covers rust/target/ as well,
+      # so no separate target bind-mount is needed (which would be created as
+      # root:root by Docker and block writes from the devcontainer user).
+      - ./dmf-mxl:/workspace/mxl
+
+    working_dir: /workspace/mxl/rust
+
+    environment:
+      # Redirect the Cargo registry cache into the workspace bind-mount so
+      # crates are cached across runs. The toolchain itself lives in the image
+      # at /usr/local/cargo (system-wide, accessible by any runtime UID).
+      - CARGO_HOME=/workspace/mxl/rust/.cargo-docker
+      # Tell the runtime where libmxl.so lives (needed when running the plugin,
+      # not required at compile time since the library is loaded dynamically).
+      - LD_LIBRARY_PATH=/workspace/mxl/build/Linux-Clang-Release/lib:/workspace/mxl/build/Linux-Clang-Release/lib/internal
+
+    # Build in release mode and skip the CMake step since the C library is
+    # already present at /workspace/mxl/build/Linux-Clang-Release/.
+    command: bash -c "cargo build --release --features mxl-sys/mxl-not-built,mxl/mxl-not-built"
+
+volumes:
+  # Keep section to avoid breaking existing deployments, but cargo cache
+  # is now stored in ./dmf-mxl/rust/.cargo-docker/ via CARGO_HOME above.
+  cargo-registry:
+  cargo-git:

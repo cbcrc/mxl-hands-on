@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: 2025 Contributors to the Media eXchange Layer project.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Dockerfile for building the Rust bindings and GStreamer plugin for MXL.
+# Build context must be the repository root (where this file lives).
+
+ARG BASE_IMAGE_VERSION=24.04
+FROM ubuntu:${BASE_IMAGE_VERSION}
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+COPY ./dmf-mxl/.devcontainer/scripts/ /tmp/scripts
+
+# Install all system dependencies (mirrors the devcontainer Dockerfile)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget curl zip unzip tar lsb-release apt-transport-https ca-certificates \
+    software-properties-common git git-lfs openssh-client \
+    pkg-config build-essential gdb nasm doxygen graphviz \
+    autoconf automake libtool bison flex htop ccache \
+    rustup librdmacm-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+ARG CLANG_VERSION=19
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    "clang-${CLANG_VERSION}" \
+    "clang-tools-${CLANG_VERSION}" \
+    "llvm-${CLANG_VERSION}" \
+    cmake ninja-build \
+ && /tmp/scripts/debian/register-clang-version.sh "${CLANG_VERSION}" 100 \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-tools \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-x \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN /tmp/scripts/common/libfabric/install.sh
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libglib2.0-dev libgdk-pixbuf2.0-dev libcairo2-dev libpango1.0-dev \
+    libgraphene-1.0-dev libgtk-4-dev libgirepository1.0-dev libatk1.0-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# Create a user whose UID/GID matches the host user for correct file ownership
+ARG USERNAME=devcontainer
+ARG USER_UID=1000
+ARG USER_GID=${USER_UID}
+
+RUN userdel --remove ubuntu >/dev/null 2>&1 || true \
+ && groupdel ubuntu >/dev/null 2>&1 || true \
+ && groupadd --gid "${USER_GID}" "${USERNAME}" \
+ && useradd --uid "${USER_UID}" --gid "${USER_GID}" -m -s /bin/bash "${USERNAME}" \
+ && apt-get update && apt-get install -y sudo \
+ && rm -rf /var/lib/apt/lists/* \
+ && printf '%s ALL=(root) NOPASSWD:ALL\n' "${USERNAME}" > "/etc/sudoers.d/${USERNAME}" \
+ && chmod 0440 "/etc/sudoers.d/${USERNAME}"
+
+USER root
+
+# Install Rust 1.90.0 system-wide so any runtime UID can use it.
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:${PATH}
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+    sh -s -- -y --no-modify-path --default-toolchain=1.90.0 \
+ && chmod -R a+rwX /usr/local/rustup /usr/local/cargo
