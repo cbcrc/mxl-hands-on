@@ -2,3 +2,4 @@
 	path = dmf-mxl
 	url = https://github.com/dmf-mxl/mxl.git
 	branch = release/v1.0
+	ignore = untracked
