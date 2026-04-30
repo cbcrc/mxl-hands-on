@@ -50,6 +50,8 @@ In order to run these exercises on a Mac, you need to install Docker and create 
 1. Create a 512MB ram disk
    ```sh
    diskutil erasevolume HFS+ mxl $(hdiutil attach -nomount ram://1048576)
+   sudo mkdir -p /Volumes/mxl/domain_1
+   sudo chown 1000:1000 /Volumes/mxl/domain_1
    ```
 1. Verify that the disk was created
    ```sh
