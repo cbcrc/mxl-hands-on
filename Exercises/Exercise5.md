@@ -75,15 +75,17 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
             %% MXL to Output
             MXLDomain3 --> MXL2SRT
 
-            %% --- Solid Audio (green) Connection (Indices 10 to 12) ---
+            %% --- Solid Audio (green) Connection (Indices 10 to 15) ---
             %% Audio Sources to MXL
             WebRTC2MXL --> MXLDomain2
+            SRT2MXL --> MXLDomain2
 
             %% Audio Processing to/From MXL
-            MXLDomain2 --> AudioMix
+            MXLDomain2 -- IN 1 ---> AudioMix
+            MXLDomain2 -- IN 2 ---> AudioMix
             AudioMix --> MXLDomain3
 
-            %% --- Dotted Yellow control Connections (Indices 13 to 22) ---
+            %% --- Dotted Yellow control Connections (Indices 16 to 24) ---
             SRT2MXL <-.-> NmosRegistry
             LoopPlayer <-.-> NmosRegistry
             LatencyTest <-.-> NmosRegistry
@@ -126,11 +128,11 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
 
         %% Link Styling
         %% Solid blue for video connections
-        linkStyle 0,1,2,3,4,5,6,7,8,9,23 stroke:blue,stroke-width:2px
+        linkStyle 0,1,2,3,4,5,6,7,8,9,25 stroke:blue,stroke-width:2px
 
         %% Solid green for audio connections
-        linkStyle 10,11,12,24 stroke:green,stroke-width:2px
+        linkStyle 10,11,12,13,14,26 stroke:green,stroke-width:2px
 
         %% Dotted yellow for nmos connections
-        linkStyle 13,14,15,16,17,18,19,20,21,22,25 stroke:yellow
+        linkStyle 15,16,17,18,19,20,21,22,23,27 stroke:yellow
 ```
