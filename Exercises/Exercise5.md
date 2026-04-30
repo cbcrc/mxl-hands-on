@@ -155,6 +155,9 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
     ```sh
         ./build_linux.sh
     ```
+1. Navigate to the exercise 5 folder.
+    ```sh
+        cd ~/mxl-hands-on/docker/exercise-5
 1. Build the rust image needed to compile the rust binding and Gstreamer plugins.
     ```sh
         UID=$(id -u) GID=$(id -g) docker compose -f docker-compose.rust-build.yml build
@@ -180,6 +183,3 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
         echo 'export LD_LIBRARY_PATH="$HOME/mxl-hands-on/dmf-mxl/build/Linux-Clang-Release/lib:$HOME/mxl-hands-on/dmf-mxl/build/Linux-Clang-Release/lib/internal"' >> ~/.bashrc
         source ~/.bashrc
     ```
-1. Navigate to the exercise 5 folder.
-    ```sh
-        cd ~/mxl-hands-on/docker/exercise-5
