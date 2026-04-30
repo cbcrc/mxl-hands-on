@@ -48,7 +48,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
 
 1. Clone repo  
    ```sh
-   git clone https://github.com/cbcrc/mxl-hands-on
+   git clone --recursive https://github.com/cbcrc/mxl-hands-on
    ```
 1. Go to exercise 1 folder  
    ```sh
