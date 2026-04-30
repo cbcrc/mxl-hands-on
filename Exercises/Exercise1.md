@@ -46,7 +46,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
 
 ### Steps
 
-1. Clone repo  
+1. Clone repo. The --recursive option keep the right remote for the submodule (dmf-mxl)
    ```sh
    git clone --recursive https://github.com/cbcrc/mxl-hands-on
    ```
