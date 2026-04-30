@@ -97,6 +97,18 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
 
         end
 
+        %% --- Legend (Outside the Compute Node) ---
+    subgraph Legend [Diagram Key]
+        direction LR
+        k1([MXL Domain]) -- Video Connection --- kt1[Gstreamer</br>based app]
+        k2([MXL Domain]) -- Audio Connection --- kt2[Gstreamer</br>based app]
+        k3[Gstreamer</br>based app] -- Nmos Connection --- kt3[NMOS ecosystem]
+        k4[HTML 5 Graphic</br>engine]
+    end
+
+    %% Positioning the legend below the main node
+    HostNode ~~~ Legend
+
         %% ===========================================
         %% STYLING
         %% ===========================================
@@ -107,18 +119,18 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
         classDef control fill:#007bff,color:#fff,stroke:#333,stroke-width:2px;
         classDef other fill:#cce6ff,color:black,stroke:#333,stroke-width:2px
 
-        class MXLDomain1,MXLDomain2,MXLDomain3 mxl
-        class SRT2MXL,LoopPlayer,LatencyTest,WebRTC2MXL,InputSel,AudioMix,HTML5Keyer,MXL2SRT gstreamer
-        class NmosRegistry,DummyNmosNode,NmosController control
-        class SPXGraphics other
+        class MXLDomain1,MXLDomain2,MXLDomain3,k1,k2 mxl
+        class SRT2MXL,LoopPlayer,LatencyTest,WebRTC2MXL,InputSel,AudioMix,HTML5Keyer,MXL2SRT,kt1,kt2,k3 gstreamer
+        class NmosRegistry,DummyNmosNode,NmosController,kt3 control
+        class SPXGraphics,k4 other
 
         %% Link Styling
         %% Solid blue for video connections
-        linkStyle 0,1,2,3,4,5,6,7,8,9 stroke:blue,stroke-width:2px
+        linkStyle 0,1,2,3,4,5,6,7,8,9,23 stroke:blue,stroke-width:2px
 
         %% Solid green for audio connections
-        linkStyle 10,11,12 stroke:green,stroke-width:2px
+        linkStyle 10,11,12,24 stroke:green,stroke-width:2px
 
         %% Dotted yellow for nmos connections
-        linkStyle 13,14,15,16,17,18,19,20,21,22 stroke:yellow        
+        linkStyle 13,14,15,16,17,18,19,20,21,22,25 stroke:yellow
 ```
