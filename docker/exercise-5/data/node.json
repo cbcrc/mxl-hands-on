@@ -1,0 +1,8 @@
+{
+"logging_level": -20,
+"http_port": 80,
+"events_ws_port": 81,
+"domain": "local",
+"label": "dummy-nmos-node",
+"how_many": 2
+}
