@@ -48,3 +48,7 @@ Thumbs.db
 *.mov
 *.wmv
 
+/docker/exercise-5/mxl-nmos-bridge
+/docker/exercise-5/nmos-cpp
+/docker/exercise-5/nmos-js
+/docker/exercise-5/easy-nmos
