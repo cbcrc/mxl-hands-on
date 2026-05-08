@@ -4,5 +4,7 @@
 "events_ws_port": 81,
 "domain": "local",
 "label": "dummy-nmos-node",
-"how_many": 2
+"how_many": 2,
+"registry_address": "nmos-registry",
+"registration_port": 80
 }

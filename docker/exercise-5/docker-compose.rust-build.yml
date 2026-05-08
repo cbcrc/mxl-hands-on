@@ -20,8 +20,8 @@ services:
     build:
       # Context is the repo root so Dockerfile.rust-build can copy the
       # devcontainer scripts from ./dmf-mxl/.devcontainer/scripts/
-      context: .
-      dockerfile: Dockerfile.rust-build
+      context: ../..
+      dockerfile: docker/exercise-5/Dockerfile.rust-build
       args:
         BASE_IMAGE_VERSION: "24.04"
         USER_UID: ${UID:-1000}
