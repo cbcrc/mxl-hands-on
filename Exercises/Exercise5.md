@@ -60,8 +60,8 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
 
             %% --- Solid Audio (green) Connection (Indices 5 to 7) ---
             %% Audio Sources to Audio Mixer
-            WebRTC2MXL -- IN 1 --> AudioMix
-            SRT2MXL -- IN 2 --> AudioMix
+            WebRTC2MXL -- IN 2 --> AudioMix
+            SRT2MXL -- IN 1 --> AudioMix
 
             %% Audio Processing to/From MXL
             AudioMix --> MXL2SRT
