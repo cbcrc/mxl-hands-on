@@ -40,7 +40,7 @@ for COMP in "${COMPILERS[@]}"; do
       \
       -t mxl_build_container_${COMP_LOWER} \
       -f ${MXL_PROJECT_PATH}/.devcontainer/Dockerfile \
-      ${MXL_PROJECT_PATH}/.devcontainer
+      ${MXL_PROJECT_PATH}/.devcontainer/Dockerfile
 
     if [ $? -ne 0 ]; then
         echo "ERROR: Docker image build failed for ${COMP}."
@@ -49,18 +49,19 @@ for COMP in "${COMPILERS[@]}"; do
     
     # 2. Configure CMake
     echo "--- Configuring CMake ---"
-    docker run --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
+    docker run --shm-size=2gb --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
       -e VCPKG_BINARY_SOURCES="clear;files,/workspace/mxl/vcpkg_cache,readwrite" \
       -i mxl_build_container_${COMP_LOWER} \
       bash -c "
         cmake -S /workspace/mxl -B /workspace/mxl/build/${COMP} \
           --preset ${COMP} \
           -DCMAKE_INSTALL_PREFIX=/workspace/mxl/install
+          -DMXL_ENABLE_FABRICS_OFI=ON
       "
     
     # 3. Build Project
     echo "--- Building Project ---"
-    docker run --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
+    docker run --shm-size=2gb --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
       -i mxl_build_container_${COMP_LOWER} \
       bash -c "
         cmake --build /workspace/mxl/build/${COMP} -t all doc install package
@@ -68,7 +69,7 @@ for COMP in "${COMPILERS[@]}"; do
     
     # 4. Run Tests
     echo "--- Running Tests ---"
-    docker run --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
+    docker run --shm-size=2gb --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
       -i mxl_build_container_${COMP_LOWER} \
       bash -c "
         cd /workspace/mxl/build/${COMP} && \
