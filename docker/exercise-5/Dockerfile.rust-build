@@ -9,7 +9,7 @@ FROM ubuntu:${BASE_IMAGE_VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-COPY ~/mxl-hands-on/dmf-mxl/.devcontainer/scripts/ /tmp/scripts
+COPY dmf-mxl/.devcontainer/scripts/ /tmp/scripts
 
 # Install all system dependencies (mirrors the devcontainer Dockerfile)
 RUN apt-get update && apt-get install -y --no-install-recommends \

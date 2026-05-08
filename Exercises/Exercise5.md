@@ -127,7 +127,6 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
     ```
 1. Tell git to ignore any change to the submodule. This is only needed if you intent to publish back to the remote as we want to keep the remote on the official release hash, not the latest and we also want to ignore all the build artefact.
     ```sh
-        cd ~/mxl-hands-on
         git update-index --assume-unchanged dmf-mxl
     ```
 1. Build the MXL SDK by running the build script.

@@ -43,3 +43,28 @@ services:
     - RUN_NODE=TRUE
     depends_on:
     - nmos-registry
+
+  file-player:
+    platform: linux/amd64
+    build:
+      # Build context is the repository root so the Dockerfile can access
+      # dmf-mxl/build/ and dmf-mxl/rust/ for the MXL libraries.
+      context: ../..
+      dockerfile: docker/exercise-5/data/file-player/Dockerfile
+    image: mxl-file-player:latest
+    container_name: file-player
+    hostname: file-player
+    domainname: local
+    ports:
+    - "9500:9500"   # NMOS IS-04/IS-05 node
+    - "9600:9600"   # FastAPI media-player backend
+    - "9700:9700"   # React frontend (static files)
+    volumes:
+    - "./data/file-player/Clips:/home/file"   # media files
+    - "mxl-domain:/mxl-domain"               # shared MXL domain
+    environment:
+    - MEDIA_DIR=/home/file
+    - MXL_DOMAIN=/mxl-domain
+    - NMOS_NODE_URL=http://localhost:9500
+    depends_on:
+    - nmos-registry
