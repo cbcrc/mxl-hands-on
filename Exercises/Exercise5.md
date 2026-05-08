@@ -18,15 +18,6 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
                 WebRTC2MXL[WebRTC2MXL]
             end
 
-            %% --- MXL Domain Stage 1 ---
-            MXLDomain1([MXL Domain])
-
-            %% --- Stage 2: Input Selection ---
-            InputSel[Input Sel]
-            
-            %% --- MXL Domain Stage 2 ---
-            MXLDomain2([MXL Domain])
-
             %% --- Stage 3: Processing ---
             subgraph Processing [Processing]
                 direction TB
@@ -55,37 +46,27 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
             %% CONNECTIONS
             %% =========================================
 
-            %% --- Solid Video (blue) Connections (Indices 0 to 9) ---
-            %% Video Sources to MXL
-            SRT2MXL --> MXLDomain1
-            LoopPlayer --> MXLDomain1
-            LatencyTest --> MXLDomain1
+            %% --- Solid Video (blue) Connections (Indices 0 to 4) ---
+            %% Video Sources to Input selector
+            SRT2MXL -- IN 1 --> InputSel
+            LoopPlayer -- IN 2--> InputSel
+            LatencyTest -- IN 3--> InputSel
+
+            %% Input Selector to Processing
+            InputSel --> HTML5Keyer
             
+            %% Processing to Output
+            HTML5Keyer --> MXL2SRT
 
-            %% MXL from/to Input Selector
-            MXLDomain1 -- IN 1 ---> InputSel
-            MXLDomain1 -- IN 2 ---> InputSel
-            MXLDomain1 -- IN 3 ---> InputSel
-            InputSel --> MXLDomain2
-
-            %% MXL from/to Processing
-            MXLDomain2 --> HTML5Keyer
-            HTML5Keyer --> MXLDomain3            
-
-            %% MXL to Output
-            MXLDomain3 --> MXL2SRT
-
-            %% --- Solid Audio (green) Connection (Indices 10 to 15) ---
-            %% Audio Sources to MXL
-            WebRTC2MXL --> MXLDomain2
-            SRT2MXL --> MXLDomain2
+            %% --- Solid Audio (green) Connection (Indices 5 to 7) ---
+            %% Audio Sources to Audio Mixer
+            WebRTC2MXL -- IN 1 --> AudioMix
+            SRT2MXL -- IN 2 --> AudioMix
 
             %% Audio Processing to/From MXL
-            MXLDomain2 -- IN 1 ---> AudioMix
-            MXLDomain2 -- IN 2 ---> AudioMix
-            AudioMix --> MXLDomain3
+            AudioMix --> MXL2SRT
 
-            %% --- Dotted Yellow control Connections (Indices 16 to 24) ---
+            %% --- Dotted Yellow control Connections (Indices 8 to 17) ---
             SRT2MXL <-.-> NmosRegistry
             LoopPlayer <-.-> NmosRegistry
             LatencyTest <-.-> NmosRegistry
@@ -102,8 +83,8 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
         %% --- Legend (Outside the Compute Node) ---
     subgraph Legend [Diagram Key]
         direction LR
-        k1([MXL Domain]) -- Video Connection --- kt1[Gstreamer</br>based app]
-        k2([MXL Domain]) -- Audio Connection --- kt2[Gstreamer</br>based app]
+        k1[Gstreamer</br>based app] -- MXL Video flow --> kt1[Gstreamer</br>based app]
+        k2[Gstreamer</br>based app] -- MXL Audio flow --> kt2[Gstreamer</br>based app]
         k3[Gstreamer</br>based app] -- Nmos Connection --- kt3[NMOS ecosystem]
         k4[HTML 5 Graphic</br>engine]
     end
@@ -116,25 +97,23 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
         %% ===========================================
 
         %% Node Styling
-        classDef mxl fill:#ffe0b3,color:black,stroke:#333,stroke-width:2px;
         classDef gstreamer fill:#66b3ff,color:black,stroke:#333,stroke-width:2px;
         classDef control fill:#007bff,color:#fff,stroke:#333,stroke-width:2px;
         classDef other fill:#cce6ff,color:black,stroke:#333,stroke-width:2px
 
-        class MXLDomain1,MXLDomain2,MXLDomain3,k1,k2 mxl
-        class SRT2MXL,LoopPlayer,LatencyTest,WebRTC2MXL,InputSel,AudioMix,HTML5Keyer,MXL2SRT,kt1,kt2,k3 gstreamer
+        class SRT2MXL,LoopPlayer,LatencyTest,WebRTC2MXL,InputSel,AudioMix,HTML5Keyer,MXL2SRT,k1,kt1,k2,kt2,k3 gstreamer
         class NmosRegistry,DummyNmosNode,NmosController,kt3 control
         class SPXGraphics,k4 other
 
         %% Link Styling
         %% Solid blue for video connections
-        linkStyle 0,1,2,3,4,5,6,7,8,9,25 stroke:blue,stroke-width:2px
+        linkStyle 0,1,2,3,4 stroke:blue,stroke-width:2px
 
         %% Solid green for audio connections
-        linkStyle 10,11,12,13,14,26 stroke:green,stroke-width:2px
+        linkStyle 5,6,7 stroke:green,stroke-width:2px
 
         %% Dotted yellow for nmos connections
-        linkStyle 15,16,17,18,19,20,21,22,23,27 stroke:yellow
+        linkStyle 8,9,10,11,12,13,14,15,16,17 stroke:yellow
 ```
 
 ### Steps
