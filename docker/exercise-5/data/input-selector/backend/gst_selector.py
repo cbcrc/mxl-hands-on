@@ -163,9 +163,8 @@ class GstSelector:
             tag = f"b{branch_idx}"
             if flow_id:
                 src = Gst.ElementFactory.make("mxlsrc", f"src_{tag}")
-                src.set_property("flow-id", flow_id)
-                src.set_property("domain",  domain)
-                src.set_property("sync",    False)
+                src.set_property("video-flow-id", flow_id)
+                src.set_property("domain",        domain)
             else:
                 src = Gst.ElementFactory.make("videotestsrc", f"src_{tag}")
                 src.set_property("pattern", 2)      # black
