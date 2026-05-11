@@ -6,7 +6,7 @@ Your task is to build a Dockerized media application that functions as a video a
 ## System Architecture
 The application consists of three main components running within a Docker environment:
 1. **Frontend:** A web UI built with React and Vite.
-2. **Backend / Media Engine:** A Python application using FastAPI to serve the frontend and expose an API, and GStreamer (via Python bindings) to handle the actual media playback.
+2. **Backend / Media Engine:** A Python application using FastAPI to serve the frontend and expose an API, and GStreamer (via Python bindings) to handle the actual media functionalities.
 3. **NMOS Control:** The player must be controllable via NMOS. 
    - **Reference 1:** A special NMOS node located at `./docker/exercise-5/nmos-cpp`.
    - **Reference 2:** A Python script example that listens to the NMOS node to trigger CLI changes, located at `./docker/exercise-5/mxl-nmos-bridge`. Use this as a reference for bridging NMOS commands to the FastAPI/GStreamer backend.
