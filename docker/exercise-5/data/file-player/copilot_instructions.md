@@ -30,6 +30,13 @@ The FastAPI backend and the React UI must expose and support the following trans
 - Ensure the base image installs Python 3, Node.js (for building the React app), GStreamer 1.0 (and all required plugins: `gstreamer1.0-tools`, `gstreamer1.0-plugins-base`, `good`, `bad`, `ugly`, and `libgirepository1.0-dev` for Python bindings).
 - Set up the volume mount for `/home/file`.
 - Copy the required library for MXL to work with GStreamer, you can have a look at GST_PLUGIN_PATH and LD_LIBRARY_PATH env variable to see where they are located. You are currently working in /home/mxl-hands-on.
+- Create a symlink for the gstreamer plugin, the function dlopen() have absolute path hardcoded.
+    This is what I have to do on my local host to make it work. Replicate that in the container.
+    ```sh
+        sudo mkdir -p /workspace/mxl/build/Linux-Clang-Release/lib
+        sudo ln -sf /home/rochonma/mxl-hands-on/dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so \
+        /workspace/mxl/build/Linux-Clang-Release/lib/libmxl.so
+    ```
 
 **Step 2: FastAPI & GStreamer Backend**
 - Create a FastAPI application on port 9600 and need to register to the registry started by `./docker/exercise-5/docker-compose.yml`.
@@ -51,5 +58,3 @@ The FastAPI backend and the React UI must expose and support the following trans
 - the front end should be exposed on port 9700
 
 Please write the necessary Dockerfiles, Python backend scripts, React components, and integration code following these guidelines at the following location `./docker/exercise-5/data/file-player`.
-
-copilot --resume=56b71fcb-c983-4a55-a4e6-48660c92ba3c
