@@ -70,10 +70,18 @@ AUDIO_PATTERNS = {
     "violet-noise":   12,
 }
 
-DEFAULT_VIDEO_PATTERN = "smpte"
-DEFAULT_AUDIO_PATTERN = "sine"
-DEFAULT_AUDIO_FREQ    = 1000.0   # 1 kHz
-DEFAULT_AUDIO_VOL     = 0.1      # ≈ -20 dBFS  (0 dBFS = 1.0)
+DEFAULT_VIDEO_PATTERN  = "smpte"
+DEFAULT_AUDIO_PATTERN  = "sine"
+DEFAULT_AUDIO_FREQ     = 1000.0   # 1 kHz
+DEFAULT_AUDIO_LEVEL_DB = -20.0    # dBFS
+DEFAULT_CHANNEL_COUNT  = 2        # stereo
+
+AUDIO_LEVEL_MIN_DB = -60.0
+AUDIO_LEVEL_MAX_DB =   0.0
+
+
+def db_to_linear(db: float) -> float:
+    return 10 ** (db / 20)
 
 
 class GstGenerator:
@@ -92,6 +100,10 @@ class GstGenerator:
         self._audio_pattern: str = DEFAULT_AUDIO_PATTERN
         self._timecode: bool = True
         self._ident: str = ""
+        self._channel_count: int = DEFAULT_CHANNEL_COUNT
+        self._audio_level_db: float = DEFAULT_AUDIO_LEVEL_DB
+
+        self._acaps: Gst.Element | None = None
 
         self._glib_loop = GLib.MainLoop()
         threading.Thread(target=self._glib_loop.run, daemon=True).start()
@@ -139,6 +151,31 @@ class GstGenerator:
                 self._textoverlay.set_property("text", text)
             log.info("Ident → %r", text)
 
+    def set_channel_count(self, channels: int) -> None:
+        with self._lock:
+            if channels not in (2, 6):
+                raise ValueError(f"Channels must be 2 or 6, got {channels}")
+            if channels == self._channel_count:
+                return
+            self._channel_count = channels
+            log.info("Channel count → %d — rebuilding pipeline", channels)
+            self._teardown_pipeline()
+            self._build_pipeline()
+
+    def set_audio_level(self, db: float) -> None:
+        with self._lock:
+            db = max(AUDIO_LEVEL_MIN_DB, min(AUDIO_LEVEL_MAX_DB, db))
+            # Round to nearest 0.5 dB step
+            db = round(db * 2) / 2
+            self._audio_level_db = db
+            if self._asrc:
+                self._asrc.set_property("volume", db_to_linear(db))
+            log.info("Audio level → %.1f dBFS", db)
+
+    def get_audio_level(self) -> float:
+        with self._lock:
+            return self._audio_level_db
+
     def get_status(self) -> dict:
         with self._lock:
             return {
@@ -147,6 +184,8 @@ class GstGenerator:
                 "audio_pattern": self._audio_pattern,
                 "timecode":      self._timecode,
                 "ident":         self._ident,
+                "channel_count": self._channel_count,
+                "audio_level_db": self._audio_level_db,
                 "video_flow_id": self._video_flow_id,
                 "audio_flow_id": self._audio_flow_id,
                 "mxl_domain":    self._mxl_domain,
@@ -159,6 +198,23 @@ class GstGenerator:
         return list(AUDIO_PATTERNS.keys())
 
     # ── Pipeline ──────────────────────────────────────────────────────────────
+
+    def _teardown_pipeline(self) -> None:
+        """Stop and release the current pipeline. Caller must hold self._lock."""
+        if self._pipeline is None:
+            return
+        log.info("Tearing down pipeline...")
+        self._pipeline.set_state(Gst.State.NULL)
+        self._pipeline.get_state(5 * Gst.SECOND)
+        # Release all element refs so GLib can finalize the mxlsink writers
+        self._pipeline    = None
+        self._vsrc        = None
+        self._timeoverlay = None
+        self._textoverlay = None
+        self._asrc        = None
+        self._acaps       = None
+        import gc; gc.collect()
+        log.info("Teardown complete – MXL writers released")
 
     def _build_pipeline(self) -> None:
         """Build and start the generator pipeline. Caller must hold self._lock."""
@@ -212,12 +268,12 @@ class GstGenerator:
         asrc = Gst.ElementFactory.make("audiotestsrc", "asrc")
         asrc.set_property("wave",    AUDIO_PATTERNS[self._audio_pattern])
         asrc.set_property("freq",    DEFAULT_AUDIO_FREQ)
-        asrc.set_property("volume",  DEFAULT_AUDIO_VOL)
+        asrc.set_property("volume",  db_to_linear(self._audio_level_db))
         asrc.set_property("is-live", True)
 
         acaps = Gst.ElementFactory.make("capsfilter", "acaps")
         acaps.set_property("caps", Gst.Caps.from_string(
-            "audio/x-raw,format=S24LE,channels=2,rate=48000"
+            f"audio/x-raw,format=S24LE,channels={self._channel_count},rate=48000,layout=interleaved"
         ))
 
         aconv  = Gst.ElementFactory.make("audioconvert",  "aconv")
@@ -248,6 +304,7 @@ class GstGenerator:
         self._timeoverlay = timeoverlay
         self._textoverlay = textoverlay
         self._asrc       = asrc
+        self._acaps      = acaps
 
         self._patch_flow_defs()
 

@@ -31,11 +31,24 @@ const statusBadge = (playing) => ({
   fontWeight: 600,
   marginLeft: "1rem",
 });
+const toggleBtn = (active) => ({
+  flex: 1,
+  padding: "0.5rem",
+  background: active ? "#0d7c3e" : "#2a2a2a",
+  color: active ? "#fff" : "#888",
+  border: `1px solid ${active ? "#0d7c3e" : "#444"}`,
+  borderRadius: "4px",
+  cursor: "pointer",
+  fontWeight: active ? 700 : 400,
+  fontSize: "0.95rem",
+  transition: "all 0.15s",
+});
 
 export default function App() {
   const [status, setStatus] = useState(null);
   const [patterns, setPatterns] = useState({ video: [], audio: [] });
   const [identDraft, setIdentDraft] = useState("");
+  const [levelDraft, setLevelDraft] = useState(-20);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -60,12 +73,13 @@ export default function App() {
     return () => clearInterval(id);
   }, [fetchStatus, fetchPatterns]);
 
-  // Sync ident draft with server value once loaded
+  // Sync drafts with server on first load
   useEffect(() => {
-    if (status && identDraft === "" && status.ident !== "") {
-      setIdentDraft(status.ident);
+    if (status) {
+      if (identDraft === "" && status.ident) setIdentDraft(status.ident);
+      setLevelDraft(status.audio_level_db ?? -20);
     }
-  }, [status]);
+  }, [status?.state]); // only on state change, not every poll
 
   const post = async (path, body) => {
     await fetch(`${API}${path}`, {
@@ -121,6 +135,55 @@ export default function App() {
             <option key={p} value={p}>{p}</option>
           ))}
         </select>
+      </div>
+
+      {/* Channel Select */}
+      <div style={sectionStyle}>
+        <label style={labelStyle}>Audio Channels</label>
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          {[2, 6].map((ch) => (
+            <button
+              key={ch}
+              style={toggleBtn(status?.channel_count === ch)}
+              onClick={() => post("/channel-select", { channels: ch })}
+            >
+              {ch === 2 ? "Stereo (2ch)" : "5.1 Surround (6ch)"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Audio Level */}
+      <div style={sectionStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: "0.6rem" }}>
+          <label style={{ ...labelStyle, marginBottom: 0 }}>Audio Level</label>
+          <span style={{
+            fontFamily: "monospace",
+            fontSize: "1.3rem",
+            fontWeight: 700,
+            color: levelDraft === 0 ? "#f44" : levelDraft > -6 ? "#fa0" : "#4caf50",
+          }}>
+            {levelDraft.toFixed(1)} dBFS
+          </span>
+        </div>
+        <input
+          type="range"
+          min={-60}
+          max={0}
+          step={0.5}
+          value={levelDraft}
+          style={{ width: "100%", accentColor: "#0d7c3e" }}
+          onChange={(e) => setLevelDraft(parseFloat(e.target.value))}
+          onMouseUp={(e) => post("/audio-level-set", { db: parseFloat(e.target.value) })}
+          onTouchEnd={(e) => post("/audio-level-set", { db: parseFloat(e.target.value) })}
+        />
+        <div style={{ display: "flex", justifyContent: "space-between", color: "#555", fontSize: "0.75rem", marginTop: "0.2rem" }}>
+          <span>-60 dBFS</span>
+          <span>-40</span>
+          <span>-20</span>
+          <span>-10</span>
+          <span>0 dBFS</span>
+        </div>
       </div>
 
       {/* Timecode */}

@@ -77,6 +77,12 @@ class TimecodeReq(BaseModel):
 class IdentReq(BaseModel):
     text: str
 
+class ChannelSelectReq(BaseModel):
+    channels: int   # 2 or 6
+
+class AudioLevelReq(BaseModel):
+    db: float       # dBFS, -60 to 0, steps of 0.5
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/status")
@@ -115,3 +121,20 @@ async def timecode(req: TimecodeReq):
 async def ident(req: IdentReq):
     generator.set_ident(req.text)
     return {"status": "ok", "ident": req.text}
+
+@app.post("/channel-select")
+async def channel_select(req: ChannelSelectReq):
+    try:
+        generator.set_channel_count(req.channels)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "ok", "channel_count": req.channels}
+
+@app.post("/audio-level-set")
+async def audio_level_set(req: AudioLevelReq):
+    generator.set_audio_level(req.db)
+    return {"status": "ok", "audio_level_db": generator.get_audio_level()}
+
+@app.get("/audio-level-read")
+async def audio_level_read():
+    return {"audio_level_db": generator.get_audio_level()}
