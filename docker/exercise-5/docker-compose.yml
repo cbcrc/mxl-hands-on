@@ -68,3 +68,26 @@ services:
     - NMOS_NODE_URL=http://localhost:9500
     depends_on:
     - nmos-registry
+
+  test-generator:
+    platform: linux/amd64
+    build:
+      # Build context is the repository root so the Dockerfile can access
+      # dmf-mxl/build/ and dmf-mxl/rust/ for the MXL libraries.
+      context: ../..
+      dockerfile: docker/exercise-5/data/test-generator/Dockerfile
+    image: mxl-test-generator:latest
+    container_name: test-generator
+    hostname: test-generator
+    domainname: local
+    ports:
+    - "9510:9510"   # NMOS IS-04/IS-05 node
+    - "9610:9610"   # FastAPI test-generator backend
+    - "9710:9710"   # React frontend (static files)
+    volumes:
+    - "mxl-domain:/mxl-domain"               # shared MXL domain
+    environment:
+    - MXL_DOMAIN=/mxl-domain
+    - NMOS_NODE_URL=http://localhost:9510
+    depends_on:
+    - nmos-registry
