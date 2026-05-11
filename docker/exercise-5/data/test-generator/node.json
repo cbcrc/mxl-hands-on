@@ -1,0 +1,13 @@
+{
+  "http_port": 9510,
+  "logging_level": -20,
+  "domain": "local",
+  "label": "test-generator",
+  "seed_id": "b4c5d6e7-f8a9-4b0c-9d4e-2f3a4b5c6d7e",
+  "senders": ["xv", "xa"],
+  "receivers": [],
+  "how_many": 1,
+  "activate_senders": true,
+  "registration_port": 80,
+  "registry_address": "nmos-registry"
+}
