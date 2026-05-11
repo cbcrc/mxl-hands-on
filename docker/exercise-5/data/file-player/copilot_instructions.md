@@ -19,11 +19,9 @@ The application consists of three main components running within a Docker enviro
 
 ## Required API & UI Functionalities
 The FastAPI backend and the React UI must expose and support the following transport controls:
-1. **Load File:** Select and load a file from `/home/file`. If a file is already loaded, seamlessly replace it. After a file as been loaded it enter in Cued state
-2. **Cue:** Seek to the absolute beginning of the loaded file (ready to play). The sink to mxl should display the first frame of the file
-3. **Play:** Start playback of the loaded file.
-4. **Pause:** Pause the current playback.
-5. **Stop:** Stop playback and release or reset the pipeline stream.
+1. **Load File:** Select and load a file from `/home/file`. If a file is already loaded, seamlessly replace it. After a file as been loaded it enter in play state.
+2. **Play:** Start playback of the loaded file. When a clip start playing, the Nmos active attribute of both senders (audio and video) should turn to TRUE.
+3. **Stop:** Stop playback and release or reset the pipeline stream. When a clip is stopped, the Nmos active attribute of both senders (audio and video) turn to FALSE. 
 
 ## Step-by-Step Implementation Guide for Copilot
 
@@ -36,7 +34,7 @@ The FastAPI backend and the React UI must expose and support the following trans
 **Step 2: FastAPI & GStreamer Backend**
 - Create a FastAPI application on port 9600 and need to register to the registry started by `./docker/exercise-5/docker-compose.yml`.
 - Implement a GStreamer wrapper class using `gi.repository.Gst`.
-- Implement endpoints: `/load`, `/cue`, `/play`, `/pause`, `/stop`.
+- Implement endpoints: `/load`, `/play`, `/stop`.
 - Ensure the GStreamer pipeline dynamically handles the `uri` property of a `playbin` or a custom pipeline tailored for `.ts` files.
 
 **Step 3: NMOS Bridge Integration**
@@ -53,3 +51,5 @@ The FastAPI backend and the React UI must expose and support the following trans
 - the front end should be exposed on port 9700
 
 Please write the necessary Dockerfiles, Python backend scripts, React components, and integration code following these guidelines at the following location `./docker/exercise-5/data/file-player`.
+
+copilot --resume=56b71fcb-c983-4a55-a4e6-48660c92ba3c

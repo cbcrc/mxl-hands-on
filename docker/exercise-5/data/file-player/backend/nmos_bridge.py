@@ -31,6 +31,16 @@ def _fetch(url: str, timeout: float = 2.0):
         return None
 
 
+def _patch(url: str, body: dict, timeout: float = 2.0) -> bool:
+    try:
+        resp = requests.patch(url, json=body, timeout=timeout)
+        resp.raise_for_status()
+        return True
+    except requests.RequestException as exc:
+        log.warning("PATCH error %s: %s", url, exc)
+        return False
+
+
 class NmosBridge:
     """
     Monitors IS-05 MXL senders on the local nmos-cpp-node and maps
@@ -60,6 +70,21 @@ class NmosBridge:
     # ------------------------------------------------------------------
     # Public
     # ------------------------------------------------------------------
+
+    def set_senders_active(self, active: bool) -> None:
+        """Set master_enable on all known MXL senders via IS-05 PATCH.
+
+        Also updates internal state so the poll loop does not re-trigger
+        the on_activate / on_deactivate callback for this programmatic change.
+        """
+        for key in list(self._active_state):
+            rid = key.removeprefix("senders/")
+            url = f"{self._conn}/single/senders/{rid}/staged"
+            body = {"master_enable": active, "activation": {"mode": "activate_immediate"}}
+            if _patch(url, body):
+                log.info("Set sender %s master_enable=%s via IS-05", rid, active)
+                # Pre-update local state to suppress echo in the poll loop
+                self._active_state[key] = active
 
     def discover_flow_ids(self) -> dict[str, str]:
         """
