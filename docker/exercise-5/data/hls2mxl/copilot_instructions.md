@@ -1,7 +1,7 @@
-# GitHub Copilot Agent Instructions: NMOS-Controlled GStreamer Test Generator
+# GitHub Copilot Agent Instructions: NMOS-Controlled GStreamer HLS to MXL application
 
 ## Project Overview
-Your task is to build a Dockerized media application that functions as a video and audio test generator. The application uses GStreamer for media functionalities, FastAPI for the backend API, React + Vite for the web frontend, and is controllable via NMOS. This is the second application of many. The final goal is illustrated in the mermaid diagram located here `./Exercises/Exercise5.md`. You can look at the `./docker/exercise-5/data/file-player` for an example of an application, in this case, the file player. You need to keep code consistent between application
+Your task is to build a Dockerized media application that functions as a HSL to MXL gateway. The application uses GStreamer for media functionalities, FastAPI for the backend API, React + Vite for the web frontend, and is controllable via NMOS. This is the third application of many. The final goal is illustrated in the mermaid diagram located here `./Exercises/Exercise5.md`. You can look at the `./docker/exercise-5/data/file-player` or `./docker/exercise-5/data/test-generator` for an example of an application. You need to keep code consistent between application
 
 ## System Architecture
 The application consists of three main components running within a Docker environment:
@@ -12,17 +12,13 @@ The application consists of three main components running within a Docker enviro
    - **Reference 2:** A Python script example that listens to the NMOS node to trigger CLI changes, located at `./docker/exercise-5/mxl-nmos-bridge`. Use this as a reference for bridging NMOS commands to the FastAPI/GStreamer backend.
 
 ## Environment & File Specifications
-- **Media Format:** The test generator must support **1920x1080p60** video and **2 and 6 channels 48khz 24 bits** audio.
-- **GStreamer Pipeline:** The pipeline needs to be able to dynamically change video and audio test patterns, and output it via the purposed build mxl sink that is already compiled in the project and the instruction on usage can be found at `./dmf-mxl/rust/gst-mxl-rs/readme.md`. The resulting flow_def.json should have a description and a label that identify the Test Generator application.
+- **Media Format:** The application must support **1920x1080p60** video and **2 and 6 channels 48khz 24 bits** audio.
+- **GStreamer Pipeline:** The pipeline needs to be able to dynamically change video and audio when a new HLS link is provided, and output it via the purposed build mxl sink that is already compiled in the project and the instruction on usage can be found at `./dmf-mxl/rust/gst-mxl-rs/readme.md`. The resulting flow_def.json should have a description and a label that identify the HLS2MXL application.
 
 ## Required API & UI Functionalities
 The FastAPI backend and the React UI must expose and support the following transport controls:
-1. **Select Video Test Pattern:** A drop down list to select one of the available video test pattern in Gstreamer and start playing it. By default the app start with 100% bars selected.
-2. **Select Audio Test Pattern:** A drop down list to select one of the available audio test pattern in Gstreamer and start playing it. By default the app start with 1Khz tone @ -20dbfs selected.
-3. **Stereo or 6 channels selector**: A slider to select if the audio output is 2 channels or 6 channels.
-4. **Audio level**: A fader to select the audio level, increment of 0,5 db, and a display to show a numerical value. The default value is -20dbfs when the app is started.
-5. **Time Code option:** A tick box to select wether or not we want burn-time code. By default the application start with time code on.
-6. **Ident**: A text box to enter the desired Identification overlay that will be displayed on top of the video test pattern.
+1. **HLS link:** A text box to enter the HLS link to connect to.
+2. **APPLY:** An apply button to subscribe to the provided HLS link.
 
 ## Step-by-Step Implementation Guide for Copilot
 
@@ -35,15 +31,15 @@ The FastAPI backend and the React UI must expose and support the following trans
  && ln -sf /opt/mxl/lib/libmxl.so /workspace/mxl/build/Linux-Clang-Release/lib/libmxl.so
 
 **Step 2: FastAPI & GStreamer Backend**
-- Create a FastAPI application on port 9610 and need to register to the registry started by `./docker/exercise-5/docker-compose.yml`.
+- Create a FastAPI application on port 9620 and need to register to the registry started by `./docker/exercise-5/docker-compose.yml`.
 - Implement a GStreamer wrapper class using `gi.repository.Gst`.
-- Implement endpoints: `/Video-test-pattern`, `/audio-test-pattern`, `/channel-select`, `/audio-level-set`, `/audio-level-read`, `/time-code`, `/ident`.
+- Implement endpoints: `/hls-link`, `/apply`.
 
 **Step 3: NMOS Bridge Integration**
 - Analyze the code in `./docker/exercise-5/mxl-nmos-bridge` and `./docker/exercise-5/nmos-cpp`.
 - Implement a background task or separate process in the Docker container that listens to the NMOS node.
 - Map the incoming NMOS transport commands to the internal FastAPI endpoints or directly to the GStreamer wrapper.
-- Nmos should be exposed on port 9510 for this application.
+- Nmos should be exposed on port 9520 for this application.
 - The application should have its sender active by default when it start.
 - The application need to keep his flows uuid the same no matter what pattern are actually playing.
 
@@ -52,6 +48,6 @@ The FastAPI backend and the React UI must expose and support the following trans
 - Build a clean, user-friendly control panel with a dropdown menu to select the video pattern, a dropdown menu to select the audio patter, a checkbox for time code on/off and a text box for the user to enter the ident.
 - Wire the UI to communicate with the FastAPI backend.
 - Serve the built React static files via FastAPI, or run them on a separate port depending on the Docker setup.
-- the front end should be exposed on port 9710
+- the front end should be exposed on port 9720
 
-Please write the necessary Dockerfiles, Python backend scripts, React components, and integration code following these guidelines at the following location `./docker/exercise-5/data/test-generator`.
+Please write the necessary Dockerfiles, Python backend scripts, React components, and integration code following these guidelines at the following location `./docker/exercise-5/data/hls2mxl`.
