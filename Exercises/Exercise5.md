@@ -12,13 +12,13 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
             %% --- Stage 1: Sources ---
             subgraph Sources [Sources]
                 direction TB
-                SRT2MXL[SRT2MXL]
-                LoopPlayer[Loop Player]
-                LatencyTest[Latency Test]
+                HLS2MXL[HLS2MXL]
+                LoopPlayer[File Player]
+                TestGen[Test Generator]
                 WebRTC2MXL[WebRTC2MXL]
             end
 
-            %% --- Stage 3: Processing ---
+            %% --- Stage 2: Processing ---
             subgraph Processing [Processing]
                 direction TB
                 AudioMix[Audio Mix]
@@ -26,13 +26,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
                 SPXGraphics[SPX Graphics]
             end
 
-            %% --- SPX Graphic engine ---
-            
-
-            %% --- MXL Domain Stage 3 ---
-            MXLDomain3([MXL Domain])
-
-            %% --- Stage 4: Output ---
+            %% --- Stage 3: Output ---
             MXL2SRT[MXL2SRT]
 
             %% --- Control Plane ---
@@ -48,9 +42,10 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
 
             %% --- Solid Video (blue) Connections (Indices 0 to 4) ---
             %% Video Sources to Input selector
-            SRT2MXL -- IN 1 --> InputSel
+            HLS2MXL -- IN 1 --> InputSel
             LoopPlayer -- IN 2--> InputSel
-            LatencyTest -- IN 3--> InputSel
+            TestGen -- IN 3 --> InputSel
+            
 
             %% Input Selector to Processing
             InputSel --> HTML5Keyer
@@ -61,15 +56,15 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
             %% --- Solid Audio (green) Connection (Indices 5 to 7) ---
             %% Audio Sources to Audio Mixer
             WebRTC2MXL -- IN 2 --> AudioMix
-            SRT2MXL -- IN 1 --> AudioMix
+            HLS2MXL -- IN 1 --> AudioMix
 
             %% Audio Processing to/From MXL
             AudioMix --> MXL2SRT
 
             %% --- Dotted Yellow control Connections (Indices 8 to 17) ---
-            SRT2MXL <-.-> NmosRegistry
+            HLS2MXL <-.-> NmosRegistry
             LoopPlayer <-.-> NmosRegistry
-            LatencyTest <-.-> NmosRegistry
+            TestGen <-.-> NmosRegistry
             WebRTC2MXL <-.-> NmosRegistry
             InputSel <-.-> NmosRegistry
             HTML5Keyer <-.-> NmosRegistry
@@ -80,7 +75,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
 
         end
 
-        %% --- Legend (Outside the Compute Node) ---
+        %% --- Legend (Outside the Compute Node) (Indices 18 to 20) ---
     subgraph Legend [Diagram Key]
         direction LR
         k1[Gstreamer</br>based app] -- MXL Video flow --> kt1[Gstreamer</br>based app]
@@ -101,19 +96,19 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
         classDef control fill:#007bff,color:#fff,stroke:#333,stroke-width:2px;
         classDef other fill:#cce6ff,color:black,stroke:#333,stroke-width:2px
 
-        class SRT2MXL,LoopPlayer,LatencyTest,WebRTC2MXL,InputSel,AudioMix,HTML5Keyer,MXL2SRT,k1,kt1,k2,kt2,k3 gstreamer
+        class HLS2MXL,LoopPlayer,TestGen,WebRTC2MXL,InputSel,AudioMix,HTML5Keyer,MXL2SRT,k1,kt1,k2,kt2,k3 gstreamer
         class NmosRegistry,DummyNmosNode,NmosController,kt3 control
         class SPXGraphics,k4 other
 
         %% Link Styling
         %% Solid blue for video connections
-        linkStyle 0,1,2,3,4 stroke:blue,stroke-width:2px
+        linkStyle 0,1,2,3,4,18 stroke:blue,stroke-width:2px
 
         %% Solid green for audio connections
-        linkStyle 5,6,7 stroke:green,stroke-width:2px
+        linkStyle 5,6,7,19 stroke:green,stroke-width:2px
 
         %% Dotted yellow for nmos connections
-        linkStyle 8,9,10,11,12,13,14,15,16,17 stroke:yellow
+        linkStyle 8,9,10,11,12,13,14,15,16,17,20 stroke:yellow
 ```
 
 ### Steps
