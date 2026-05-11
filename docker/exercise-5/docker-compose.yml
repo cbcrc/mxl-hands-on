@@ -69,11 +69,30 @@ services:
     depends_on:
     - nmos-registry
 
+  hls2mxl:
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: docker/exercise-5/data/hls2mxl/Dockerfile
+    image: mxl-hls2mxl:latest
+    container_name: hls2mxl
+    hostname: hls2mxl
+    domainname: local
+    ports:
+    - "9520:9520"   # NMOS IS-04/IS-05 node
+    - "9620:9620"   # FastAPI hls2mxl backend
+    - "9720:9720"   # React frontend (static files)
+    volumes:
+    - "mxl-domain:/mxl-domain"               # shared MXL domain
+    environment:
+    - MXL_DOMAIN=/mxl-domain
+    - NMOS_NODE_URL=http://localhost:9520
+    depends_on:
+    - nmos-registry
+
   test-generator:
     platform: linux/amd64
     build:
-      # Build context is the repository root so the Dockerfile can access
-      # dmf-mxl/build/ and dmf-mxl/rust/ for the MXL libraries.
       context: ../..
       dockerfile: docker/exercise-5/data/test-generator/Dockerfile
     image: mxl-test-generator:latest
