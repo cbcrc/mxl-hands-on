@@ -101,8 +101,12 @@ class NmosBridge:
         else:
             log.warning("Only %d receiver(s) found after 30 s", len(ids))
 
-        # Sort for determinism; assign slots 1, 2, 3 in order
-        ids_sorted = sorted(ids)
+        # Sort by IS-04 label (xv0 < xv1 < xv2) so slot 1=xv0, 2=xv1, 3=xv2
+        def _label_key(rid: str) -> str:
+            data = _fetch(f"{self._node}/receivers/{rid}")
+            return (data or {}).get("label", rid)
+
+        ids_sorted = sorted(ids, key=_label_key)
         self._receiver_slots = {rid: (i + 1) for i, rid in enumerate(ids_sorted)}
         self._active_state   = {rid: None for rid in ids_sorted}
         self._activation_times = {rid: None for rid in ids_sorted}
