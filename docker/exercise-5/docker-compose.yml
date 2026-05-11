@@ -110,3 +110,24 @@ services:
     - NMOS_NODE_URL=http://localhost:9510
     depends_on:
     - nmos-registry
+
+  input-selector:
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: docker/exercise-5/data/input-selector/Dockerfile
+    image: mxl-input-selector:latest
+    container_name: input-selector
+    hostname: input-selector
+    domainname: local
+    ports:
+    - "9530:9530"   # NMOS IS-04/IS-05 node
+    - "9630:9630"   # FastAPI input-selector backend
+    - "9730:9730"   # React frontend (static files)
+    volumes:
+    - "mxl-domain:/mxl-domain"               # shared MXL domain
+    environment:
+    - MXL_DOMAIN=/mxl-domain
+    - NMOS_NODE_URL=http://localhost:9530
+    depends_on:
+    - nmos-registry
