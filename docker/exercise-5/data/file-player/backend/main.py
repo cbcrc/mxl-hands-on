@@ -104,6 +104,7 @@ async def load(req: LoadRequest):
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"File not found: {req.filename}")
     player.load(str(path))
+    bridge.set_senders_active(True)
     return {"status": "playing", "file": req.filename}
 
 
@@ -111,6 +112,7 @@ async def load(req: LoadRequest):
 async def play():
     """Start / resume playback."""
     player.play()
+    bridge.set_senders_active(True)
     return {"status": "playing"}
 
 
@@ -118,6 +120,7 @@ async def play():
 async def stop():
     """Stop playback and release the pipeline."""
     player.stop()
+    bridge.set_senders_active(False)
     return {"status": "stopped"}
 
 

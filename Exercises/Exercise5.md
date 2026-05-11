@@ -161,3 +161,9 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
         echo 'export LD_LIBRARY_PATH="$HOME/mxl-hands-on/dmf-mxl/build/Linux-Clang-Release/lib:$HOME/mxl-hands-on/dmf-mxl/build/Linux-Clang-Release/lib/internal"' >> ~/.bashrc
         source ~/.bashrc
     ```
+1. Create a symlink for the gstreamer plugin, Some function (dlopen()) have absolute path hardcoded.
+    ```sh
+        sudo mkdir -p /workspace/mxl/build/Linux-Clang-Release/lib
+        sudo ln -sf /home/rochonma/mxl-hands-on/dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so \
+        /workspace/mxl/build/Linux-Clang-Release/lib/libmxl.so
+    ```
