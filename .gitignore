@@ -52,3 +52,8 @@ Thumbs.db
 /docker/exercise-5/nmos-cpp
 /docker/exercise-5/nmos-js
 /docker/exercise-5/easy-nmos
+/docker/exercise-5/data/spx-server/ASSETS
+/docker/exercise-5/data/spx-server/bin
+/docker/exercise-5/data/spx-server/DATAROOT
+/docker/exercise-5/data/spx-server/locales
+/docker/exercise-5/data/spx-server/LOG
