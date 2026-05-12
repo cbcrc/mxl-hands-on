@@ -2,7 +2,7 @@
 
 ### Synopsis
 
-In this exercise, we will compile the latest commit of the MXL SDK including rust bindings and the rust Gstreamer plugins. Then we will build a full stream augemtation workflow supported by various open source Nmos repository.
+In this exercise, we will compile the latest commit of the MXL SDK including rust bindings and the rust Gstreamer plugins. Then we will build a full stream augmentation workflow supported by various open source project, including an Nmos repository.
 
 ```mermaid
     flowchart LR
