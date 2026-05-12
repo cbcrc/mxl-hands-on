@@ -162,3 +162,10 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
         sudo ln -sf /home/rochonma/mxl-hands-on/dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so \
         /workspace/mxl/build/Linux-Clang-Release/lib/libmxl.so
     ```
+1. Reference HLS stream that are 1920x1080p60
+    ```sh
+        https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8
+    ```
+    ```sh
+        https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
+    ```
