@@ -116,6 +116,30 @@ services:
     depends_on:
     - nmos-registry
 
+  html5-keyer:
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: docker/exercise-5/data/HTML5-keyer/Dockerfile
+    image: mxl-html5-keyer:latest
+    container_name: html5-keyer
+    hostname: html5-keyer
+    domainname: local
+    ports:
+    - "9540:9540"   # NMOS IS-04/IS-05 node
+    - "9640:9640"   # FastAPI HTML5 Keyer backend
+    - "9740:9740"   # React frontend (static files)
+    shm_size: "256mb"                          # required for CEF multi-process IPC
+    volumes:
+    - "mxl-domain:/mxl-domain"               # shared MXL domain
+    environment:
+    - MXL_DOMAIN=/mxl-domain
+    - NMOS_NODE_URL=http://localhost:9540
+    - SPX_URL=http://spx-server:5660/renderer/
+    depends_on:
+    - nmos-registry
+    - spx-server
+
   spx-server:
     image: spx-server:v1.0.3
     container_name: spx-server
