@@ -35,8 +35,11 @@ from gi.repository import GLib, Gst
 Gst.init(None)
 log = logging.getLogger(__name__)
 
-_VIDEO_CAPS  = "video/x-raw,width=1920,height=1080,framerate=60/1"
-_OUTPUT_CAPS = "video/x-raw,format=v210,width=1920,height=1080,framerate=60/1"
+# Only constrain the pixel format so all branches are compatible with input-selector.
+# Do NOT specify framerate/resolution — these are dictated by each source (mxlsrc reads
+# them from the ring buffer; over-constraining causes caps renegotiation failure when
+# input-selector switches the active pad and sends a RECONFIGURE upstream).
+_VIDEO_CAPS = "video/x-raw,format=v210"
 
 
 class GstSelector:
@@ -51,6 +54,7 @@ class GstSelector:
         self._slots: dict[int, str | None] = {1: None, 2: None, 3: None}
         self._selected_input: int | None = None  # pre-selected (UI highlight)
         self._active_input: int | None = None    # currently at output (None = black)
+        self._slot_to_pad: dict[int, str] = {}   # slot → actual pad name assigned by input-selector
 
         self._glib_loop = GLib.MainLoop()
         threading.Thread(target=self._glib_loop.run, daemon=True).start()
@@ -60,22 +64,21 @@ class GstSelector:
     def set_output_flow_id(self, flow_id: str) -> None:
         with self._lock:
             self._output_flow_id = flow_id
-            log.info("Output flow ID set: %s", flow_id)
+            print(f"[GstSelector] Output flow ID set: {flow_id}", flush=True)
             self._rebuild_pipeline()
 
     def connect_input(self, slot: int, flow_id: str) -> None:
         """Called by NMOS bridge when a receiver IS-05 activation arrives."""
         with self._lock:
-            log.info("Slot %d connected → flow %s", slot, flow_id)
+            print(f"[GstSelector] Slot {slot} connected → flow {flow_id}", flush=True)
             self._slots[slot] = flow_id
             self._rebuild_pipeline()
 
     def disconnect_input(self, slot: int) -> None:
         """Called by NMOS bridge when a receiver IS-05 deactivation arrives."""
         with self._lock:
-            log.info("Slot %d disconnected", slot)
+            print(f"[GstSelector] Slot {slot} disconnected", flush=True)
             self._slots[slot] = None
-            # If the active output was this slot, fall back to black
             if self._active_input == slot:
                 self._active_input = None
             self._rebuild_pipeline()
@@ -83,18 +86,18 @@ class GstSelector:
     def select_input(self, slot: int) -> None:
         """Pre-select an input (does not change output until take() is called)."""
         with self._lock:
-            log.info("Pre-selected input: slot %d", slot)
+            print(f"[GstSelector] Pre-selected input: slot {slot}", flush=True)
             self._selected_input = slot
 
     def take(self) -> None:
         """Switch output to the pre-selected input."""
         with self._lock:
             if self._selected_input is None:
-                log.warning("Take: no input pre-selected")
+                print("[GstSelector] Take: no input pre-selected", flush=True)
                 return
             self._active_input = self._selected_input
+            print(f"[GstSelector] Take: switching to slot {self._active_input}", flush=True)
             self._apply_active_pad()
-            log.info("Take: output → slot %d", self._active_input)
 
     def get_status(self) -> dict:
         with self._lock:
@@ -115,13 +118,14 @@ class GstSelector:
         """Stop and release the current pipeline. Caller must hold self._lock."""
         if self._pipeline is None:
             return
-        log.info("Tearing down pipeline…")
+        print("[GstSelector] Tearing down pipeline…", flush=True)
         self._pipeline.set_state(Gst.State.NULL)
         self._pipeline.get_state(5 * Gst.SECOND)
-        self._pipeline = None
+        self._pipeline     = None
         self._selector_elem = None
+        self._slot_to_pad   = {}
         gc.collect()
-        log.info("Teardown complete")
+        print("[GstSelector] Teardown complete", flush=True)
 
     def _cleanup_flow_dir(self) -> None:
         """Remove the output flow directory so mxlsink can start fresh."""
@@ -131,96 +135,113 @@ class GstSelector:
         if os.path.exists(path):
             try:
                 shutil.rmtree(path)
-                log.info("Removed stale output flow dir: %s", self._output_flow_id)
+                print(f"[GstSelector] Removed stale output flow dir: {self._output_flow_id}", flush=True)
             except Exception as exc:
-                log.warning("Could not remove flow dir: %s", exc)
+                print(f"[GstSelector] Could not remove flow dir: {exc}", flush=True)
 
     def _rebuild_pipeline(self) -> None:
         """Tear down the old pipeline and start a fresh one. Caller must hold lock."""
         if not self._output_flow_id:
-            log.warning("Skipping pipeline build: output flow ID not yet known")
+            print("[GstSelector] Skipping rebuild: output flow ID not yet known", flush=True)
             return
         self._teardown()
         self._cleanup_flow_dir()
         try:
             self._build_pipeline()
         except Exception as exc:
-            log.error("Failed to build pipeline: %s", exc)
+            print(f"[GstSelector] Failed to build pipeline: {exc}", flush=True)
 
     def _build_pipeline(self) -> None:
         """Construct and start the GStreamer pipeline. Caller must hold self._lock."""
         domain   = self._mxl_domain
         out_flow = self._output_flow_id
 
+        connected = {slot: fid for slot, fid in self._slots.items() if fid}
+        print(f"[GstSelector] Building pipeline active_input={self._active_input} "
+              f"connected={list(connected.keys())}", flush=True)
+
         pipeline = Gst.Pipeline.new("input-selector")
         selector = Gst.ElementFactory.make("input-selector", "selector")
         if not selector:
             raise RuntimeError("Could not create input-selector element")
+        selector.set_property("sync-streams", False)
         pipeline.add(selector)
 
-        def _make_branch(branch_idx: int, flow_id: str | None) -> None:
-            """Build one input branch and link it to selector.sink_{branch_idx}."""
-            tag = f"b{branch_idx}"
-            if flow_id:
-                src = Gst.ElementFactory.make("mxlsrc", f"src_{tag}")
-                src.set_property("video-flow-id", flow_id)
-                src.set_property("domain",        domain)
-            else:
-                src = Gst.ElementFactory.make("videotestsrc", f"src_{tag}")
-                src.set_property("pattern", 2)      # black
-                src.set_property("is-live", True)
+        def _make_branch(slot: int, flow_id: str) -> None:
+            """Build one mxlsrc branch and link it to an input-selector sink pad."""
+            tag = f"b{slot}"
+            src = Gst.ElementFactory.make("mxlsrc", f"src_{tag}")
+            src.set_property("video-flow-id", flow_id)
+            src.set_property("domain",        domain)
+            print(f"[GstSelector]   branch {slot}: mxlsrc flow={flow_id}", flush=True)
 
             conv  = Gst.ElementFactory.make("videoconvert", f"conv_{tag}")
-            scale = Gst.ElementFactory.make("videoscale",   f"scale_{tag}")
-            caps  = Gst.ElementFactory.make("capsfilter",   f"caps_{tag}")
-            caps.set_property("caps", Gst.Caps.from_string(_VIDEO_CAPS))
             queue = Gst.ElementFactory.make("queue",        f"q_{tag}")
+            queue.set_property("leaky", 1)            # drop oldest on overflow
+            queue.set_property("max-size-buffers", 3)
 
-            for el in (src, conv, scale, caps, queue):
+            for el in (src, conv, queue):
                 pipeline.add(el)
 
             src.link(conv)
-            conv.link(scale)
-            scale.link(caps)
-            caps.link(queue)
+            conv.link(queue)
 
-            sel_sink = selector.get_request_pad(f"sink_{branch_idx}")
+            sel_sink = selector.get_request_pad("sink_%u")
+            pad_name = sel_sink.get_name() if sel_sink else "NONE"
+            self._slot_to_pad[slot] = pad_name
+            print(f"[GstSelector]   slot {slot} → pad {pad_name}", flush=True)
             queue.get_static_pad("src").link(sel_sink)
 
-        # Branch 0: permanent black (output when active_input is None)
-        _make_branch(0, None)
-        # Branches 1-3: the three input slots
-        for slot in (1, 2, 3):
-            _make_branch(slot, self._slots.get(slot))
+        if not connected:
+            # No connected slots yet: emit black via a simple videotestsrc (no selector)
+            print("[GstSelector]   no connected slots — using black videotestsrc", flush=True)
+            src = Gst.ElementFactory.make("videotestsrc", "src_black")
+            src.set_property("pattern", 2)
+            src.set_property("is-live", True)
+            pipeline.add(src)
+            # Link directly into the output chain below (reuse selector as pass-through)
+            # Actually easier: link src directly, bypassing the selector entirely
+            pipeline.remove(selector)
+            selector = None
 
-        # ── Output branch ─────────────────────────────────────────────────────
-        out_conv  = Gst.ElementFactory.make("videoconvert", "out_conv")
-        out_caps  = Gst.ElementFactory.make("capsfilter",   "out_caps")
-        out_caps.set_property("caps", Gst.Caps.from_string(_OUTPUT_CAPS))
-        out_queue = Gst.ElementFactory.make("queue",        "out_queue")
-        out_sink  = Gst.ElementFactory.make("mxlsink",      "out_sink")
-        out_sink.set_property("flow-id", out_flow)
-        out_sink.set_property("domain",  domain)
-        out_sink.set_property("sync",    False)
+            out_sink = Gst.ElementFactory.make("mxlsink", "out_sink")
+            out_sink.set_property("flow-id", out_flow)
+            out_sink.set_property("domain",  domain)
+            out_sink.set_property("sync",    False)
+            out_conv = Gst.ElementFactory.make("videoconvert", "out_conv")
+            for el in (out_conv, out_sink):
+                pipeline.add(el)
+            src.link(out_conv)
+            out_conv.link(out_sink)
+        else:
+            # All connected branches are mxlsrc — identical caps, seamless switching
+            for slot, fid in connected.items():
+                _make_branch(slot, fid)
 
-        for el in (out_conv, out_caps, out_queue, out_sink):
-            pipeline.add(el)
-        selector.link(out_conv)
-        out_conv.link(out_caps)
-        out_caps.link(out_queue)
-        out_queue.link(out_sink)
+            out_conv  = Gst.ElementFactory.make("videoconvert", "out_conv")
+            out_queue = Gst.ElementFactory.make("queue",        "out_queue")
+            out_sink  = Gst.ElementFactory.make("mxlsink",      "out_sink")
+            out_sink.set_property("flow-id", out_flow)
+            out_sink.set_property("domain",  domain)
+            out_sink.set_property("sync",    False)
 
-        # ── Bus ───────────────────────────────────────────────────────────────
+            for el in (out_conv, out_queue, out_sink):
+                pipeline.add(el)
+            selector.link(out_conv)
+            out_conv.link(out_queue)
+            out_queue.link(out_sink)
+
         bus = pipeline.get_bus()
         bus.add_signal_watch()
         bus.connect("message::error", self._on_error)
         bus.connect("message::eos",   self._on_eos)
 
         ret = pipeline.set_state(Gst.State.PLAYING)
-        log.info("Pipeline set_state(PLAYING) → %s", ret)
+        print(f"[GstSelector] Pipeline set_state(PLAYING) → {ret}", flush=True)
 
-        self._pipeline     = pipeline
+        self._pipeline      = pipeline
         self._selector_elem = selector
+        # _slot_to_pad was populated by _make_branch calls above — do NOT reset here
 
         self._apply_active_pad()
         self._patch_flow_def()
@@ -228,15 +249,25 @@ class GstSelector:
     def _apply_active_pad(self) -> None:
         """Point the selector at the correct branch. Caller must hold self._lock."""
         if self._selector_elem is None:
+            return  # no selector (black/no-slots pipeline)
+        connected = {slot for slot, fid in self._slots.items() if fid}
+        idx = self._active_input if self._active_input in connected else None
+        if idx is None:
+            idx = min(connected) if connected else None
+        if idx is None:
             return
-        # None → branch 0 (permanent black)
-        idx = self._active_input if self._active_input is not None else 0
-        pad = self._selector_elem.get_static_pad(f"sink_{idx}")
-        if pad:
-            self._selector_elem.set_property("active-pad", pad)
-            log.info("Selector active-pad → sink_%d", idx)
-        else:
-            log.warning("Could not find selector pad sink_%d", idx)
+        pad_name = self._slot_to_pad.get(idx)
+        if not pad_name:
+            print(f"[GstSelector] _apply_active_pad: no pad mapping for slot {idx}", flush=True)
+            return
+        pad = self._selector_elem.get_static_pad(pad_name)
+        if pad is None:
+            print(f"[GstSelector] _apply_active_pad: pad {pad_name} NOT FOUND", flush=True)
+            return
+        self._selector_elem.set_property("active-pad", pad)
+        current = self._selector_elem.get_property("active-pad")
+        current_name = current.get_name() if current else "None"
+        print(f"[GstSelector] active-pad set to slot {idx} ({pad_name}), readback={current_name}", flush=True)
 
     def _patch_flow_def(self) -> None:
         if not self._output_flow_id:
@@ -253,13 +284,13 @@ class GstSelector:
             data["description"] = "MXL Input Selector video output"
             with open(path, "w") as f:
                 json.dump(data, f, indent=2)
-            log.info("Patched flow_def.json for output")
+            print(f"[GstSelector] Patched flow_def.json for output", flush=True)
         except Exception as exc:
-            log.warning("Could not patch flow_def.json: %s", exc)
+            print(f"[GstSelector] Could not patch flow_def.json: {exc}", flush=True)
 
     def _on_error(self, _bus: Gst.Bus, msg: Gst.Message) -> None:
         err, debug = msg.parse_error()
-        log.error("GStreamer error: %s  debug: %s", err, debug)
+        print(f"[GstSelector] GStreamer error: {err}  debug: {debug}", flush=True)
 
     def _on_eos(self, _bus: Gst.Bus, _msg: Gst.Message) -> None:
-        log.info("End of stream")
+        print("[GstSelector] End of stream", flush=True)

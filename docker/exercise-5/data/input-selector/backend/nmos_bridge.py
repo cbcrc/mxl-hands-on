@@ -146,6 +146,12 @@ class NmosBridge:
                 if prev is None:
                     log.info("Receiver slot %d: initial state %s", slot,
                              "ACTIVE" if master_enable else "INACTIVE")
+                    # Trigger connect immediately if already active at startup
+                    if master_enable and flow_id and self._on_connect:
+                        try:
+                            self._on_connect(slot, flow_id)
+                        except Exception as exc:
+                            log.error("on_connect_input error (initial): %s", exc)
 
                 elif master_enable and not prev:
                     # Became active
