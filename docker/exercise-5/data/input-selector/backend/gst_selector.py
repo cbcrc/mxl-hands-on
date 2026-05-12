@@ -270,23 +270,32 @@ class GstSelector:
         print(f"[GstSelector] active-pad set to slot {idx} ({pad_name}), readback={current_name}", flush=True)
 
     def _patch_flow_def(self) -> None:
+        """Patch flow_def.json in a background thread (mxlsink writes it asynchronously)."""
         if not self._output_flow_id:
             return
-        path = os.path.join(
-            self._mxl_domain,
-            f"{self._output_flow_id}.mxl-flow",
-            "flow_def.json",
-        )
-        try:
-            with open(path) as f:
-                data = json.load(f)
-            data["label"]       = "Input Selector – Output"
-            data["description"] = "MXL Input Selector video output"
-            with open(path, "w") as f:
-                json.dump(data, f, indent=2)
-            print(f"[GstSelector] Patched flow_def.json for output", flush=True)
-        except Exception as exc:
-            print(f"[GstSelector] Could not patch flow_def.json: {exc}", flush=True)
+        flow_id = self._output_flow_id
+        path = os.path.join(self._mxl_domain, f"{flow_id}.mxl-flow", "flow_def.json")
+
+        def _try_patch() -> None:
+            import time
+            for attempt in range(20):          # retry up to ~10 s
+                try:
+                    with open(path) as f:
+                        data = json.load(f)
+                    data["label"]       = "Input Selector – Output"
+                    data["description"] = "MXL Input Selector video output"
+                    with open(path, "w") as f:
+                        json.dump(data, f, indent=2)
+                    print(f"[GstSelector] Patched flow_def.json (attempt {attempt + 1})", flush=True)
+                    return
+                except FileNotFoundError:
+                    time.sleep(0.5)
+                except Exception as exc:
+                    print(f"[GstSelector] Could not patch flow_def.json: {exc}", flush=True)
+                    return
+            print("[GstSelector] flow_def.json never appeared — patch skipped", flush=True)
+
+        threading.Thread(target=_try_patch, daemon=True).start()
 
     def _on_error(self, _bus: Gst.Bus, msg: Gst.Message) -> None:
         err, debug = msg.parse_error()
