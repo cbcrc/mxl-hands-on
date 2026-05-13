@@ -27,12 +27,6 @@ Xvfb :99 -screen 0 1920x1080x24 &
 export DISPLAY=:99
 sleep 1
 
-# Force GStreamer GL elements (glvideomixer, glupload, gldownload) to use the
-# AMD GPU via EGL/GBM instead of GLX on the Xvfb virtual display.
-# CEF still uses DISPLAY=:99 (X11) — these vars only affect GStreamer's GL sink.
-export GST_GL_PLATFORM=egl
-export GST_GL_WINDOW=gbm
-
 # 3. Start NMOS node
 echo "[entrypoint] Starting nmos-cpp-node on port 9540..."
 /home/nmos-cpp-node /home/node.json &
