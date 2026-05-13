@@ -4,13 +4,12 @@
 GStreamer MXL-to-WebRTC pipeline.
 
 Architecture:
-  mxlsrc(video-flow-id)  → videoconvert → video/x-raw,format=I420 → queue → webrtcsink
+  mxlsrc(video-flow-id)  → videoconvert → videoscale → video/x-raw,format=I420,1280x720 → queue → webrtcsink
   mxlsrc(audio-flow-id)  → audioconvert → audioresample → audio/x-raw,format=S16LE,channels=2,rate=48000 → queue → webrtcsink
 
 webrtcsink is configured with:
-  - run-signalling-server=true  (embedded WS signaling on port 8443)
-  - signaller.host-addr = ws://0.0.0.0:8443  (accept connections from host browser)
-  - consumer-added signal: restrict ICE UDP ports to 50000-50020
+  - External signalling server at ws://127.0.0.1:8443/
+  - Default bitrate (congestion control disabled — rtpgccbwe unavailable)
 
 The pipeline is built/torn down when video/audio flow IDs change.
 """
@@ -122,8 +121,19 @@ class GstMxl2WebRtc:
         vsrc.set_property("domain", domain)
 
         vconv = Gst.ElementFactory.make("videoconvert", "vconv")
+        vscale = Gst.ElementFactory.make("videoscale", "vscale")
         vcaps = Gst.ElementFactory.make("capsfilter", "vcaps")
-        vcaps.set_property("caps", Gst.Caps.from_string("video/x-raw,format=I420"))
+        vcaps.set_property("caps", Gst.Caps.from_string("video/x-raw,format=I420,width=1280,height=720"))
+        # Encode to H.264 ourselves so we control quality settings.
+        # tune=zerolatency: no lookahead buffering (essential for live/WebRTC)
+        # speed-preset=fast: good quality with low CPU
+        # bitrate=6000 kbps, max keyframe interval=60 frames (1 s at 60fps)
+        venc = Gst.ElementFactory.make("x264enc", "venc")
+        venc.set_property("tune", 0x00000004)     # zerolatency
+        venc.set_property("speed-preset", 5)      # fast
+        venc.set_property("bitrate", 6000)         # kbps
+        venc.set_property("key-int-max", 60)
+        vparse = Gst.ElementFactory.make("h264parse", "vparse")
         vqueue = Gst.ElementFactory.make("queue", "vqueue")
 
         # ── Audio branch ──────────────────────────────────────────────────────
@@ -153,16 +163,26 @@ class GstMxl2WebRtc:
                 log.info("Signaller URI set to ws://127.0.0.1:8443/")
         except Exception as e:
             log.warning("Could not configure signaller URI: %s", e)
+        # Use H.264 — far better quality/bitrate ratio than VP8.
+        # We pre-encode with x264enc so video-caps tells webrtcsink to expect H.264 input.
+        webrtcsink.set_property(
+            "video-caps",
+            Gst.Caps.from_string("video/x-h264"),
+        )
+        log.info("webrtcsink: H.264 pre-encoded at 6 Mbps")
         webrtcsink.connect("consumer-added", lambda sink, cid, wb: log.info("WebRTC consumer added: %s", cid))
         # ── Assemble pipeline ─────────────────────────────────────────────────
-        for el in (vsrc, vconv, vcaps, vqueue, asrc, aconv, aresample, acaps, aqueue, webrtcsink):
+        for el in (vsrc, vconv, vscale, vcaps, venc, vparse, vqueue, asrc, aconv, aresample, acaps, aqueue, webrtcsink):
             if not el:
                 raise RuntimeError(f"Could not create GStreamer element")
             pipeline.add(el)
 
         vsrc.link(vconv)
-        vconv.link(vcaps)
-        vcaps.link(vqueue)
+        vconv.link(vscale)
+        vscale.link(vcaps)
+        vcaps.link(venc)
+        venc.link(vparse)
+        vparse.link(vqueue)
 
         asrc.link(aconv)
         aconv.link(aresample)
