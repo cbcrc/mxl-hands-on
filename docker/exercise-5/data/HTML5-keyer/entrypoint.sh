@@ -19,13 +19,19 @@ if command -v mdnsd &>/dev/null; then
     sleep 1
 fi
 
-# 2. Start Xvfb (virtual display for glvideomixer / CEF headless rendering)
+# 2. Start Xvfb (virtual display required by CEF multi-process rendering)
 echo "[entrypoint] Starting Xvfb on :99..."
 # Clean up stale lock files from a previous run (e.g. after docker restart)
 rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
 Xvfb :99 -screen 0 1920x1080x24 &
 export DISPLAY=:99
 sleep 1
+
+# Force GStreamer GL elements (glvideomixer, glupload, gldownload) to use the
+# AMD GPU via EGL/GBM instead of GLX on the Xvfb virtual display.
+# CEF still uses DISPLAY=:99 (X11) — these vars only affect GStreamer's GL sink.
+export GST_GL_PLATFORM=egl
+export GST_GL_WINDOW=gbm
 
 # 3. Start NMOS node
 echo "[entrypoint] Starting nmos-cpp-node on port 9540..."
