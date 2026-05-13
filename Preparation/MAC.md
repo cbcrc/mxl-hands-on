@@ -25,6 +25,12 @@ In order to run these exercises on a Mac, you need to install Docker and create 
    ```sh
    docker run hello-world
    ```
+1. **Apple Silicon only (M1/M2/M3/M4):** The MXL exercise Docker images are built for `linux/amd64` and use SIMD instructions (AVX) that Rosetta 2 cannot emulate. To avoid "Illegal instruction" crashes, you must configure Docker Desktop to use its own virtual machine manager instead of Apple's Virtualization Framework:
+   - Open Docker Desktop → Settings → General
+   - Under **Virtual Machine Options**, select **Docker VMM** (not "Apple Virtualization Framework")
+   - Click **Apply & restart**
+   
+   Docker VMM uses QEMU which fully emulates the x86_64 instruction set. It is slower than Apple's Virtualization Framework but provides the complete instruction compatibility that MXL requires.
 
 ### Installing Xcode Command Line Tools. This will come with git commands.
 
