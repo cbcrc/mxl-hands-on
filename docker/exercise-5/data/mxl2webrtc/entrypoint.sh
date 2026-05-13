@@ -32,6 +32,10 @@ done
 echo "[entrypoint] Starting frontend static server on port 9750..."
 python3 -m http.server 9750 --directory /app/frontend/dist &
 
+echo "[entrypoint] Starting WebRTC signalling server on port 8443..."
+gst-webrtc-signalling-server --host 0.0.0.0 --port 8443 &
+sleep 1
+
 echo "[entrypoint] Starting FastAPI backend on port 9650..."
 cd /app
 exec python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 9650
