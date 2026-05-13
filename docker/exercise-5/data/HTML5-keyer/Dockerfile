@@ -123,6 +123,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libegl1 \
         libegl-mesa0 \
         libgles2 \
+        libgbm1 \
+        mesa-va-drivers \
+        libva-drm2 \
         xvfb \
         curl \
     && rm -rf /var/lib/apt/lists/*
