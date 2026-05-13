@@ -42,6 +42,7 @@ class GstMxl2WebRtc:
         self._audio_flow_id: str | None = None
         self._state: str = "idle"   # idle / playing / error
         self._error_msg: str | None = None
+        self._pipeline_gen: int = 0  # incremented on every rebuild; guards stale bus callbacks
 
         self._glib_loop = GLib.MainLoop()
         threading.Thread(target=self._glib_loop.run, daemon=True).start()
@@ -77,10 +78,11 @@ class GstMxl2WebRtc:
     def get_status(self) -> dict:
         with self._lock:
             return {
-                "state":          self._state,
-                "video_flow_id":  self._video_flow_id,
-                "audio_flow_id":  self._audio_flow_id,
-                "error":          self._error_msg,
+                "state":            self._state,
+                "video_flow_id":    self._video_flow_id,
+                "audio_flow_id":    self._audio_flow_id,
+                "error":            self._error_msg,
+                "pipeline_version": self._pipeline_gen,
             }
 
     # ── Pipeline ─────────────────────────────────────────────────────────────
@@ -111,6 +113,9 @@ class GstMxl2WebRtc:
 
     def _build_pipeline(self) -> None:
         """Construct and start the GStreamer pipeline. Caller must hold lock."""
+        self._pipeline_gen += 1
+        my_gen = self._pipeline_gen
+        log.info("Building pipeline generation %d", my_gen)
         domain = self._mxl_domain
 
         pipeline = Gst.Pipeline.new("mxl2webrtc")
@@ -198,7 +203,18 @@ class GstMxl2WebRtc:
         # ── Bus handlers ──────────────────────────────────────────────────────
         bus = pipeline.get_bus()
         bus.add_signal_watch()
-        bus.connect("message::error",         self._on_error)
+
+        def _on_error_guarded(_bus, msg, gen=my_gen):
+            err, debug = msg.parse_error()
+            log.error("GStreamer error (gen %d): %s  debug: %s", gen, err, debug)
+            with self._lock:
+                if gen != self._pipeline_gen:
+                    log.info("Ignoring stale error from generation %d (current: %d)", gen, self._pipeline_gen)
+                    return
+                self._state     = "error"
+                self._error_msg = str(err)
+
+        bus.connect("message::error",         _on_error_guarded)
         bus.connect("message::eos",           self._on_eos)
         bus.connect("message::state-changed", self._on_state_changed)
 
@@ -212,13 +228,6 @@ class GstMxl2WebRtc:
         threading.Thread(target=self._patch_flow_defs, daemon=True).start()
 
     # ── GStreamer callbacks ────────────────────────────────────────────────────
-
-    def _on_error(self, _bus: Gst.Bus, msg: Gst.Message) -> None:
-        err, debug = msg.parse_error()
-        log.error("GStreamer error: %s  debug: %s", err, debug)
-        with self._lock:
-            self._state     = "error"
-            self._error_msg = str(err)
 
     def _on_eos(self, _bus: Gst.Bus, _msg: Gst.Message) -> None:
         log.info("End of stream")
