@@ -133,7 +133,7 @@ services:
     devices:
     - /dev/dri/renderD128:/dev/dri/renderD128  # AMD GPU for EGL/GBM rendering
     group_add:
-    - render                                   # grants access to renderD128
+    - "992"                                    # render GID — grants access to renderD128
     volumes:
     - "mxl-domain:/mxl-domain"               # shared MXL domain
     environment:
