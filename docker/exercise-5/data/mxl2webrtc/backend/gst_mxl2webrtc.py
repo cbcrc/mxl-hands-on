@@ -144,15 +144,16 @@ class GstMxl2WebRtc:
         webrtcsink = Gst.ElementFactory.make("webrtcsink", "webrtcsink")
         if not webrtcsink:
             raise RuntimeError("Could not create webrtcsink element – is libgstrswebrtc.so installed?")
-        webrtcsink.set_property("run-signalling-server", True)
+        # The signalling server runs as a separate process on port 8443.
+        # The default signaller URI (ws://127.0.0.1:8443/) already points there.
         try:
             signaller = webrtcsink.get_property("signaller")
             if signaller:
-                signaller.set_property("host-addr", "ws://0.0.0.0:8443")
+                signaller.set_property("uri", "ws://127.0.0.1:8443/")
+                log.info("Signaller URI set to ws://127.0.0.1:8443/")
         except Exception as e:
-            log.warning("Could not set signaller host-addr: %s", e)
-        webrtcsink.connect("consumer-added", self._on_consumer_added)
-
+            log.warning("Could not configure signaller URI: %s", e)
+        webrtcsink.connect("consumer-added", lambda sink, cid, wb: log.info("WebRTC consumer added: %s", cid))
         # ── Assemble pipeline ─────────────────────────────────────────────────
         for el in (vsrc, vconv, vcaps, vqueue, asrc, aconv, aresample, acaps, aqueue, webrtcsink):
             if not el:
@@ -191,16 +192,6 @@ class GstMxl2WebRtc:
         threading.Thread(target=self._patch_flow_defs, daemon=True).start()
 
     # ── GStreamer callbacks ────────────────────────────────────────────────────
-
-    def _on_consumer_added(self, _sink, consumer_id: str, webrtcbin) -> None:
-        log.info("WebRTC consumer added: %s", consumer_id)
-        try:
-            agent = webrtcbin.get_property("ice-agent")
-            if agent:
-                agent.set_property("min-rtp-port", 50000)
-                agent.set_property("max-rtp-port", 50020)
-        except Exception as exc:
-            log.warning("Could not restrict ICE ports: %s", exc)
 
     def _on_error(self, _bus: Gst.Bus, msg: Gst.Message) -> None:
         err, debug = msg.parse_error()

@@ -47,20 +47,23 @@ const connDot = (connected) => ({
 // ── WebRTC player hook ────────────────────────────────────────────────────────
 
 /**
- * Connects to the webrtcsink embedded signaling server and returns a ref
- * to attach to a <video> element.
+ * Connects to the webrtcsink embedded signaling server (gst-plugins-rs v1.1 protocol)
+ * and returns a ref to attach to a <video> element.
  *
- * Protocol (gst-plugins-rs webrtcsink built-in signaler):
+ * Protocol (gst-plugins-rs webrtcsink built-in signaller, v1.1):
  * 1. Connect to ws://<hostname>:8443
- * 2. Receive: {"type": "welcome", "peer_id": "<server_id>"}
- * 3. Send:    {"type": "set-peer-id", "peer_id": "<random_client_id>"}
- * 4. Send:    {"type": "start-session", "peer_id": "<server_id>"}
- * 5. Receive: {"type": "session-started", ...}
- * 6. Receive: {"type": "peer", "sdp": {"type": "offer", "sdp": "..."}}
- * 7. setRemoteDescription(offer), createAnswer, setLocalDescription(answer)
- * 8. Send:    {"type": "peer", "sdp": answer, "sessionId": ...}
- * 9. ICE exchange via {"type": "ice", ...} messages
- * 10. On track: attach to video element
+ * 2. Send: {"type":"setProtocolVersion","version":"v1_1"}
+ * 3. Send: {"type":"setPeerStatus","roles":["consumer"],"meta":null,"peerId":"<client_id>"}
+ * 4. Send: {"type":"list"} to discover registered producers
+ * 5. Receive: {"type":"list","producers":[{"id":"<producer_id>","meta":...}]}
+ *    OR Receive: {"type":"newPeer","peerId":"<producer_id>","roles":["producer"]}
+ * 6. Send: {"type":"startSession","peerId":"<producer_id>"}
+ * 7. Receive: {"type":"sessionStarted","peerId":"...","sessionId":"<session_id>"}
+ * 8. Receive: {"type":"peer","sessionId":"...","sdp":{"type":"offer","sdp":"..."}}
+ * 9. setRemoteDescription(offer), createAnswer, setLocalDescription(answer)
+ * 10. Send:  {"type":"peer","sessionId":"...","sdp":<answer>}
+ * 11. ICE:   {"type":"peer","sessionId":"...","ice":{...}} (bidirectional)
+ * 12. On track: attach to video element
  */
 function useWebRtcPlayer(pipelinePlaying) {
   const videoRef = useRef(null);
@@ -69,6 +72,7 @@ function useWebRtcPlayer(pipelinePlaying) {
   const wsRef  = useRef(null);
   const pcRef  = useRef(null);
   const sessionIdRef = useRef(null);
+  const producerIdRef = useRef(null);
 
   const cleanup = useCallback(() => {
     if (pcRef.current) {
@@ -81,6 +85,7 @@ function useWebRtcPlayer(pipelinePlaying) {
       wsRef.current = null;
     }
     sessionIdRef.current = null;
+    producerIdRef.current = null;
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
@@ -91,25 +96,53 @@ function useWebRtcPlayer(pipelinePlaying) {
     setPlayerState("connecting");
     setPlayerError(null);
 
-    const clientId = Math.random().toString(36).slice(2, 10);
-    let serverId = null;
+    const clientId = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
+      (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
 
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
+
+    const startSessionWith = (producerId) => {
+      if (producerIdRef.current) return; // already started
+      producerIdRef.current = producerId;
+      ws.send(JSON.stringify({ type: "startSession", peerId: producerId }));
+    };
+
+    ws.onopen = () => {
+      // gst-plugin-webrtc-signalling 0.13.x: role is "listener", no setProtocolVersion.
+      // Server may send welcome with an assigned peerId; we also pre-send here for fast connect.
+      ws.send(JSON.stringify({ type: "setPeerStatus", roles: ["listener"], meta: null, peerId: clientId }));
+      ws.send(JSON.stringify({ type: "list" }));
+    };
 
     ws.onmessage = async (event) => {
       let msg;
       try { msg = JSON.parse(event.data); } catch { return; }
 
-      if (msg.type === "welcome") {
-        serverId = msg.peer_id;
-        ws.send(JSON.stringify({ type: "set-peer-id", peer_id: clientId }));
-        ws.send(JSON.stringify({ type: "start-session", peer_id: serverId }));
+      // Server may send welcome with server-assigned peerId – re-register with it
+      if (msg.type === "welcome" && msg.peerId) {
+        ws.send(JSON.stringify({ type: "setPeerStatus", roles: ["listener"], meta: null, peerId: msg.peerId }));
+        ws.send(JSON.stringify({ type: "list" }));
         return;
       }
 
-      if (msg.type === "session-started") {
-        sessionIdRef.current = msg.session_id;
+      // Response to "list" – pick first available producer
+      if (msg.type === "list") {
+        const producers = msg.producers || [];
+        if (producers.length > 0) {
+          startSessionWith(producers[0].id || producers[0].peerId);
+        }
+        return;
+      }
+
+      // A producer came online after we sent "list"
+      if (msg.type === "newPeer") {
+        startSessionWith(msg.peerId);
+        return;
+      }
+
+      if (msg.type === "sessionStarted") {
+        sessionIdRef.current = msg.sessionId;
         return;
       }
 
@@ -132,9 +165,9 @@ function useWebRtcPlayer(pipelinePlaying) {
         pc.onicecandidate = (e) => {
           if (e.candidate && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
-              type: "ice",
+              type: "peer",
               sessionId,
-              candidate: e.candidate.toJSON(),
+              ice: e.candidate.toJSON(),
             }));
           }
         };
@@ -154,9 +187,10 @@ function useWebRtcPlayer(pipelinePlaying) {
         return;
       }
 
-      if (msg.type === "ice" && pcRef.current) {
+      // ICE candidates from the producer
+      if (msg.type === "peer" && msg.ice && pcRef.current) {
         try {
-          await pcRef.current.addIceCandidate(new RTCIceCandidate(msg.candidate));
+          await pcRef.current.addIceCandidate(new RTCIceCandidate(msg.ice));
         } catch (e) {
           console.warn("addIceCandidate error:", e);
         }
@@ -170,9 +204,7 @@ function useWebRtcPlayer(pipelinePlaying) {
     };
 
     ws.onclose = () => {
-      if (playerState !== "idle") {
-        setPlayerState("idle");
-      }
+      setPlayerState((prev) => prev !== "idle" ? "idle" : prev);
     };
   }, [cleanup]);
 

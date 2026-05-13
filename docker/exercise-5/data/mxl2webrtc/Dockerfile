@@ -32,11 +32,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --no-modify-path
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-RUN git clone https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs.git --depth 1 /build/gst-plugins-rs
+RUN git clone https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs.git --depth 1 --branch 0.13.7 /build/gst-plugins-rs
 
-RUN cd /build/gst-plugins-rs && cargo build --package gst-plugin-webrtc --release
+RUN cd /build/gst-plugins-rs && cargo build --package gst-plugin-webrtc --package gst-plugin-webrtc-signalling --release
 
-RUN cp /build/gst-plugins-rs/target/release/libgstrswebrtc.so /tmp/libgstrswebrtc.so
+RUN cp /build/gst-plugins-rs/target/release/libgstrswebrtc.so /tmp/libgstrswebrtc.so \
+ && cp /build/gst-plugins-rs/target/release/gst-webrtc-signalling-server /tmp/gst-webrtc-signalling-server
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 2 – Build React + Vite frontend
@@ -95,6 +96,8 @@ RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
 
 # ── WebRTC plugin ─────────────────────────────────────────────────────────────
 COPY --from=webrtc-builder /tmp/libgstrswebrtc.so /usr/lib/x86_64-linux-gnu/gstreamer-1.0/
+COPY --from=webrtc-builder /tmp/gst-webrtc-signalling-server /usr/local/bin/gst-webrtc-signalling-server
+RUN chmod +x /usr/local/bin/gst-webrtc-signalling-server
 
 # ── MXL libraries ─────────────────────────────────────────────────────────────
 COPY dmf-mxl/rust/target/release/libgstmxl.so /usr/lib/x86_64-linux-gnu/gstreamer-1.0/
