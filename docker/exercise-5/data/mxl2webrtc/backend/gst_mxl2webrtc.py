@@ -43,6 +43,7 @@ class GstMxl2WebRtc:
         self._state: str = "idle"   # idle / playing / error
         self._error_msg: str | None = None
         self._pipeline_gen: int = 0  # incremented on every rebuild; guards stale bus callbacks
+        self._start_retry_count: int = 0  # auto-retry counter; resets on successful PLAYING
 
         self._glib_loop = GLib.MainLoop()
         threading.Thread(target=self._glib_loop.run, daemon=True).start()
@@ -207,12 +208,27 @@ class GstMxl2WebRtc:
         def _on_error_guarded(_bus, msg, gen=my_gen):
             err, debug = msg.parse_error()
             log.error("GStreamer error (gen %d): %s  debug: %s", gen, err, debug)
+            should_retry = False
             with self._lock:
                 if gen != self._pipeline_gen:
                     log.info("Ignoring stale error from generation %d (current: %d)", gen, self._pipeline_gen)
                     return
                 self._state     = "error"
                 self._error_msg = str(err)
+                # Auto-retry up to 3 times for transient mxlsrc startup failures
+                if self._video_flow_id and self._audio_flow_id and self._start_retry_count < 3:
+                    self._start_retry_count += 1
+                    should_retry = True
+                    log.info("Scheduling pipeline retry %d/3 in 2s…", self._start_retry_count)
+
+            if should_retry:
+                def _retry(gen=gen):
+                    time.sleep(2)
+                    with self._lock:
+                        if self._pipeline_gen == gen:  # no other rebuild happened
+                            log.info("Auto-retrying pipeline (was gen %d)…", gen)
+                            self._rebuild_pipeline()
+                threading.Thread(target=_retry, daemon=True).start()
 
         bus.connect("message::error",         _on_error_guarded)
         bus.connect("message::eos",           self._on_eos)
@@ -239,6 +255,7 @@ class GstMxl2WebRtc:
         if new == Gst.State.PLAYING:
             with self._lock:
                 self._state = "playing"
+                self._start_retry_count = 0  # reset on success
         elif new in (Gst.State.NULL, Gst.State.READY):
             with self._lock:
                 if self._state == "playing":

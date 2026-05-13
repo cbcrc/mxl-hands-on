@@ -69,6 +69,7 @@ function useWebRtcPlayer(pipelinePlaying) {
   const videoRef = useRef(null);
   const [playerState, setPlayerState] = useState("idle"); // idle / connecting / playing / error
   const [playerError, setPlayerError] = useState(null);
+  const [muted, setMuted] = useState(true); // start muted to guarantee autoplay
   const wsRef  = useRef(null);
   const pcRef  = useRef(null);
   const sessionIdRef = useRef(null);
@@ -76,6 +77,7 @@ function useWebRtcPlayer(pipelinePlaying) {
 
   const cleanup = useCallback(() => {
     if (pcRef.current) {
+      pcRef.current.onconnectionstatechange = null;
       pcRef.current.close();
       pcRef.current = null;
     }
@@ -108,20 +110,36 @@ function useWebRtcPlayer(pipelinePlaying) {
       ws.send(JSON.stringify({ type: "startSession", peerId: producerId }));
     };
 
+    const resetForNewProducer = () => {
+      // Pipeline rebuilt — close old PC, clear refs, wait for newPeer message
+      if (pcRef.current) {
+        pcRef.current.onconnectionstatechange = null;
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+      if (videoRef.current) videoRef.current.srcObject = null;
+      sessionIdRef.current = null;
+      producerIdRef.current = null; // allow next newPeer to start a new session
+      setPlayerState("connecting");
+    };
+
     ws.onopen = () => {
-      // gst-plugin-webrtc-signalling 0.13.x: role is "listener", no setProtocolVersion.
-      // Server may send welcome with an assigned peerId; we also pre-send here for fast connect.
-      ws.send(JSON.stringify({ type: "setPeerStatus", roles: ["listener"], meta: null, peerId: clientId }));
-      ws.send(JSON.stringify({ type: "list" }));
+      console.log("[WS] open — waiting for welcome");
+      // Do NOT register here. Wait for server's welcome message which
+      // carries the authoritative peerId. Registering before welcome
+      // causes a double-registration race that can corrupt the session.
     };
 
     ws.onmessage = async (event) => {
       let msg;
       try { msg = JSON.parse(event.data); } catch { return; }
+      console.log("[WS] rx", msg.type, msg);
 
-      // Server may send welcome with server-assigned peerId – re-register with it
-      if (msg.type === "welcome" && msg.peerId) {
-        ws.send(JSON.stringify({ type: "setPeerStatus", roles: ["listener"], meta: null, peerId: msg.peerId }));
+      // Server sends welcome with its assigned peerId — register with that ID only once
+      if (msg.type === "welcome") {
+        const peerId = msg.peerId || clientId;
+        console.log("[WS] welcome, registering as", peerId);
+        ws.send(JSON.stringify({ type: "setPeerStatus", roles: ["listener"], meta: null, peerId }));
         ws.send(JSON.stringify({ type: "list" }));
         return;
       }
@@ -135,9 +153,27 @@ function useWebRtcPlayer(pipelinePlaying) {
         return;
       }
 
-      // A producer came online after we sent "list"
+      // A producer came online (new pipeline built after input switch)
       if (msg.type === "newPeer") {
         startSessionWith(msg.peerId);
+        return;
+      }
+
+      // peerStatusChanged is also sent when a producer registers/unregisters.
+      // Handle the "producer came online" case here as well (server sends this
+      // instead of / in addition to newPeer depending on the protocol version).
+      if (msg.type === "peerStatusChanged") {
+        const roles = msg.roles || [];
+        if (roles.includes("producer") && msg.peerId) {
+          startSessionWith(msg.peerId);
+        }
+        return;
+      }
+
+      // Server tells us the session ended (producer pipeline torn down)
+      // Clear current session so the upcoming newPeer can start a fresh one
+      if (msg.type === "endSession") {
+        resetForNewProducer();
         return;
       }
 
@@ -156,8 +192,13 @@ function useWebRtcPlayer(pipelinePlaying) {
         pcRef.current = pc;
 
         pc.ontrack = (e) => {
+          console.log("[PC] ontrack streams:", e.streams.length, "track:", e.track?.kind, e.track?.readyState);
           if (videoRef.current && e.streams[0]) {
             videoRef.current.srcObject = e.streams[0];
+            // Rely on the autoPlay HTML attribute — do NOT call play() here.
+            // Explicit play() from a WebRTC callback is always blocked by browser
+            // autoplay policy (no user gesture context). autoPlay attribute uses
+            // a more permissive code path on localhost.
             setPlayerState("playing");
           }
         };
@@ -173,9 +214,13 @@ function useWebRtcPlayer(pipelinePlaying) {
         };
 
         pc.onconnectionstatechange = () => {
-          if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+          console.log("[PC] connectionState:", pc.connectionState);
+          if (pc.connectionState === "failed") {
             setPlayerState("error");
-            setPlayerError("WebRTC connection " + pc.connectionState);
+            setPlayerError("WebRTC connection failed");
+          } else if (pc.connectionState === "disconnected") {
+            setPlayerState("error");
+            setPlayerError("WebRTC connection disconnected");
           }
         };
 
@@ -198,19 +243,21 @@ function useWebRtcPlayer(pipelinePlaying) {
       }
     };
 
-    ws.onerror = () => {
+    ws.onerror = (e) => {
+      console.log("[WS] error", e);
       setPlayerState("error");
       setPlayerError("WebSocket connection failed");
     };
 
-    ws.onclose = () => {
+    ws.onclose = (e) => {
+      console.log("[WS] close code:", e.code, "reason:", e.reason, "clean:", e.wasClean);
       setPlayerState((prev) => prev !== "idle" ? "idle" : prev);
     };
   }, [cleanup]);
 
   useEffect(() => {
     if (pipelinePlaying) {
-      // Small delay to let webrtcsink start its signaling server
+      // Small delay to let webrtcsink register with the signalling server
       const t = setTimeout(connect, 1000);
       return () => {
         clearTimeout(t);
@@ -223,7 +270,7 @@ function useWebRtcPlayer(pipelinePlaying) {
     }
   }, [pipelinePlaying, connect, cleanup]);
 
-  return { videoRef, playerState, playerError };
+  return { videoRef, playerState, playerError, muted, setMuted };
 }
 
 // ── App component ─────────────────────────────────────────────────────────────
@@ -246,7 +293,7 @@ export default function App() {
   }, [fetchStatus]);
 
   const pipelinePlaying = status?.state === "playing";
-  const { videoRef, playerState, playerError } = useWebRtcPlayer(pipelinePlaying);
+  const { videoRef, playerState, playerError, muted, setMuted } = useWebRtcPlayer(pipelinePlaying);
 
   const videoConnected = !!status?.video_flow_id;
   const audioConnected = !!status?.audio_flow_id;
@@ -307,16 +354,28 @@ export default function App() {
             ref={videoRef}
             autoPlay
             playsInline
-            muted={false}
+            muted={muted}
             style={{
+              position: "absolute",
+              top: 0, left: 0,
               width: "100%",
               height: "100%",
-              display: playerState === "playing" ? "block" : "none",
               objectFit: "contain",
             }}
           />
           {playerState !== "playing" && (
-            <div style={{ color: "#555", fontSize: "0.9rem", textAlign: "center", padding: "2rem" }}>
+            <div style={{
+              position: "absolute",
+              top: 0, left: 0, right: 0, bottom: 0,
+              background: "#0a0a0a",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#555",
+              fontSize: "0.9rem",
+              textAlign: "center",
+              padding: "2rem",
+            }}>
               {!pipelinePlaying
                 ? "Waiting for stream…"
                 : playerState === "connecting"
@@ -325,6 +384,24 @@ export default function App() {
                 ? `Error: ${playerError}`
                 : "Waiting for stream…"}
             </div>
+          )}
+          {playerState === "playing" && muted && (
+            <button
+              onClick={() => setMuted(false)}
+              style={{
+                position: "absolute",
+                bottom: "12px", right: "12px",
+                background: "rgba(0,0,0,0.6)",
+                border: "1px solid #555",
+                borderRadius: "6px",
+                color: "#fff",
+                padding: "0.4rem 0.8rem",
+                cursor: "pointer",
+                fontSize: "0.8rem",
+              }}
+            >
+              🔇 Click to unmute
+            </button>
           )}
         </div>
         <p style={{ color: "#555", fontSize: "0.72rem", marginTop: "0.5rem" }}>
