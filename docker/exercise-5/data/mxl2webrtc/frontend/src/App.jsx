@@ -150,9 +150,9 @@ function useWebRtcPlayer(pipelinePlaying) {
         const sessionId = msg.sessionId ?? sessionIdRef.current;
         sessionIdRef.current = sessionId;
 
-        const pc = new RTCPeerConnection({
-          iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-        });
+        // No external STUN — browser and container are on the same host (Docker bridge).
+        // External STUN causes mDNS .local candidates that the container can't resolve.
+        const pc = new RTCPeerConnection({ iceServers: [] });
         pcRef.current = pc;
 
         pc.ontrack = (e) => {
