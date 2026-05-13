@@ -5,11 +5,15 @@ Architecture:
   - Background branch:
       mxlsrc(flow_id)    if receiver connected, else
       videotestsrc(black) when no input flow is assigned
+      → videoconvert → glupload → queue(leaky=none,4) → glvideomixer.sink_0
   - Overlay/keyer branch:
-      cefsrc url="http://localhost:5660/renderer/"
-        → capsfilter(BGRA,1920x1080,60fps) → queue → glvideomixer.sink_1
+      cefsrc url="http://spx-server:5660/renderer/"
+        → capsfilter(BGRA,1920x1080,60fps)
+        → videorate → glupload → queue(leaky=drop-oldest,2) → glvideomixer.sink_1
   - Composition:
       glvideomixer → gldownload → videoconvert → capsfilter(v210) → queue → mxlsink
+      (compositor used over glvideomixer so sync=False can be set on the
+       CEF pad — glvideomixer's GstGLVideoMixerInput pads don't support it)
 
 Key ON/OFF toggle:
   Dynamically set the alpha property on glvideomixer's sink_1 pad (cefsrc input).
@@ -188,10 +192,18 @@ class GstKeyer:
             bg_src.set_property("is-live", True)
             log.info("  background: videotestsrc (black)")
 
-        bg_conv  = Gst.ElementFactory.make("videoconvert", "bg_conv")
-        bg_queue = Gst.ElementFactory.make("queue",        "bg_queue")
-        bg_queue.set_property("leaky", 1)
-        bg_queue.set_property("max-size-buffers", 3)
+        # videoconvert bridges mxlsrc/videotestsrc output to a format
+        # glvideomixer's sink pad can negotiate (glupload is not auto-inserted
+        # in a manual pipeline without an explicit converter upstream).
+        bg_conv   = Gst.ElementFactory.make("videoconvert", "bg_conv")
+        bg_upload = Gst.ElementFactory.make("glupload",     "bg_upload")
+        # No leaking on the background queue — every mxlsrc frame is unique.
+        # leaky=2 was dropping frames when the GPU was slightly late, causing chop.
+        bg_queue = Gst.ElementFactory.make("queue", "bg_queue")
+        bg_queue.set_property("leaky", 0)
+        bg_queue.set_property("max-size-buffers", 4)
+        bg_queue.set_property("max-size-time", 0)
+        bg_queue.set_property("max-size-bytes", 0)
 
         # ── CEF overlay branch ────────────────────────────────────────────────
         cef_src = Gst.ElementFactory.make("cefsrc", "cef_src")
@@ -204,21 +216,32 @@ class GstKeyer:
             "caps", Gst.Caps.from_string(_CEF_CAPS)
         )
 
-        cef_queue = Gst.ElementFactory.make("queue", "cef_queue")
-        cef_queue.set_property("leaky", 1)
-        cef_queue.set_property("max-size-buffers", 3)
+        # videorate ensures compositor always receives frames at exactly 60fps
+        # by duplicating the last rendered graphic when CEF renders slower.
+        cef_rate   = Gst.ElementFactory.make("videorate", "cef_rate")
+        cef_upload = Gst.ElementFactory.make("glupload",  "cef_upload")
 
-        # ── Mixer ─────────────────────────────────────────────────────────────
+        cef_queue = Gst.ElementFactory.make("queue", "cef_queue")
+        cef_queue.set_property("leaky", 2)           # drop oldest, keep newest
+        cef_queue.set_property("max-size-buffers", 2)
+        cef_queue.set_property("max-size-time", 0)
+        cef_queue.set_property("max-size-bytes", 0)
+
+        # ── Mixer ─────────────────────────────────────────────────────────────────
         mixer = Gst.ElementFactory.make("glvideomixer", "mixer")
         if not mixer:
             raise RuntimeError("Could not create glvideomixer element")
 
-        # ── Output chain ──────────────────────────────────────────────────────
+        # ── Output chain ──────────────────────────────────────────────────────────
         download  = Gst.ElementFactory.make("gldownload",   "download")
         out_conv  = Gst.ElementFactory.make("videoconvert", "out_conv")
         out_caps  = Gst.ElementFactory.make("capsfilter",   "out_caps")
         out_caps.set_property("caps", Gst.Caps.from_string(_OUTPUT_CAPS))
         out_queue = Gst.ElementFactory.make("queue",    "out_queue")
+        out_queue.set_property("leaky", 2)
+        out_queue.set_property("max-size-buffers", 2)
+        out_queue.set_property("max-size-time", 0)
+        out_queue.set_property("max-size-bytes", 0)
         out_sink  = Gst.ElementFactory.make("mxlsink",  "out_sink")
         if not out_sink:
             raise RuntimeError("Could not create mxlsink element")
@@ -227,22 +250,27 @@ class GstKeyer:
         out_sink.set_property("sync",    False)
 
         for el in (
-            bg_src, bg_conv, bg_queue,
-            cef_src, cef_caps_filter, cef_queue,
+            bg_src, bg_conv, bg_upload, bg_queue,
+            cef_src, cef_caps_filter, cef_rate, cef_upload, cef_queue,
             mixer, download, out_conv, out_caps, out_queue, out_sink,
         ):
             pipeline.add(el)
 
         # ── Link background branch → mixer sink_0 ────────────────────────────
         bg_src.link(bg_conv)
-        bg_conv.link(bg_queue)
+        bg_conv.link(bg_upload)
+        bg_upload.link(bg_queue)
         mixer_sink_0 = mixer.get_request_pad("sink_%u")
         bg_queue.get_static_pad("src").link(mixer_sink_0)
         log.info("  background → mixer pad %s", mixer_sink_0.get_name())
 
         # ── Link CEF branch → mixer sink_1 ───────────────────────────────────
+        # videorate ensures glvideomixer always receives frames at exactly 60fps
+        # by duplicating the last rendered CEF graphic when Chrome renders slower.
         cef_src.link(cef_caps_filter)
-        cef_caps_filter.link(cef_queue)
+        cef_caps_filter.link(cef_rate)
+        cef_rate.link(cef_upload)
+        cef_upload.link(cef_queue)
         mixer_sink_1 = mixer.get_request_pad("sink_%u")
         cef_queue.get_static_pad("src").link(mixer_sink_1)
         log.info("  cef overlay → mixer pad %s", mixer_sink_1.get_name())
