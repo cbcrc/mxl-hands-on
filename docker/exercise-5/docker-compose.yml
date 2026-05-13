@@ -140,6 +140,29 @@ services:
     - nmos-registry
     - spx-server
 
+  mxl2webrtc:
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: docker/exercise-5/data/mxl2webrtc/Dockerfile
+    image: mxl-mxl2webrtc:latest
+    container_name: mxl2webrtc
+    hostname: mxl2webrtc
+    domainname: local
+    ports:
+    - "9550:9550"   # NMOS IS-04/IS-05 node
+    - "9650:9650"   # FastAPI mxl2webrtc backend
+    - "9750:9750"   # React frontend (static files)
+    - "8443:8443"   # webrtcsink signaling server
+    - "50000-50020:50000-50020/udp"   # WebRTC media transport
+    volumes:
+    - "mxl-domain:/mxl-domain"
+    environment:
+    - MXL_DOMAIN=/mxl-domain
+    - NMOS_NODE_URL=http://localhost:9550
+    depends_on:
+    - nmos-registry
+
   spx-server:
     image: spx-server:v1.0.3
     container_name: spx-server
