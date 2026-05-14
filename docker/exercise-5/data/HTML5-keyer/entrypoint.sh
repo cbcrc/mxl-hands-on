@@ -19,7 +19,7 @@ if command -v mdnsd &>/dev/null; then
     sleep 1
 fi
 
-# 2. Start Xvfb (virtual display required by CEF multi-process rendering)
+# 2. Start Xvfb (virtual display for glvideomixer / CEF headless rendering)
 echo "[entrypoint] Starting Xvfb on :99..."
 # Clean up stale lock files from a previous run (e.g. after docker restart)
 rm -f /tmp/.X99-lock /tmp/.X11-unix/X99
