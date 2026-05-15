@@ -12,7 +12,10 @@ services:
   # Setting up the Nmos Registry and dummy Nmos node:
   nmos-registry:
     platform: linux/amd64
-    image: ghcr.io/cbcrc/mxl-nmos-cpp:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.nmos
+    image: mxl-nmos-cpp:latest
     container_name: nmos-registry
     hostname: nmos-registry
     domainname: local
@@ -27,8 +30,12 @@ services:
 
   file-player:
     platform: linux/amd64
-    user: 1000:1000
-    image: ghcr.io/cbcrc/mxl-file-player:latest
+    build:
+      # Build context is the repository root so the Dockerfile can access
+      # dmf-mxl/build/ and dmf-mxl/rust/ for the MXL libraries.
+      context: ../..
+      dockerfile: docker/exercise-5/data/file-player/Dockerfile
+    image: mxl-file-player:latest
     container_name: file-player
     hostname: file-player
     domainname: local
@@ -48,8 +55,10 @@ services:
 
   hls2mxl:
     platform: linux/amd64
-    user: 1000:1000
-    image: ghcr.io/cbcrc/mxl-hls2mxl:latest
+    build:
+      context: ../..
+      dockerfile: docker/exercise-5/data/hls2mxl/Dockerfile
+    image: mxl-hls2mxl:latest
     container_name: hls2mxl
     hostname: hls2mxl
     domainname: local
@@ -67,8 +76,10 @@ services:
 
   test-generator:
     platform: linux/amd64
-    user: 1000:1000
-    image: ghcr.io/cbcrc/mxl-test-generator:latest
+    build:
+      context: ../..
+      dockerfile: docker/exercise-5/data/test-generator/Dockerfile
+    image: mxl-test-generator:latest
     container_name: test-generator
     hostname: test-generator
     domainname: local
@@ -86,8 +97,10 @@ services:
 
   input-selector:
     platform: linux/amd64
-    user: 1000:1000
-    image: ghcr.io/cbcrc/mxl-input-selector:latest
+    build:
+      context: ../..
+      dockerfile: docker/exercise-5/data/input-selector/Dockerfile
+    image: mxl-input-selector:latest
     container_name: input-selector
     hostname: input-selector
     domainname: local
@@ -105,8 +118,10 @@ services:
 
   html5-keyer:
     platform: linux/amd64
-    user: 1000:1000
-    image: ghcr.io/cbcrc/mxl-html5-keyer:latest
+    build:
+      context: ../..
+      dockerfile: docker/exercise-5/data/HTML5-keyer/Dockerfile
+    image: mxl-html5-keyer:latest
     container_name: html5-keyer
     hostname: html5-keyer
     domainname: local
@@ -127,8 +142,10 @@ services:
 
   mxl2webrtc:
     platform: linux/amd64
-    user: 1000:1000
-    image: ghcr.io/cbcrc/mxl-mxl2webrtc:latest
+    build:
+      context: ../..
+      dockerfile: docker/exercise-5/data/mxl2webrtc/Dockerfile
+    image: mxl-mxl2webrtc:latest
     container_name: mxl2webrtc
     hostname: mxl2webrtc
     domainname: local
@@ -147,7 +164,7 @@ services:
     - nmos-registry
 
   spx-server:
-    image: ghcr.io/cbcrc/spx-server:v1.0.3
+    image: spx-server:v1.0.3
     container_name: spx-server
     hostname: spx-server
     domainname: local
