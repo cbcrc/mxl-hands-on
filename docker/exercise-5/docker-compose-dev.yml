@@ -163,6 +163,23 @@ services:
     depends_on:
     - nmos-registry
 
+  mxl-info-gui:
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: docker/exercise-5/data/mxl-info-gui/Dockerfile
+    image: mxl-info-gui:latest
+    container_name: mxl-info-gui
+    hostname: mxl-info-gui
+    domainname: local
+    ports:
+    - "9660:9660"   # FastAPI mxl-info-gui backend
+    - "9760:9760"   # React frontend (static files)
+    volumes:
+    - "mxl-domain:/mxl-domain"               # shared MXL domain
+    environment:
+    - MXL_DOMAIN=/mxl-domain
+
   spx-server:
     image: spx-server:v1.0.3
     container_name: spx-server

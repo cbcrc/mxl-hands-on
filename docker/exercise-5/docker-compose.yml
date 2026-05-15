@@ -12,7 +12,6 @@ services:
   # Setting up the Nmos Registry and dummy Nmos node:
   nmos-registry:
     platform: linux/amd64
-    # user: 1000:1000
     image: ghcr.io/cbcrc/mxl-nmos-cpp:latest
     container_name: nmos-registry
     hostname: nmos-registry
@@ -28,7 +27,6 @@ services:
 
   file-player:
     platform: linux/amd64
-    # user: 1000:1000
     image: ghcr.io/cbcrc/mxl-file-player:latest
     container_name: file-player
     hostname: file-player
@@ -49,7 +47,6 @@ services:
 
   hls2mxl:
     platform: linux/amd64
-    # user: 1000:1000
     image: ghcr.io/cbcrc/mxl-hls2mxl:latest
     container_name: hls2mxl
     hostname: hls2mxl
@@ -68,7 +65,6 @@ services:
 
   test-generator:
     platform: linux/amd64
-    # user: 1000:1000
     image: ghcr.io/cbcrc/mxl-test-generator:latest
     container_name: test-generator
     hostname: test-generator
@@ -87,7 +83,6 @@ services:
 
   input-selector:
     platform: linux/amd64
-    # user: 1000:1000
     image: ghcr.io/cbcrc/mxl-input-selector:latest
     container_name: input-selector
     hostname: input-selector
@@ -106,7 +101,6 @@ services:
 
   html5-keyer:
     platform: linux/amd64
-    # user: 1000:1000
     image: ghcr.io/cbcrc/mxl-html5-keyer:latest
     container_name: html5-keyer
     hostname: html5-keyer
@@ -128,7 +122,6 @@ services:
 
   mxl2webrtc:
     platform: linux/amd64
-    # user: 1000:1000
     image: ghcr.io/cbcrc/mxl-mxl2webrtc:latest
     container_name: mxl2webrtc
     hostname: mxl2webrtc
@@ -146,9 +139,22 @@ services:
     - NMOS_NODE_URL=http://localhost:9550
     depends_on:
     - nmos-registry
+  
+  mxl-info-gui:
+    platform: linux/amd64
+    image: ghcr.io/cbcrc/mxl-info-gui:latest
+    container_name: mxl-info-gui
+    hostname: mxl-info-gui
+    domainname: local
+    ports:
+    - "9660:9660"   # FastAPI mxl-info-gui backend
+    - "9760:9760"   # React frontend (static files)
+    volumes:
+    - "mxl-domain:/mxl-domain"               # shared MXL domain
+    environment:
+    - MXL_DOMAIN=/mxl-domain
 
   spx-server:
-    # user: 1000:1000
     image: ghcr.io/cbcrc/spx-server:v1.0.3
     container_name: spx-server
     hostname: spx-server
