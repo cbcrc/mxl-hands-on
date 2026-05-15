@@ -99,9 +99,9 @@ Calls `mxl-info -d <domain_directory> -f <flow_uuid>` and parses the output.
 3. **Domain Selector** — dropdown to select a domain from the discovered list.
 4. **MXL Flow List window** — table showing `FlowUUID`, `Flow Label`, and `Flow Grouphint` for all flows in the selected domain. Scales up to 20 rows; scrollable beyond that. Polls `scan_domain` every **30 seconds** when a domain is selected.
 5. **Refresh Flow List button** — manually triggers `scan_domain` for the selected domain.
-6. **Flow 1 Selector** — dropdown populated from the flow list.
+6. **Flow 1 Selector** — dropdown populated from the flow list. Each option displays the flow label, group hint, and the first 8 characters of the UUID in the format `<Label> — <GroupHint> (<UUID prefix>…)`.
 7. **Flow 1 Info Display** — shows parsed output of `get_flow_info` for the selected flow. A **"Live update (0.5 s)" checkbox** sits next to the window title. When checked, `get_flow_info` is polled every 500 ms. **Off by default.** Selecting a new domain resets the checkbox to off. A single fetch is always performed immediately when a flow is selected, regardless of checkbox state.
-8. **Flow 2 Selector** — independent dropdown populated from the same flow list.
+8. **Flow 2 Selector** — independent dropdown populated from the same flow list, with the same label/grouphint/UUID display format.
 9. **Flow 2 Info Display** — same behaviour as Flow 1 Info Display with its own independent checkbox. **Off by default.**
 
 > ⚠️ The frontend must always guard API responses with `Array.isArray(d) ? d : []` before calling `.map()` on flow lists, to avoid a blank-page crash if the backend returns an error object.

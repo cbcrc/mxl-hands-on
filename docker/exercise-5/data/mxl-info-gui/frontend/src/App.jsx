@@ -143,7 +143,7 @@ function FlowPanel({ label, flows, selectedDomain }) {
         <option value="">-- Select {label} --</option>
         {flows.map((f) => (
           <option key={f.flow_uuid} value={f.flow_uuid}>
-            {f.flow_label} ({f.flow_uuid.slice(0, 8)}…)
+            {f.flow_label} — {f.flow_grouphint} ({f.flow_uuid.slice(0, 8)}…)
           </option>
         ))}
       </select>
