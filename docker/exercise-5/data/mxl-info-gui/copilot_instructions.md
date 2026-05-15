@@ -1,7 +1,7 @@
 # GitHub Copilot Agent Instructions: MXL-INFO web GUI
 
 ## Project Overview
-Your task is to build a Dockerized MXL probing application that will use the mxl-info CLI command to display status information on MXL flows present in multiple MXL domains. The application uses a custom build CLI command named mxl-info, FastAPI for the backend API, React + Vite for the web frontend. There are many other application already created that use a python back end and a react + vite front end, you can find them here `./docker/exercise-5/data. You need to keep code consistent between application.
+Your task is to build a Dockerized MXL probing application that will use the mxl-info CLI command to display status information on MXL flows present in multiple MXL domains. The application uses a custom build CLI command named mxl-info, FastAPI for the backend API, React + Vite for the web frontend. There are many other application already created that use a python back end and a react + vite front end, you can find them here `./docker/exercise-5/data`. You need to keep code consistent between application.
 
 ## System Architecture
 The application consists of three main components running within a Docker environment:
@@ -60,7 +60,7 @@ The FastAPI backend and the React UI must expose and support the following backe
 ## Step-by-Step Implementation Guide for Copilot
 
 **Step 1: Docker Setup**
-- Use the docker-compose-dev.yml located at `./docker/exercise-5/` as a baseline. The Nmos registry node and gstreamer application are already setup as well as the domain volume for MXL usage.
+- Use the `./docker/exercise-5/docker-compose-dev.yml` as a baseline. The Nmos registry node and gstreamer application are already setup as well as the domain volume for MXL usage.
 - Ensure the base image installs Python 3, Node.js (for building the React app).
 
 **Step 2: FastAPI & Python Backend**
