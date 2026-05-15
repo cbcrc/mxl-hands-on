@@ -96,8 +96,9 @@ function FlowInfoDisplay({ info }) {
 // ── FlowSelector + FlowInfo panel ────────────────────────────────────────────
 
 function FlowPanel({ label, flows, selectedDomain }) {
-  const [flowUuid, setFlowUuid] = useState("");
-  const [flowInfo, setFlowInfo] = useState(null);
+  const [flowUuid, setFlowUuid]   = useState("");
+  const [flowInfo, setFlowInfo]   = useState(null);
+  const [polling, setPolling]     = useState(false);   // off by default
 
   const fetchInfo = useCallback(async () => {
     if (!selectedDomain || !flowUuid) return;
@@ -112,20 +113,24 @@ function FlowPanel({ label, flows, selectedDomain }) {
     }
   }, [selectedDomain, flowUuid]);
 
-  // Poll every 500 ms when a flow is selected
+  // Fetch once when flow is selected; start/stop 500 ms poll based on checkbox
   useEffect(() => {
     setFlowInfo(null);
     if (!flowUuid) return;
     fetchInfo();
+    if (!polling) return;
     const id = setInterval(fetchInfo, 500);
     return () => clearInterval(id);
-  }, [flowUuid, fetchInfo]);
+  }, [flowUuid, polling, fetchInfo]);
 
   // Clear selection when domain changes
   useEffect(() => {
     setFlowUuid("");
     setFlowInfo(null);
+    setPolling(false);
   }, [selectedDomain]);
+
+  const checkboxId = `poll-${label.replace(/\s+/g, "-").toLowerCase()}`;
 
   return (
     <div style={sectionStyle}>
@@ -144,7 +149,22 @@ function FlowPanel({ label, flows, selectedDomain }) {
       </select>
 
       <div style={{ marginTop: "1rem" }}>
-        <span style={labelStyle}>{label} Info</span>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", marginBottom: "0.4rem" }}>
+          <span style={{ ...labelStyle, marginBottom: 0 }}>{label} Info</span>
+          <input
+            type="checkbox"
+            id={checkboxId}
+            checked={polling}
+            onChange={(e) => setPolling(e.target.checked)}
+            style={{ width: "15px", height: "15px", cursor: "pointer", accentColor: "#0d7c3e" }}
+          />
+          <label
+            htmlFor={checkboxId}
+            style={{ fontSize: "0.78rem", color: polling ? "#4caf50" : "#666", cursor: "pointer" }}
+          >
+            Live update (0.5 s)
+          </label>
+        </div>
         <FlowInfoDisplay info={flowUuid ? flowInfo : null} />
       </div>
     </div>

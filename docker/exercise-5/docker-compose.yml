@@ -140,19 +140,19 @@ services:
     depends_on:
     - nmos-registry
   
-  mxl-info-gui:
-    platform: linux/amd64
-    image: ghcr.io/cbcrc/mxl-info-gui:latest
-    container_name: mxl-info-gui
-    hostname: mxl-info-gui
-    domainname: local
-    ports:
-    - "9660:9660"   # FastAPI mxl-info-gui backend
-    - "9760:9760"   # React frontend (static files)
-    volumes:
-    - "mxl-domain:/mxl-domain"               # shared MXL domain
-    environment:
-    - MXL_DOMAIN=/mxl-domain
+  # mxl-info-gui:
+  #   platform: linux/amd64
+  #   image: ghcr.io/cbcrc/mxl-info-gui:latest
+  #   container_name: mxl-info-gui
+  #   hostname: mxl-info-gui
+  #   domainname: local
+  #   ports:
+  #   - "9660:9660"   # FastAPI mxl-info-gui backend
+  #   - "9760:9760"   # React frontend (static files)
+  #   volumes:
+  #   - "mxl-domain:/mxl-domain"               # shared MXL domain
+  #   environment:
+  #   - MXL_DOMAIN=/mxl-domain
 
   spx-server:
     image: ghcr.io/cbcrc/spx-server:v1.0.3

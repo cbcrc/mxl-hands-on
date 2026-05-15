@@ -100,9 +100,9 @@ Calls `mxl-info -d <domain_directory> -f <flow_uuid>` and parses the output.
 4. **MXL Flow List window** — table showing `FlowUUID`, `Flow Label`, and `Flow Grouphint` for all flows in the selected domain. Scales up to 20 rows; scrollable beyond that. Polls `scan_domain` every **30 seconds** when a domain is selected.
 5. **Refresh Flow List button** — manually triggers `scan_domain` for the selected domain.
 6. **Flow 1 Selector** — dropdown populated from the flow list.
-7. **Flow 1 Info Display** — shows parsed output of `get_flow_info` for the selected flow. Polls every **500 ms**.
+7. **Flow 1 Info Display** — shows parsed output of `get_flow_info` for the selected flow. A **"Live update (0.5 s)" checkbox** sits next to the window title. When checked, `get_flow_info` is polled every 500 ms. **Off by default.** Selecting a new domain resets the checkbox to off. A single fetch is always performed immediately when a flow is selected, regardless of checkbox state.
 8. **Flow 2 Selector** — independent dropdown populated from the same flow list.
-9. **Flow 2 Info Display** — shows parsed output of `get_flow_info` for the second selected flow. Polls every **500 ms**.
+9. **Flow 2 Info Display** — same behaviour as Flow 1 Info Display with its own independent checkbox. **Off by default.**
 
 > ⚠️ The frontend must always guard API responses with `Array.isArray(d) ? d : []` before calling `.map()` on flow lists, to avoid a blank-page crash if the backend returns an error object.
 
@@ -141,7 +141,10 @@ ENV LD_LIBRARY_PATH=/opt/mxl/lib
 - Initialize with `package.json` targeting Vite 5 and React 18.
 - Dev proxy in `vite.config.js` pointing all API paths to `http://localhost:9660`.
 - Dark theme consistent with other apps in `./docker/exercise-5/data` (background `#0f0f0f`, section cards `#1c1c1c`).
-- Flow 1 and Flow 2 panels in a two-column grid, each managing their own selected flow UUID and polling interval via `useEffect`.
+- Flow 1 and Flow 2 panels in a two-column grid, each managing their own `flowUuid`, `flowInfo`, and `polling` state.
+- Each `FlowPanel` component has a `polling` boolean state initialised to `false`. A labelled checkbox toggles it. The label text changes colour (green when active, grey when inactive).
+- The `useEffect` that drives fetching depends on `[flowUuid, polling, fetchInfo]`: it always calls `fetchInfo()` once immediately when a flow is selected, then starts a 500 ms interval only when `polling === true`.
+- Selecting a new domain resets `flowUuid`, `flowInfo`, and `polling` back to their defaults via a separate `useEffect` on `selectedDomain`.
 - API base: `` `http://${window.location.hostname}:9660` ``
 
 ### Step 4: Entrypoint
