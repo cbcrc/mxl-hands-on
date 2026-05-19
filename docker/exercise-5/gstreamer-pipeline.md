@@ -13,18 +13,25 @@ Each section below describes one of the six GStreamer-based services, gives the 
 gst-launch-1.0 \
   filesrc location="/path/to/media/file" \
   ! decodebin name=dec \
-  dec. ! videoconvert ! videoscale ! queue \
+  dec. ! videoconvert ! videoscale \
+       ! "video/x-raw,format=v210" \
+       ! queue \
        ! mxlsink flow-id="<video-flow-id>" domain="/mxl-domain" \
-  dec. ! audioresample ! audioconvert ! queue \
+  dec. ! audioresample ! audioconvert \
+       ! "audio/x-raw,format=F32LE,layout=interleaved" \
+       ! queue \
        ! mxlsink flow-id="<audio-flow-id>" domain="/mxl-domain"
 ```
 
 ### Explanation
 
 Reads a media file from disk and demuxes/decodes it with `decodebin`.
-The decoded video stream is colour-converted and scaled before being written to an MXL flow
-via `mxlsink`. The decoded audio stream is resampled and converted before being written to a
-second MXL flow. Once the file reaches end-of-stream the pipeline seeks back to position 0 to
+The decoded video stream is colour-converted and scaled, then a `capsfilter` locks the pixel
+format to `v210` — the only format `mxlsink` accepts for video — before the frame is written to
+the MXL flow. The decoded audio stream is resampled and converted, then a `capsfilter` locks the
+format to `F32LE` interleaved — the only audio format `mxlsink` accepts — before being written to
+the second MXL flow. Without these explicit capsfilters the pipeline relies on auto-negotiation
+which may land on an incompatible format and cause a hard failure at runtime. Once the file reaches end-of-stream the pipeline seeks back to position 0 to
 loop indefinitely.
 
 The pipeline is first brought to `PAUSED` so that `mxlsink` has time to write `flow_def.json`,
@@ -46,8 +53,8 @@ flowchart LR
     asink["mxlsink\nflow-id=audio"]
 
     filesrc --> decodebin
-    decodebin -->|"video pad"| vconv --> vscale --> vqueue --> vsink
-    decodebin -->|"audio pad"| aresample --> aconv --> aqueue --> asink
+    decodebin -->|"video pad"| vconv --> vscale --> vcaps["capsfilter\nformat=v210"] --> vqueue --> vsink
+    decodebin -->|"audio pad"| aresample --> aconv --> acaps["capsfilter\nF32LE, interleaved"] --> aqueue --> asink
 ```
 
 ---
@@ -65,7 +72,7 @@ gst-launch-1.0 \
   ! videoconvert ! queue \
   ! mxlsink flow-id="<video-flow-id>" domain="/mxl-domain" \
   audiotestsrc wave=0 freq=1000 volume=0.1 is-live=true \
-  ! "audio/x-raw,format=S24LE,channels=2,rate=48000,layout=interleaved" \
+  ! "audio/x-raw,format=F32LE,channels=2,rate=48000,layout=interleaved" \
   ! audioconvert ! queue \
   ! mxlsink flow-id="<audio-flow-id>" domain="/mxl-domain"
 ```
@@ -82,9 +89,16 @@ A `timeoverlay` element burns the running clock into the bottom-right corner, an
 `textoverlay` element renders a configurable ident string at the top centre.
 Both overlays can be toggled or updated at runtime without rebuilding the pipeline.
 
-The **audio branch** produces a continuous 1 kHz sine wave at −20 dBFS, stereo, 48 kHz, 24-bit.
+The **audio branch** produces a continuous 1 kHz sine wave at −20 dBFS, stereo, 48 kHz.
+The `capsfilter` locks the format to `F32LE` — `audiotestsrc` natively produces float samples,
+so `audioconvert` passes through with no real conversion; the capsfilter simply makes the
+contract explicit and ensures `mxlsink` gets the one format it accepts.
 The channel count (2 or 6) and level (−60 … 0 dBFS) can be changed at runtime; changing the
 channel count forces a pipeline rebuild because the `capsfilter` must change.
+
+> **Bug note:** `gst_generator.py` currently uses `S24LE` in its capsfilter — this will fail
+> caps negotiation against `mxlsink` which only accepts `F32LE`. The capsfilter must be
+> `audio/x-raw,format=F32LE,channels=…` to match `mxlsink`'s pad template.
 
 ### Diagram
 
@@ -104,7 +118,7 @@ flowchart LR
 
     subgraph Audio branch
         asrc["audiotestsrc\nwave=sine\n1 kHz, −20 dBFS"]
-        acaps["capsfilter\nS24LE, 2 ch, 48 kHz"]
+        acaps["capsfilter\nF32LE, 2 ch, 48 kHz"]
         aconv["audioconvert"]
         aqueue["queue"]
         asink["mxlsink\nflow-id=audio"]
@@ -225,7 +239,9 @@ gst-launch-1.0 \
        ! videoconvert ! queue leaky=1 max-size-buffers=3 ! sel.sink_1 \
   mxlsrc video-flow-id="<flow-id-3>" domain="/mxl-domain" \
        ! videoconvert ! queue leaky=1 max-size-buffers=3 ! sel.sink_2 \
-  sel. ! videoconvert ! queue \
+  sel. ! videoconvert \
+       ! "video/x-raw,format=v210" \
+       ! queue \
        ! mxlsink flow-id="<output-flow-id>" domain="/mxl-domain" sync=false
 ```
 
@@ -235,6 +251,7 @@ gst-launch-1.0 \
 gst-launch-1.0 \
   videotestsrc pattern=2 is-live=true \
   ! videoconvert \
+  ! "video/x-raw,format=v210" \
   ! mxlsink flow-id="<output-flow-id>" domain="/mxl-domain" sync=false
 ```
 
@@ -271,7 +288,7 @@ flowchart LR
     q2 -->|"sink_1"| sel
     q3 -->|"sink_2"| sel
 
-    sel --> oconv["videoconvert"] --> oqueue["queue"] --> osink["mxlsink\nflow-id=output\nsync=false"]
+    sel --> oconv["videoconvert"] --> ocaps["capsfilter\nformat=v210"] --> oqueue["queue"] --> osink["mxlsink\nflow-id=output\nsync=false"]
 
     black["videotestsrc\npattern=black\n(fallback: no slots)"] -.->|"bypass selector"| oconv
 ```
