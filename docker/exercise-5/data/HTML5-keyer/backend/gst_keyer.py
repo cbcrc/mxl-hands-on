@@ -5,18 +5,23 @@ Architecture:
   - Background branch:
       mxlsrc(flow_id)    if receiver connected, else
       videotestsrc(black) when no input flow is assigned
-      → videoconvert → glupload → queue(leaky=none,4) → glvideomixer.sink_0
+      → videoconvert(→BGRA) → queue(leaky=drop-oldest,2) → compositor.sink_0
   - Overlay/keyer branch:
       cefsrc url="http://spx-server:5660/renderer/"
         → capsfilter(BGRA,1920x1080,60fps)
-        → videorate → glupload → queue(leaky=drop-oldest,2) → glvideomixer.sink_1
+        → videorate → queue(leaky=drop-oldest,2) → compositor.sink_1 [sync=false]
   - Composition:
-      glvideomixer → gldownload → videoconvert → capsfilter(v210) → queue → mxlsink
-      (compositor used over glvideomixer so sync=False can be set on the
-       CEF pad — glvideomixer's GstGLVideoMixerInput pads don't support it)
+      compositor → videoconvert → capsfilter(v210) → queue → mxlsink
+
+  compositor is used instead of glvideomixer for two reasons:
+    1. Its sink pads support sync=false, eliminating timestamp-alignment stalls
+       between the live mxlsrc clock and the CEF/videorate clock domain.
+    2. No glupload/gldownload round-trip (~950 MB/s GPU bandwidth saved).
+  The background queue is leaky=drop-oldest so that a momentarily slow compositor
+  never accumulates a backlog of stale frames (which manifests as repeated frames).
 
 Key ON/OFF toggle:
-  Dynamically set the alpha property on glvideomixer's sink_1 pad (cefsrc input).
+  Dynamically set the alpha property on compositor's sink_1 pad (cefsrc input).
   0.0 = key OFF (transparent overlay), 1.0 = key ON (fully visible overlay).
   The pipeline is NEVER rebuilt to toggle the key state — only the pad property changes.
 
@@ -49,8 +54,11 @@ _CEF_URL = os.getenv("SPX_URL", "http://spx-server:5660/renderer/")
 # Video format for MXL output (1080p60, v210)
 _OUTPUT_CAPS = "video/x-raw,format=v210,width=1920,height=1080,framerate=60/1"
 
-# CEF output caps — BGRA preserves the alpha channel for keying
+# CEF output caps — BGRA preserves the alpha channel for keying.
+# Also used as the intermediate CPU format for the background branch so that
+# compositor receives identical formats on both pads (no internal conversion needed).
 _CEF_CAPS = "video/x-raw,format=BGRA,width=1920,height=1080,framerate=60/1"
+_BG_INTERMEDIATE_CAPS = "video/x-raw,format=BGRA"
 
 
 class GstKeyer:
@@ -58,7 +66,7 @@ class GstKeyer:
         self._lock = threading.Lock()
         self._pipeline: Gst.Pipeline | None = None
         self._mixer_elem: Gst.Element | None = None
-        self._cef_pad: Gst.Pad | None = None  # glvideomixer sink_1 (cefsrc)
+        self._cef_pad: Gst.Pad | None = None  # compositor sink_1 (cefsrc)
 
         self._mxl_domain = os.getenv("MXL_DOMAIN", "/mxl-domain")
         self._output_flow_id: str | None = None
@@ -94,7 +102,7 @@ class GstKeyer:
 
     def set_key_state(self, enabled: bool) -> bool:
         """
-        Toggle the key ON or OFF by adjusting the cefsrc pad alpha on glvideomixer.
+        Toggle the key ON or OFF by adjusting the cefsrc pad alpha on compositor.
         Does NOT rebuild the pipeline — seamless 1080p60 operation.
         Returns the new key state.
         """
@@ -117,12 +125,12 @@ class GstKeyer:
     # ── Alpha control ─────────────────────────────────────────────────────────
 
     def _apply_key_alpha(self) -> None:
-        """Set the alpha on glvideomixer's cefsrc input pad. Caller must hold lock."""
+        """Set the alpha on compositor's cefsrc input pad. Caller must hold lock."""
         if self._cef_pad is None:
             return
         alpha = 1.0 if self._key_enabled else 0.0
         self._cef_pad.set_property("alpha", alpha)
-        log.debug("glvideomixer sink_1 alpha → %.1f", alpha)
+        log.debug("compositor sink_1 alpha → %.1f", alpha)
 
     # ── Pipeline lifecycle ────────────────────────────────────────────────────
 
@@ -192,16 +200,17 @@ class GstKeyer:
             bg_src.set_property("is-live", True)
             log.info("  background: videotestsrc (black)")
 
-        # videoconvert bridges mxlsrc/videotestsrc output to a format
-        # glvideomixer's sink pad can negotiate (glupload is not auto-inserted
-        # in a manual pipeline without an explicit converter upstream).
-        bg_conv   = Gst.ElementFactory.make("videoconvert", "bg_conv")
-        bg_upload = Gst.ElementFactory.make("glupload",     "bg_upload")
-        # No leaking on the background queue — every mxlsrc frame is unique.
-        # leaky=2 was dropping frames when the GPU was slightly late, causing chop.
+        # Convert v210 (mxlsrc native) to BGRA on CPU so compositor receives the
+        # same format on both pads and needs no internal conversion.
+        bg_conv  = Gst.ElementFactory.make("videoconvert",  "bg_conv")
+        bg_icaps = Gst.ElementFactory.make("capsfilter",    "bg_icaps")
+        bg_icaps.set_property("caps", Gst.Caps.from_string(_BG_INTERMEDIATE_CAPS))
+        # leaky=2: drop oldest frame when compositor is momentarily slow.
+        # A live pipeline must never accumulate a backlog — backlogged frames
+        # display as repeated/frozen video.
         bg_queue = Gst.ElementFactory.make("queue", "bg_queue")
-        bg_queue.set_property("leaky", 0)
-        bg_queue.set_property("max-size-buffers", 4)
+        bg_queue.set_property("leaky", 2)
+        bg_queue.set_property("max-size-buffers", 2)
         bg_queue.set_property("max-size-time", 0)
         bg_queue.set_property("max-size-bytes", 0)
 
@@ -212,28 +221,27 @@ class GstKeyer:
         cef_src.set_property("url", _CEF_URL)
 
         cef_caps_filter = Gst.ElementFactory.make("capsfilter", "cef_caps")
-        cef_caps_filter.set_property(
-            "caps", Gst.Caps.from_string(_CEF_CAPS)
-        )
+        cef_caps_filter.set_property("caps", Gst.Caps.from_string(_CEF_CAPS))
 
         # videorate ensures compositor always receives frames at exactly 60fps
         # by duplicating the last rendered graphic when CEF renders slower.
-        cef_rate   = Gst.ElementFactory.make("videorate", "cef_rate")
-        cef_upload = Gst.ElementFactory.make("glupload",  "cef_upload")
-
-        cef_queue = Gst.ElementFactory.make("queue", "cef_queue")
-        cef_queue.set_property("leaky", 2)           # drop oldest, keep newest
+        cef_rate  = Gst.ElementFactory.make("videorate", "cef_rate")
+        cef_queue = Gst.ElementFactory.make("queue",     "cef_queue")
+        cef_queue.set_property("leaky", 2)
         cef_queue.set_property("max-size-buffers", 2)
         cef_queue.set_property("max-size-time", 0)
         cef_queue.set_property("max-size-bytes", 0)
 
-        # ── Mixer ─────────────────────────────────────────────────────────────────
-        mixer = Gst.ElementFactory.make("glvideomixer", "mixer")
+        # ── Mixer ─────────────────────────────────────────────────────────────
+        # compositor (CPU) instead of glvideomixer (GPU) for two reasons:
+        #   1. Its sink pads support sync=false — no timestamp-alignment stalls
+        #      between the mxlsrc clock and the CEF/videorate clock domain.
+        #   2. Eliminates glupload/gldownload GPU memory transfers (~950 MB/s).
+        mixer = Gst.ElementFactory.make("compositor", "mixer")
         if not mixer:
-            raise RuntimeError("Could not create glvideomixer element")
+            raise RuntimeError("Could not create compositor element")
 
-        # ── Output chain ──────────────────────────────────────────────────────────
-        download  = Gst.ElementFactory.make("gldownload",   "download")
+        # ── Output chain ──────────────────────────────────────────────────────
         out_conv  = Gst.ElementFactory.make("videoconvert", "out_conv")
         out_caps  = Gst.ElementFactory.make("capsfilter",   "out_caps")
         out_caps.set_property("caps", Gst.Caps.from_string(_OUTPUT_CAPS))
@@ -250,34 +258,33 @@ class GstKeyer:
         out_sink.set_property("sync",    False)
 
         for el in (
-            bg_src, bg_conv, bg_upload, bg_queue,
-            cef_src, cef_caps_filter, cef_rate, cef_upload, cef_queue,
-            mixer, download, out_conv, out_caps, out_queue, out_sink,
+            bg_src, bg_conv, bg_icaps, bg_queue,
+            cef_src, cef_caps_filter, cef_rate, cef_queue,
+            mixer, out_conv, out_caps, out_queue, out_sink,
         ):
             pipeline.add(el)
 
-        # ── Link background branch → mixer sink_0 ────────────────────────────
+        # ── Link background branch → compositor sink_0 ────────────────────────
         bg_src.link(bg_conv)
-        bg_conv.link(bg_upload)
-        bg_upload.link(bg_queue)
+        bg_conv.link(bg_icaps)
+        bg_icaps.link(bg_queue)
         mixer_sink_0 = mixer.get_request_pad("sink_%u")
         bg_queue.get_static_pad("src").link(mixer_sink_0)
         log.info("  background → mixer pad %s", mixer_sink_0.get_name())
 
-        # ── Link CEF branch → mixer sink_1 ───────────────────────────────────
-        # videorate ensures glvideomixer always receives frames at exactly 60fps
-        # by duplicating the last rendered CEF graphic when Chrome renders slower.
+        # ── Link CEF branch → compositor sink_1 (sync=false) ─────────────────
+        # sync=false: compositor composites immediately with whatever CEF frame
+        # is available, without stalling to match timestamps with the background.
         cef_src.link(cef_caps_filter)
         cef_caps_filter.link(cef_rate)
-        cef_rate.link(cef_upload)
-        cef_upload.link(cef_queue)
+        cef_rate.link(cef_queue)
         mixer_sink_1 = mixer.get_request_pad("sink_%u")
+        mixer_sink_1.set_property("sync", False)
         cef_queue.get_static_pad("src").link(mixer_sink_1)
-        log.info("  cef overlay → mixer pad %s", mixer_sink_1.get_name())
+        log.info("  cef overlay → mixer pad %s (sync=false)", mixer_sink_1.get_name())
 
         # ── Link output chain ─────────────────────────────────────────────────
-        mixer.link(download)
-        download.link(out_conv)
+        mixer.link(out_conv)
         out_conv.link(out_caps)
         out_caps.link(out_queue)
         out_queue.link(out_sink)
