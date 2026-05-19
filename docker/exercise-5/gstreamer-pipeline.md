@@ -103,8 +103,9 @@ channel count forces a pipeline rebuild because the `capsfilter` must change.
 ### Diagram
 
 ```mermaid
-flowchart LR
-    subgraph Video branch
+flowchart TB
+    subgraph video_branch["Video branch"]
+        direction LR
         vsrc["videotestsrc\npattern=smpte\nis-live=true"]
         vcaps["capsfilter\n1920×1080, 60 fps"]
         time["timeoverlay\n(clock)"]
@@ -116,7 +117,8 @@ flowchart LR
         vsrc --> vcaps --> time --> text --> vconv --> vqueue --> vsink
     end
 
-    subgraph Audio branch
+    subgraph audio_branch["Audio branch"]
+        direction LR
         asrc["audiotestsrc\nwave=sine\n1 kHz, −20 dBFS"]
         acaps["capsfilter\nF32LE, 2 ch, 48 kHz"]
         aconv["audioconvert"]
@@ -125,6 +127,7 @@ flowchart LR
 
         asrc --> acaps --> aconv --> aqueue --> asink
     end
+    video_branch ~~~ audio_branch
 ```
 
 ---
