@@ -304,17 +304,18 @@ flowchart LR
 
 ```bash
 gst-launch-1.0 \
-  glvideomixer name=mixer \
+  compositor name=mixer \
   mxlsrc video-flow-id="<input-flow-id>" domain="/mxl-domain" \
-       ! videoconvert ! glupload \
-       ! queue leaky=0 max-size-buffers=4 max-size-time=0 max-size-bytes=0 \
+       ! videoconvert \
+       ! "video/x-raw,format=BGRA" \
+       ! queue leaky=2 max-size-buffers=2 max-size-time=0 max-size-bytes=0 \
        ! mixer.sink_0 \
   cefsrc url="http://spx-server:5660/renderer/" \
        ! "video/x-raw,format=BGRA,width=1920,height=1080,framerate=60/1" \
-       ! videorate ! glupload \
+       ! videorate \
        ! queue leaky=2 max-size-buffers=2 max-size-time=0 max-size-bytes=0 \
        ! mixer.sink_1 \
-  mixer. ! gldownload ! videoconvert \
+  mixer. ! videoconvert \
        ! "video/x-raw,format=v210,width=1920,height=1080,framerate=60/1" \
        ! queue leaky=2 max-size-buffers=2 \
        ! mxlsink flow-id="<output-flow-id>" domain="/mxl-domain" sync=false
@@ -322,25 +323,35 @@ gst-launch-1.0 \
 
 > **Key toggle:** adjust the `alpha` property on `mixer.sink_1` at runtime
 > (`0.0` = key OFF, `1.0` = key ON) without rebuilding the pipeline.
+>
+> **`sync=false` on `mixer.sink_1`:** set programmatically via the element API — not
+> expressible in a `gst-launch` capsfilter; in the Python code it is set directly on the
+> `Gst.Pad` object returned by `mixer.get_request_pad("sink_%u")`.
 
 ### Explanation
 
 Composites an HTML5 graphics overlay (rendered by a Chrome/CEF browser pointed at an SPX
-graphics server) on top of a live MXL video background using GPU-accelerated mixing.
+graphics server) on top of a live MXL video background using CPU-based mixing via `compositor`.
 
 The **background branch** reads an MXL flow (or falls back to a black `videotestsrc` when no
-receiver is connected), converts the frame format and uploads it to GPU memory via `glupload`.
-A non-leaky queue (4 frames) absorbs any brief GPU jitter without dropping unique background frames.
+receiver is connected). `videoconvert` converts v210 to BGRA so that `compositor` receives the
+same pixel format on both pads without internal conversion. The queue is leaky (drop-oldest, 2
+frames) — mandatory for a live pipeline to avoid buffering stale frames that would appear as
+repeated or frozen video.
 
 The **CEF overlay branch** connects `cefsrc` to the SPX renderer URL which delivers the HTML5
 graphic in BGRA format (alpha channel preserved for keying).  A `videorate` element guarantees
-a steady 60 fps feed to the mixer even when the browser renders at a lower rate.  A leaky queue
-(2 frames, drop-oldest) ensures the mixer always receives the most recent graphic frame.
+a steady 60 fps feed to the mixer even when the browser renders at a lower rate.
 
-`glvideomixer` composites the two GPU textures.  Toggling the key simply sets the `alpha`
-property on `sink_1` (the CEF pad) between `0.0` and `1.0` — no pipeline rebuild needed.
+`compositor` (CPU-based) is used instead of `glvideomixer` (GPU) for two reasons:
+- Its sink pads support `sync=false` — `sink_1` (CEF) is set to `sync=false` so the mixer
+  composites immediately without stalling to align CEF timestamps with the mxlsrc clock domain.
+- No `glupload`/`gldownload` round-trip, saving ~950 MB/s of GPU memory bandwidth.
 
-The output is downloaded from GPU, converted to v210, and written to `mxlsink`.
+Toggling the key simply sets the `alpha` property on `sink_1` (the CEF pad) between `0.0`
+and `1.0` — no pipeline rebuild needed.
+
+The composited output is converted to v210 and written to `mxlsink`.
 The pipeline is only rebuilt when the MXL receiver connection changes.
 
 ### Diagram
@@ -349,32 +360,30 @@ The pipeline is only rebuilt when the MXL receiver connection changes.
 flowchart LR
     subgraph "Background branch"
         bg["mxlsrc\n(or videotestsrc black\nif no input)"]
-        bg_conv["videoconvert"]
-        bg_up["glupload"]
-        bg_q["queue\nleaky=none, max=4"]
-        bg --> bg_conv --> bg_up --> bg_q
+        bg_conv["videoconvert\n→ BGRA"]
+        bg_icaps["capsfilter\nformat=BGRA"]
+        bg_q["queue\nleaky=drop-oldest, max=2"]
+        bg --> bg_conv --> bg_icaps --> bg_q
     end
 
     subgraph "CEF overlay branch"
         cef["cefsrc\nurl=spx-server/renderer/"]
         cef_caps["capsfilter\nBGRA, 1920×1080, 60 fps"]
         cef_rate["videorate"]
-        cef_up["glupload"]
         cef_q["queue\nleaky=drop-oldest, max=2"]
-        cef --> cef_caps --> cef_rate --> cef_up --> cef_q
+        cef --> cef_caps --> cef_rate --> cef_q
     end
 
-    mixer["glvideomixer\n(GPU composite)"]
-    dl["gldownload"]
+    mixer["compositor\n(CPU composite)"]
     out_conv["videoconvert"]
     out_caps["capsfilter\nv210, 1920×1080, 60 fps"]
     out_q["queue\nleaky=drop-oldest, max=2"]
     out_sink["mxlsink\nflow-id=output\nsync=false"]
 
     bg_q   -->|"sink_0"| mixer
-    cef_q  -->|"sink_1\nalpha = 0.0 (OFF)\nor 1.0 (ON)"| mixer
+    cef_q  -->|"sink_1\nsync=false\nalpha = 0.0 (OFF)\nor 1.0 (ON)"| mixer
 
-    mixer --> dl --> out_conv --> out_caps --> out_q --> out_sink
+    mixer --> out_conv --> out_caps --> out_q --> out_sink
 ```
 
 ---
