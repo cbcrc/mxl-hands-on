@@ -1,29 +1,34 @@
 #!/bin/bash
 
 # ==============================================================================
-# SCRIPT: build_linux.sh
+# SCRIPT: build_linux_rust.sh
 # INTENDED SYSTEM: Linux (requires Docker installed and running)
-# PURPOSE: Builds Linux-targeted presets (GCC/Clang) inside a Docker container
-#          to ensure a consistent environment. Mirrors the steps performed by
-#          the GitHub Actions workflow at dmf-mxl/.github/workflows/build.yml
-#          (build_c_cxx job).
+# PURPOSE: Builds, lints, and tests the MXL Rust bindings inside a Docker
+#          container. Mirrors the steps performed by the GitHub Actions
+#          workflow at dmf-mxl/.github/workflows/build.yml (build_rust job).
+#
+# NOTE:    The Rust bindings link against the native MXL C/C++ libraries, so
+#          you typically want to run build_linux.sh first (or at least have a
+#          configured/built tree) so vcpkg and CMake artifacts are in place.
 # ==============================================================================
 
 # Define project path
 MXL_PROJECT_PATH="./dmf-mxl"
 
-# Define compilers to build for Linux targets (matches workflow matrix)
+# Define compilers (matches workflow matrix; the rust job builds against each)
 COMPILERS=("Linux-GCC-Release" "Linux-Clang-Release")
 
 # Ubuntu base image version (matches workflow matrix.version)
 BASE_IMAGE_VERSION="24.04"
 
-# Optional build number (the CI passes github.run_number). Default to 0 locally.
-MXL_BUILD_NUMBER="${MXL_BUILD_NUMBER:-0}"
-
 # Check if dmf-mxl directory exists
 if [ ! -d "$MXL_PROJECT_PATH" ]; then
   echo "Error: dmf-mxl directory not found. Make sure you're running this script from the correct location."
+  exit 1
+fi
+
+if [ ! -d "${MXL_PROJECT_PATH}/rust" ]; then
+  echo "Error: ${MXL_PROJECT_PATH}/rust directory not found."
   exit 1
 fi
 
@@ -46,28 +51,32 @@ else
 fi
 echo "Host UID/GID: ${HOST_UID}/${HOST_GID} -> container UID/GID: ${USER_UID}/${USER_GID}"
 
-# Ensure build/install directories exist with permissions usable inside the container
+# Ensure build / rust target directories exist with permissions usable in container
 mkdir -p "${MXL_PROJECT_PATH}/build"
 chmod 777 "${MXL_PROJECT_PATH}/build"
 chmod g+s "${MXL_PROJECT_PATH}/build"
-mkdir -p "${MXL_PROJECT_PATH}/install"
-chmod 777 "${MXL_PROJECT_PATH}/install"
-chmod g+s "${MXL_PROJECT_PATH}/install"
-mkdir -p "${MXL_PROJECT_PATH}/vcpkg_cache"
+mkdir -p "${MXL_PROJECT_PATH}/rust/target"
+chmod 777 "${MXL_PROJECT_PATH}/rust/target"
+chmod g+s "${MXL_PROJECT_PATH}/rust/target"
 
 # Enable BuildKit (matches workflow env)
 export DOCKER_BUILDKIT=1
 
+# Optional: skip the heavy lint step (cargo audit/outdated/deny/machete) by
+# setting SKIP_RUST_LINT=1 in the environment. These tools may not all be
+# preinstalled in the devcontainer image.
+SKIP_RUST_LINT="${SKIP_RUST_LINT:-0}"
+
 for COMP in "${COMPILERS[@]}"; do
     echo "=================================================================="
-    echo "Building with compiler: ${COMP}"
+    echo "Building Rust bindings with compiler image: ${COMP}"
     echo "=================================================================="
 
     # Convert compiler name to lowercase for Docker tag
     COMP_LOWER=$(echo ${COMP} | tr '[:upper:]' '[:lower:]')
     IMAGE_TAG="mxl_build_container_${COMP_LOWER}"
 
-    # 1. Build Docker image
+    # 1. Build Docker image (same devcontainer image used by the C/C++ script)
     docker build \
       --build-arg BASE_IMAGE_VERSION=${BASE_IMAGE_VERSION} \
       --build-arg USER_UID=${USER_UID} \
@@ -81,55 +90,58 @@ for COMP in "${COMPILERS[@]}"; do
         continue
     fi
 
-    # 2. Run clang-format check (dry-run, treat warnings as errors)
-    echo "--- Running clang-format check ---"
+    # 2. Check the Rust bindings (formatting, clippy, audits)
+    if [ "${SKIP_RUST_LINT}" != "1" ]; then
+        echo "--- Checking Rust bindings (fmt / clippy / audit / outdated / machete / deny) ---"
+        docker run --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
+          -e RUSTFLAGS="-Dwarnings" \
+          -i ${IMAGE_TAG} \
+          bash -c "
+            cd /workspace/mxl/rust && \
+            cargo fmt -- --check && \
+            cargo clippy --all-targets --all-features --locked -- -D warnings && \
+            cargo audit && \
+            cargo outdated && \
+            cargo machete && \
+            cargo deny check all
+          "
+
+        if [ $? -ne 0 ]; then
+            echo "ERROR: Rust lint/check stage failed for ${COMP}."
+            continue
+        fi
+    else
+        echo "--- Skipping Rust lint stage (SKIP_RUST_LINT=1) ---"
+    fi
+
+    # 3. Build Rust bindings
+    echo "--- Building Rust bindings ---"
     docker run --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
       -i ${IMAGE_TAG} \
       bash -c "
-        cd /workspace/mxl && \
-        find lib tools -iregex '.*\.\(h\|c\|hpp\|cpp\)' | xargs clang-format --dry-run --Werror
+        cd /workspace/mxl/rust && \
+        cargo build --release --all-targets --locked
       "
 
     if [ $? -ne 0 ]; then
-        echo "ERROR: clang-format check failed for ${COMP}."
+        echo "ERROR: Rust build failed for ${COMP}."
         continue
     fi
 
-    # 3. Configure CMake (enables OFI fabrics, passes build number)
-    echo "--- Configuring CMake ---"
-    docker run --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
-      -e VCPKG_BINARY_SOURCES="clear;files,/workspace/mxl/vcpkg_cache,readwrite" \
-      -i ${IMAGE_TAG} \
-      bash -c "
-        cmake -S /workspace/mxl -B /workspace/mxl/build/${COMP} \
-          --preset ${COMP} \
-          -DMXL_BUILD_NUMBER=${MXL_BUILD_NUMBER} \
-          -DCMAKE_INSTALL_PREFIX=/workspace/mxl/install \
-          -DMXL_ENABLE_FABRICS_OFI=ON
-      "
-
-    # 4. Build Project
-    echo "--- Building Project ---"
-    docker run --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
-      -i ${IMAGE_TAG} \
-      bash -c "
-        cmake --build /workspace/mxl/build/${COMP} -t all doc install package
-      "
-
-    # 5. Run Tests (shared memory size bumped to match CI)
-    echo "--- Running Tests ---"
+    # 4. Test Rust bindings
+    echo "--- Testing Rust bindings ---"
     docker run --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
       --shm-size=1g \
       -i ${IMAGE_TAG} \
       bash -c "
-        cd /workspace/mxl/build/${COMP} && \
-        ctest --output-junit test-results.xml
+        cd /workspace/mxl/rust && \
+        cargo nextest run --release --locked
       "
 
-    echo "Finished build for ${COMP}"
+    echo "Finished Rust build for ${COMP}"
 done
 
 echo "=================================================================="
-echo "All Linux builds completed!"
-echo "Build artifacts can be found in ${MXL_PROJECT_PATH}/build/ and ${MXL_PROJECT_PATH}/install/"
+echo "All Rust binding builds completed!"
+echo "Rust artifacts can be found in ${MXL_PROJECT_PATH}/rust/target/"
 echo "=================================================================="
