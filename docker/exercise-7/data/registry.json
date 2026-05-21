@@ -1,0 +1,9 @@
+{
+"pri": 99,
+"logging_level": -20,
+"http_trace": false,
+"label": "easy-nmos-registry",
+"http_port": 80,
+"query_ws_port": 81,
+"registration_expiry_interval": 12
+}
