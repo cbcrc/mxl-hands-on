@@ -1,0 +1,26 @@
+name: gst-apps
+
+# the device must point to a directory on the host that contains
+# domain_def.json
+volumes:
+  mxl-domain:
+    driver: local
+    driver_opts:
+      type: none
+      device: /Volumes/mxl/domain_1
+      o: "bind,nosuid,strictatime"
+
+services:
+  test-generator:
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: gst-apps/test-generator/Dockerfile
+    image: test-generator:latest
+    ports:
+      - "9600:9600"
+      - "9700:9700"
+    volumes:
+      - type: volume
+        source: mxl-domain
+        target: /mxl-domain

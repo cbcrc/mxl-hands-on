@@ -192,6 +192,8 @@ After you've built the Docker images, you can clean up the build artifacts to sa
 rm -rf dmf-mxl/build
 rm -rf dmf-mxl/install_*
 rm -rf dmf-mxl/vcpkg_cache
+rm -rf dmf-mxl/rust/.cargo-docker
+rm -rf dmf-mxl/rust/target
 rm -rf ~/portable-mxl-reader
 rm ~/portable-mxl-reader.tar.gz
 ```

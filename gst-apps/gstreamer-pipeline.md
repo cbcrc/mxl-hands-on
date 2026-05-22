@@ -65,40 +65,66 @@ flowchart LR
 
 ```bash
 gst-launch-1.0 \
-  videotestsrc pattern=0 is-live=true \
-  ! "video/x-raw,width=1920,height=1080,framerate=60/1" \
-  ! timeoverlay font-desc="Sans Bold 28" halignment=right valignment=bottom shaded-background=true \
-  ! textoverlay text="<ident>" font-desc="Sans Bold 36" halignment=center valignment=top shaded-background=true \
-  ! videoconvert ! queue \
-  ! mxlsink flow-id="<video-flow-id>" domain="/mxl-domain" \
+  videotestsrc pattern=19 is-live=true \
+    ! "video/x-raw,width=1920,height=1080,framerate=30/1" \
+    ! timeoverlay font-desc="Sans Bold 28" halignment=right valignment=bottom shaded-background=true \
+    ! textoverlay text="Test Generator" font-desc="Sans Bold 36" halignment=center valignment=top shaded-background=true \
+    ! videoconvert \
+    ! "video/x-raw,format=v210" \
+    ! queue \
+    ! mxlsink flow-id="<video-uuid>" domain="/mxl-domain/<domain-uuid>.mxl-domain" \
   audiotestsrc wave=0 freq=1000 volume=0.1 is-live=true \
-  ! "audio/x-raw,format=F32LE,channels=2,rate=48000,layout=interleaved" \
-  ! audioconvert ! queue \
-  ! mxlsink flow-id="<audio-flow-id>" domain="/mxl-domain"
+    ! audioconvert \
+    ! "audio/x-raw,format=F32LE,channels=2,rate=48000,layout=interleaved" \
+    ! queue \
+    ! mxlsink flow-id="<audio1-uuid>" domain="/mxl-domain/<domain-uuid>.mxl-domain" \
+  audiotestsrc wave=0 freq=1000 volume=0.1 is-live=true \
+    ! audioconvert \
+    ! "audio/x-raw,format=F32LE,channels=2,rate=48000,layout=interleaved" \
+    ! queue \
+    ! mxlsink flow-id="<audio2-uuid>" domain="/mxl-domain/<domain-uuid>.mxl-domain"
 ```
 
-> **Note:** `volume=0.1` corresponds to the default level of −20 dBFS (`10^(−20/20) ≈ 0.1`).
-> `wave=0` is a sine wave. `pattern=0` is the SMPTE colour bars.
+> **Note:** `volume=0.1` ≈ −20 dBFS (`10^(−20/20)`). `wave=0` is a sine wave.
+> `pattern=19` is the 100% colour bars (SMPTE full-range). Each flow gets a fresh `uuid4`
+> generated at pipeline start — UUIDs are never reused across restarts.
 
 ### Explanation
 
-Generates a live synthetic test signal — no file, no external source.
+Generates three independent live test flows — one video and two audio — with no external
+source. The pipeline is user-controlled: the UI's **Setup** section configures domain, raster,
+frame rate, and per-flow metadata; the pipeline only starts when the user clicks **Start**.
 
-The **video branch** produces 1920×1080 @ 60 fps colour-bars (SMPTE by default).
-A `timeoverlay` element burns the running clock into the bottom-right corner, and a
-`textoverlay` element renders a configurable ident string at the top centre.
-Both overlays can be toggled or updated at runtime without rebuilding the pipeline.
+**Video branch** — `videotestsrc → capsfilter(res+fps) → timeoverlay → textoverlay
+→ videoconvert → capsfilter(v210) → queue → mxlsink`
 
-The **audio branch** produces a continuous 1 kHz sine wave at −20 dBFS, stereo, 48 kHz.
-The `capsfilter` locks the format to `F32LE` — `audiotestsrc` natively produces float samples,
-so `audioconvert` passes through with no real conversion; the capsfilter simply makes the
-contract explicit and ensures `mxlsink` gets the one format it accepts.
-The channel count (2 or 6) and level (−60 … 0 dBFS) can be changed at runtime; changing the
-channel count forces a pipeline rebuild because the `capsfilter` must change.
+`videotestsrc` generates synthetic colour-bar frames at the selected raster
+(1280×720, 1920×1080, or 3840×2160) and frame rate (24/25/29.97/30/50/59.94/60 fps).
+A `timeoverlay` burns the running pipeline clock into the bottom-right corner; a
+`textoverlay` overlays a configurable ident string at the top centre.
+Both overlays are live-adjustable (no pipeline rebuild required).
+`videoconvert` is mandatory before the v210 capsfilter: `timeoverlay` and `textoverlay`
+work in AYUV or I420 internally, and `videoconvert` translates that into the packed v210
+format that `mxlsink` requires. Without this explicit capsfilter, auto-negotiation may
+land on an incompatible pixel format and cause a hard runtime failure.
 
-> **Bug note:** `gst_generator.py` currently uses `S24LE` in its capsfilter — this will fail
-> caps negotiation against `mxlsink` which only accepts `F32LE`. The capsfilter must be
-> `audio/x-raw,format=F32LE,channels=…` to match `mxlsink`'s pad template.
+**Audio Flow 1 and Audio Flow 2** — each independently:
+`audiotestsrc → audioconvert → capsfilter(F32LE, N ch, 48 kHz) → queue → mxlsink`
+
+Each branch has its own `audiotestsrc` (independently configurable wave, level) feeding
+its own `mxlsink` through its own UUID — the two flows are completely independent.
+`audiotestsrc` natively produces float samples at whatever rate and channel count the
+downstream capsfilter negotiates; `audioconvert` is present to handle any intermediate
+format differences and to make the negotiation chain explicit.
+The final capsfilter locks the format to `F32LE` interleaved, which is the only audio
+format `mxlsink` accepts. Channel count (1–64) is configured per flow in the Setup
+section before the pipeline starts and is fixed for its lifetime — it cannot be changed
+without a Stop + Start because caps renegotiation across a running mxlsink is not
+reliable. Audio level (−60 … 0 dBFS in 0.5 dB steps) is adjustable live.
+
+After the pipeline reaches PLAYING state, the backend polls for each flow's
+`{domain}/{uuid}.mxl-flow/flow_def.json` and patches the `grouphint`, `description`,
+and `label` fields with the values entered in the Setup form.
 
 ### Diagram
 
@@ -106,28 +132,41 @@ channel count forces a pipeline rebuild because the `capsfilter` must change.
 flowchart TB
     subgraph video_branch["Video branch"]
         direction LR
-        vsrc["videotestsrc\npattern=smpte\nis-live=true"]
-        vcaps["capsfilter\n1920×1080, 60 fps"]
-        time["timeoverlay\n(clock)"]
-        text["textoverlay\n(ident)"]
+        vsrc["videotestsrc\npattern=100% bars\nis-live=true"]
+        vcaps_src["capsfilter\n1920×1080, 30 fps"]
+        time["timeoverlay\nclock, right-bottom"]
+        text["textoverlay\nident, center-top"]
         vconv["videoconvert"]
+        vcaps_sink["capsfilter\nformat=v210"]
         vqueue["queue"]
-        vsink["mxlsink\nflow-id=video"]
+        vsink["mxlsink\nflow-id=video-uuid"]
 
-        vsrc --> vcaps --> time --> text --> vconv --> vqueue --> vsink
+        vsrc --> vcaps_src --> time --> text --> vconv --> vcaps_sink --> vqueue --> vsink
     end
 
-    subgraph audio_branch["Audio branch"]
+    subgraph audio1_branch["Audio Flow 1 branch"]
         direction LR
-        asrc["audiotestsrc\nwave=sine\n1 kHz, −20 dBFS"]
-        acaps["capsfilter\nF32LE, 2 ch, 48 kHz"]
-        aconv["audioconvert"]
-        aqueue["queue"]
-        asink["mxlsink\nflow-id=audio"]
+        asrc1["audiotestsrc\nwave=sine, 1 kHz\n−20 dBFS, is-live=true"]
+        aconv1["audioconvert"]
+        acaps1["capsfilter\nF32LE, 2 ch, 48 kHz"]
+        aqueue1["queue"]
+        asink1["mxlsink\nflow-id=audio1-uuid"]
 
-        asrc --> acaps --> aconv --> aqueue --> asink
+        asrc1 --> aconv1 --> acaps1 --> aqueue1 --> asink1
     end
-    video_branch ~~~ audio_branch
+
+    subgraph audio2_branch["Audio Flow 2 branch"]
+        direction LR
+        asrc2["audiotestsrc\nwave=sine, 1 kHz\n−20 dBFS, is-live=true"]
+        aconv2["audioconvert"]
+        acaps2["capsfilter\nF32LE, 2 ch, 48 kHz"]
+        aqueue2["queue"]
+        asink2["mxlsink\nflow-id=audio2-uuid"]
+
+        asrc2 --> aconv2 --> acaps2 --> aqueue2 --> asink2
+    end
+
+    video_branch ~~~ audio1_branch ~~~ audio2_branch
 ```
 
 ---
