@@ -146,8 +146,19 @@ def _parse_flow_info_output(stdout: str, flow_uuid: str) -> dict:
     return {"flow_uuid": flow_uuid, "fields": fields}
 
 
+def _read_flow_description(domain_path: str, flow_uuid: str) -> str:
+    """Return the description field from flow_def.json, or empty string."""
+    path = Path(domain_path) / f"{flow_uuid}.mxl-flow" / "flow_def.json"
+    if not path.exists():
+        return ""
+    try:
+        return json.loads(path.read_text()).get("description", "")
+    except Exception:
+        return ""
+
+
 def _scan_domain_path(domain_path: str) -> list[dict]:
-    """Run mxl-info -d and return parsed flows (shared by two endpoints)."""
+    """Run mxl-info -d, parse flows, then enrich each with description from flow_def.json."""
     try:
         result = subprocess.run(
             [MXL_INFO_BIN, "-d", domain_path],
@@ -165,7 +176,10 @@ def _scan_domain_path(domain_path: str) -> list[dict]:
     if result.returncode != 0:
         log.warning("mxl-info stderr: %s", result.stderr.strip())
 
-    return _parse_scan_output(result.stdout)
+    flows = _parse_scan_output(result.stdout)
+    for flow in flows:
+        flow["description"] = _read_flow_description(domain_path, flow["flow_uuid"])
+    return flows
 
 
 # ── Startup ────────────────────────────────────────────────────────────────────

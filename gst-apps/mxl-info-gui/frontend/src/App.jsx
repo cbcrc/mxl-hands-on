@@ -385,6 +385,7 @@ export default function App() {
                 <tr>
                   <th style={thStyle}>Flow UUID</th>
                   <th style={thStyle}>Label</th>
+                  <th style={thStyle}>Description</th>
                   <th style={thStyle}>Group Hint</th>
                 </tr>
               </thead>
@@ -392,7 +393,7 @@ export default function App() {
                 {Object.entries(groupedFlows).map(([groupName, groupFlows]) => (
                   <React.Fragment key={groupName}>
                     <tr>
-                      <td colSpan={3} style={groupHeaderTdStyle}>
+                      <td colSpan={4} style={groupHeaderTdStyle}>
                         {groupName}
                       </td>
                     </tr>
@@ -400,6 +401,7 @@ export default function App() {
                       <tr key={f.flow_uuid}>
                         <td style={tdStyle}>{f.flow_uuid}</td>
                         <td style={{ ...tdStyle, fontFamily: "inherit" }}>{f.flow_label}</td>
+                        <td style={{ ...tdStyle, fontFamily: "inherit" }}>{f.description || ""}</td>
                         <td style={{ ...tdStyle, fontFamily: "inherit" }}>{f.flow_grouphint}</td>
                       </tr>
                     ))}

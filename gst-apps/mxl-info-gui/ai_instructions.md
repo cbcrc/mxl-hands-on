@@ -60,9 +60,11 @@ Calls `mxl-info -d <domain_directory>` and parses the output into a list of flow
 {
   "flow_uuid":      "28cc59be-3546-515f-8326-fc5639e8a7f0",
   "flow_label":     "HTML5 Keyer – Output",
-  "flow_grouphint": "Test-Generator:Video"
+  "flow_grouphint": "Test-Generator:Video",
+  "description":    "video-out-1"
 }
 ```
+After parsing the `mxl-info -d` output, each flow is enriched with `description` read directly from `<domain_path>/<flow_uuid>.mxl-flow/flow_def.json` (the `description` field). Returns `""` if the file is absent or unreadable.
 
 ### 3. `get_flow_info`
 Calls `mxl-info -d <domain_directory> -f <flow_uuid>` and parses the output.
@@ -117,7 +119,7 @@ Returns `.mxl-flow` directories in the domain that `mxl-info -d` does not report
 1. **Scan Domain button** — calls `POST /get-domains`. Domains are also polled every **30 seconds** via `GET /domains`.
 2. **Domain List window** — table showing UUID and directory path for each domain found.
 3. **Domain Selector** — dropdown to select a domain from the discovered list.
-4. **MXL Flow List window** — table showing `FlowUUID`, `Flow Label`, and `Flow Grouphint` for all flows in the selected domain. Flows are **grouped by group name** (the prefix before `:` in `flow_grouphint`); each group is shown with a coloured header row. Scales up to 20 rows; scrollable beyond that. Polls `scan_domain` every **30 seconds** when a domain is selected.
+4. **MXL Flow List window** — table showing `Flow UUID`, `Label`, `Description`, and `Group Hint` for all flows in the selected domain. Flows are **grouped by group name** (the prefix before `:` in `flow_grouphint`); each group is shown with a coloured header row spanning all four columns. Scales up to 20 rows; scrollable beyond that. Polls `scan_domain` every **30 seconds** when a domain is selected.
 5. **Refresh Flow List button** — manually triggers `scan_domain` for the selected domain.
 6. **Orphan Flows section** — shown below the flow list when a domain is selected. Displays a table of flow directories that exist on disk but are not reported by `mxl-info -d` (inactive/leftover flows). Columns: Flow UUID, Label, Group Hint, Directory. Polled every 30 seconds alongside the active flow list.
 7. **Flow 1 Selector** — dropdown populated from the flow list. Each option displays the flow label, group hint, and the first 8 characters of the UUID in the format `<Label> — <GroupHint> (<UUID prefix>…)`.
@@ -164,7 +166,7 @@ RUN cd /opt/mxl/lib \
  && ldconfig /opt/mxl/lib
 
 ENV LD_LIBRARY_PATH=/opt/mxl/lib
-EXPOSE 9600 9700
+EXPOSE 9600
 ```
 
 ### Step 2: FastAPI Backend
