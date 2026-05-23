@@ -4,9 +4,12 @@
 Build a Dockerized media application that functions as a video and audio test generator. The application uses GStreamer for media functionalities, FastAPI for the backend API, and React + Vite for the web frontend. The final goal is illustrated in the mermaid diagram located here `./Exercises/Exercise5.md`. The application is located at `./gst-apps/test-generator`. NMOS has been removed entirely — there is no NMOS node, no nmos_bridge, and no NMOS-related dependencies.
 
 ## System Architecture
-The application consists of two main components running within a single Docker container:
-1. **Frontend:** A web UI built with React and Vite, served as static files via `python3 -m http.server` on port 9700.
-2. **Backend / Media Engine:** A Python application using FastAPI (port 9600) to expose the API, and GStreamer (via `gi.repository.Gst` Python bindings) to handle the actual media pipeline.
+The application runs as a **single service on one port** inside Docker:
+1. **FastAPI (port 9600):** Serves both the REST API and the built React static files (mounted via `StaticFiles`). The `StaticFiles` mount is added **last**, after all API routes, so API paths take precedence.
+2. **Frontend:** Built with React + Vite into a `dist/` directory. No separate static file server — FastAPI serves `dist/` directly via `fastapi.staticfiles.StaticFiles`.
+3. **Media Engine:** GStreamer via `gi.repository.Gst` Python bindings handles the actual media pipeline.
+
+This single-port design means the browser always uses the **same origin** for both the UI and the API, so no port number is hardcoded in the frontend JavaScript. The docker-compose host-port mapping (`9600:9600`) can be changed freely without rebuilding the image.
 
 ## Environment & File Specifications
 - **Media Format:** The test generator must offer the following video raster resolutions: **1280x720**, **1920x1080**, and **3840x2160**, and the following frame rates: **24 Hz**, **25 Hz**, **29.97 Hz**, **30 Hz**, **50 Hz**, **59.94 Hz**, and **60 Hz**. For audio it must offer a choice of **1 to 64 channels at 48 kHz 24-bit** (delivered as F32LE to mxlsink).
@@ -68,7 +71,7 @@ This section is enabled only once the pipeline is running (greyed-out and non-in
         o: "bind,nosuid,strictatime"
   ```
   `MXL_DOMAIN_DEVICE` must be set to an absolute path on the host that contains `domain_def.json` before running `docker compose up` (e.g. via a `.env` file next to `docker-compose.yml` or an exported shell variable). No init container is needed — the file is already present on the host.
-- Add port mappings `9600:9600` and `9700:9700` for the test-generator service.
+- Add port mapping `9600:9600` only — FastAPI serves both the API and the React frontend on the same port. No separate frontend port is needed.
 - The Dockerfile uses **two stages**: a `node:18-bullseye-slim` stage to build the React frontend, and an `ubuntu:24.04` runtime stage. There is no NMOS stage.
 - The build context is the repository root (`..` relative to `./gst-apps/`). All `COPY` paths in the Dockerfile are therefore relative to the repository root (e.g. `COPY gst-apps/test-generator/backend/ /app/backend/`).
 - The runtime stage installs: `python3`, `python3-pip`, `python3-gi`, `python3-gi-cairo`, `gir1.2-gstreamer-1.0`, `gir1.2-gst-plugins-base-1.0`, `gstreamer1.0-tools`, `gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good`, `gstreamer1.0-plugins-bad`, `gstreamer1.0-plugins-ugly`, `gstreamer1.0-libav`.
@@ -111,9 +114,15 @@ This section is enabled only once the pipeline is running (greyed-out and non-in
 - Structure the UI into two clearly labelled sections:
   - **Setup section** (always visible, disabled while running): MXL domain dropdown, resolution dropdown, frame rate dropdown, shared grouphint input, a three-row flow configuration table (Video / Audio Flow 1 / Audio Flow 2) each with an active checkbox, description, and label inputs, and a Start/Stop button. The Start button is disabled until a domain is selected and all active flows have non-empty description and label values.
   - **Operation section** (greyed-out and non-interactive until the pipeline is running): a Video panel (test pattern dropdown, timecode checkbox, ident text input with Apply button) and two independent Audio panels (test pattern dropdown, channel count numeric input, audio level fader with dBFS readout).
-- Wire all controls to the corresponding FastAPI endpoints on port 9600. In `App.jsx`, the API base URL is hardcoded as `` `http://${window.location.hostname}:9600` ``.
-- The built React static files are served by `python3 -m http.server 9700 --directory /app/frontend/dist` in the entrypoint script — no FastAPI `StaticFiles` mount is needed.
-- Update `vite.config.js` to proxy all API paths (`/domains`, `/patterns`, `/options`, `/pipeline`, `/video`, `/audio`) to `http://localhost:9600` for local development.
+- In `App.jsx`, set `const API = ""` so all fetch calls use relative paths (e.g. `${API}/pipeline/status`). This means the browser always calls the same origin as the page — no port number hardcoded, works regardless of the docker-compose host-port mapping.
+- FastAPI serves the React static files directly: `app.mount("/", StaticFiles(directory="/app/frontend/dist", html=True), name="static")` must be the **last** statement in `backend/main.py` so API routes take precedence. Add `aiofiles>=23.0.0` to `requirements.txt` (required by `StaticFiles`).
+- Update `vite.config.js` to proxy all API paths (`/domains`, `/patterns`, `/options`, `/pipeline`, `/video`, `/audio`) to `http://localhost:9600` for local development (Vite dev server only — not used in the Docker image).
+
+**Entrypoint** — single process, single port:
+```bash
+cd /app
+exec python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 9600
+```
 
 **Step 4: Pipeline Documentation**
 Once the application is fully working, update **Section 2 — Test Generator** in `./gst-apps/gstreamer-pipeline.md` to reflect the actual pipeline built. That section must contain:

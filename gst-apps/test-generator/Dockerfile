@@ -78,6 +78,6 @@ RUN chmod +x /entrypoint.sh
 # ── Environment ──────────────────────────────────────────────────────────────
 ENV MXL_DOMAIN=/mxl-domain
 
-EXPOSE 9600 9700
+EXPOSE 9600
 
 ENTRYPOINT ["/entrypoint.sh"]

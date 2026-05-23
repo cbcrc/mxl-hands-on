@@ -15,13 +15,16 @@ FROM node:18-bullseye-slim AS frontend-builder
 
 WORKDIR /build
 
-COPY docker/exercise-5/data/mxl-info-gui/frontend/package.json \
-     docker/exercise-5/data/mxl-info-gui/frontend/package-lock.json* \
+COPY gst-apps/mxl-info-gui/frontend/package.json \
+     gst-apps/mxl-info-gui/frontend/package-lock.json* \
      ./
 
 RUN npm install --legacy-peer-deps
 
-COPY docker/exercise-5/data/mxl-info-gui/frontend/ ./
+COPY gst-apps/mxl-info-gui/frontend/ ./
+
+# Copy CBC Radio-Canada logo into the public directory so Vite includes it in the build
+COPY gst-apps/logo/rgb_cbc-radio-canada-col-coul.png ./public/cbc-logo.png
 
 RUN npm run build
 
@@ -40,19 +43,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-COPY docker/exercise-5/data/mxl-info-gui/backend/requirements.txt /tmp/requirements.txt
+COPY gst-apps/mxl-info-gui/backend/requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
 
 # ── MXL libraries ────────────────────────────────────────────────────────────
 COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.1          /opt/mxl/lib/libmxl.so.1.1
-COPY dmf-mxl/build/Linux-Clang-Release/lib/internal/libmxl-common.so.1.1 \
-                                                                     /opt/mxl/lib/libmxl-common.so.1.1
 
 RUN cd /opt/mxl/lib \
  && ln -sf libmxl.so.1.1        libmxl.so.1 \
  && ln -sf libmxl.so.1          libmxl.so \
- && ln -sf libmxl-common.so.1.1 libmxl-common.so.1 \
- && ln -sf libmxl-common.so.1   libmxl-common.so \
  && ldconfig /opt/mxl/lib
 
 # ── mxl-info CLI tool ────────────────────────────────────────────────────────
@@ -62,16 +61,16 @@ RUN chmod +x /opt/mxl/tools/mxl-info/mxl-info
 ENV LD_LIBRARY_PATH=/opt/mxl/lib
 
 # ── Application code ─────────────────────────────────────────────────────────
-COPY docker/exercise-5/data/mxl-info-gui/backend/ /app/backend/
+COPY gst-apps/mxl-info-gui/backend/ /app/backend/
 COPY --from=frontend-builder /build/dist           /app/frontend/dist
 
 # Entrypoint
-COPY docker/exercise-5/data/mxl-info-gui/entrypoint.sh /entrypoint.sh
+COPY gst-apps/mxl-info-gui/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # ── Environment ──────────────────────────────────────────────────────────────
 ENV MXL_DOMAIN=/mxl-domain
 
-EXPOSE 9660 9760
+EXPOSE 9600
 
 ENTRYPOINT ["/entrypoint.sh"]

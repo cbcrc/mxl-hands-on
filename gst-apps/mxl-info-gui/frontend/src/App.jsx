@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 
-const API = `http://${window.location.hostname}:9660`;
+const API = "";
 
 // ── Shared styles ────────────────────────────────────────────────────────────
 
@@ -60,6 +60,17 @@ const tdStyle = {
   fontFamily: "monospace",
 };
 
+const groupHeaderTdStyle = {
+  padding: "0.35rem 0.6rem",
+  background: "#252525",
+  color: "#5b9bd5",
+  fontFamily: "inherit",
+  fontWeight: 700,
+  fontSize: "0.78rem",
+  letterSpacing: "0.05em",
+  borderTop: "1px solid #2e2e2e",
+};
+
 const monoBlock = {
   background: "#111",
   borderRadius: "6px",
@@ -96,9 +107,9 @@ function FlowInfoDisplay({ info }) {
 // ── FlowSelector + FlowInfo panel ────────────────────────────────────────────
 
 function FlowPanel({ label, flows, selectedDomain }) {
-  const [flowUuid, setFlowUuid]   = useState("");
-  const [flowInfo, setFlowInfo]   = useState(null);
-  const [polling, setPolling]     = useState(false);   // off by default
+  const [flowUuid, setFlowUuid] = useState("");
+  const [flowInfo, setFlowInfo] = useState(null);
+  const [polling, setPolling]   = useState(false);
 
   const fetchInfo = useCallback(async () => {
     if (!selectedDomain || !flowUuid) return;
@@ -113,7 +124,7 @@ function FlowPanel({ label, flows, selectedDomain }) {
     }
   }, [selectedDomain, flowUuid]);
 
-  // Fetch once when flow is selected; start/stop 500 ms poll based on checkbox
+  // Fetch once when flow selected; start 500 ms interval when polling is on
   useEffect(() => {
     setFlowInfo(null);
     if (!flowUuid) return;
@@ -123,7 +134,7 @@ function FlowPanel({ label, flows, selectedDomain }) {
     return () => clearInterval(id);
   }, [flowUuid, polling, fetchInfo]);
 
-  // Clear selection when domain changes
+  // Reset when domain changes
   useEffect(() => {
     setFlowUuid("");
     setFlowInfo(null);
@@ -171,13 +182,28 @@ function FlowPanel({ label, flows, selectedDomain }) {
   );
 }
 
+// ── Group flows by group-name prefix ─────────────────────────────────────────
+
+function groupByGroupName(flows) {
+  const groups = {};
+  for (const f of flows) {
+    const colonIdx = f.flow_grouphint.indexOf(":");
+    const groupName =
+      colonIdx >= 0 ? f.flow_grouphint.slice(0, colonIdx) : f.flow_grouphint || "(ungrouped)";
+    if (!groups[groupName]) groups[groupName] = [];
+    groups[groupName].push(f);
+  }
+  return groups;
+}
+
 // ── Main App ─────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [domains, setDomains]             = useState([]);
+  const [domains, setDomains]               = useState([]);
   const [selectedDomain, setSelectedDomain] = useState("");
-  const [flows, setFlows]                 = useState([]);
-  const [scanMsg, setScanMsg]             = useState("");
+  const [flows, setFlows]                   = useState([]);
+  const [orphanFlows, setOrphanFlows]       = useState([]);
+  const [scanMsg, setScanMsg]               = useState("");
 
   // ── Domain helpers ──────────────────────────────────────────────────────────
 
@@ -185,7 +211,7 @@ export default function App() {
     try {
       const r = await fetch(`${API}/domains`);
       const d = await r.json();
-      setDomains(d);
+      setDomains(Array.isArray(d) ? d : []);
     } catch {
       // ignore
     }
@@ -196,8 +222,8 @@ export default function App() {
     try {
       const r = await fetch(`${API}/get-domains`, { method: "POST" });
       const d = await r.json();
-      setDomains(d);
-      setScanMsg(`Found ${d.length} domain(s)`);
+      setDomains(Array.isArray(d) ? d : []);
+      setScanMsg(`Found ${Array.isArray(d) ? d.length : 0} domain(s)`);
     } catch {
       setScanMsg("Scan failed");
     }
@@ -225,14 +251,36 @@ export default function App() {
     }
   }, [selectedDomain]);
 
-  // Fetch flows immediately when domain changes, then poll every 30 s
+  const fetchOrphanFlows = useCallback(async () => {
+    if (!selectedDomain) return;
+    try {
+      const r = await fetch(
+        `${API}/orphan-flows?domain_path=${encodeURIComponent(selectedDomain)}`
+      );
+      const d = await r.json();
+      setOrphanFlows(Array.isArray(d) ? d : []);
+    } catch {
+      setOrphanFlows([]);
+    }
+  }, [selectedDomain]);
+
+  // Fetch flows + orphans when domain changes; poll every 30 s
   useEffect(() => {
     setFlows([]);
+    setOrphanFlows([]);
     if (!selectedDomain) return;
     fetchFlows();
-    const id = setInterval(fetchFlows, 30_000);
+    fetchOrphanFlows();
+    const id = setInterval(() => {
+      fetchFlows();
+      fetchOrphanFlows();
+    }, 30_000);
     return () => clearInterval(id);
-  }, [selectedDomain, fetchFlows]);
+  }, [selectedDomain, fetchFlows, fetchOrphanFlows]);
+
+  // ── Grouped flow view ───────────────────────────────────────────────────────
+
+  const groupedFlows = groupByGroupName(flows);
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -240,7 +288,10 @@ export default function App() {
     <div style={{ maxWidth: "960px", width: "100%" }}>
       {/* Header */}
       <div style={{ marginBottom: "1.5rem" }}>
-        <h1 style={{ fontSize: "1.8rem", fontWeight: 700 }}>MXL Info GUI</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+          <img src="/cbc-logo.png" alt="CBC Radio-Canada" style={{ height: "2.2rem", objectFit: "contain" }} />
+          <h1 style={{ fontSize: "1.8rem", fontWeight: 700, margin: 0 }}>MXL Info GUI</h1>
+        </div>
         <p style={{ color: "#666", fontSize: "0.8rem", marginTop: "0.3rem" }}>
           Probe MXL domains and flows
         </p>
@@ -248,14 +299,7 @@ export default function App() {
 
       {/* ── Domain Management ──────────────────────────────────────────────── */}
       <div style={sectionStyle}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "1rem",
-            marginBottom: "1rem",
-          }}
-        >
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1rem" }}>
           <h2 style={{ fontSize: "1.1rem", fontWeight: 600 }}>Domains</h2>
           <button style={btnStyle} onClick={triggerScan}>
             Scan Domains
@@ -265,7 +309,6 @@ export default function App() {
           )}
         </div>
 
-        {/* Domain list – scales with content */}
         {domains.length === 0 ? (
           <p style={{ color: "#555", fontSize: "0.85rem", marginBottom: "1rem" }}>
             No domains found. Press "Scan Domains".
@@ -291,7 +334,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Domain selector */}
         <label style={labelStyle}>Select Domain</label>
         <select
           style={selectStyle}
@@ -307,16 +349,9 @@ export default function App() {
         </select>
       </div>
 
-      {/* ── MXL Flow List ──────────────────────────────────────────────────── */}
+      {/* ── MXL Flow List (grouped by group name) ──────────────────────────── */}
       <div style={sectionStyle}>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "1rem",
-            marginBottom: "1rem",
-          }}
-        >
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1rem" }}>
           <h2 style={{ fontSize: "1.1rem", fontWeight: 600 }}>MXL Flows</h2>
           <button
             style={{ ...btnStyle, opacity: selectedDomain ? 1 : 0.4 }}
@@ -339,7 +374,6 @@ export default function App() {
         ) : flows.length === 0 ? (
           <p style={{ color: "#555", fontSize: "0.85rem" }}>No flows found.</p>
         ) : (
-          /* Scrollable after 20 rows (~560px) */
           <div
             style={{
               overflowY: flows.length > 20 ? "auto" : "visible",
@@ -355,16 +389,21 @@ export default function App() {
                 </tr>
               </thead>
               <tbody>
-                {flows.map((f) => (
-                  <tr key={f.flow_uuid}>
-                    <td style={tdStyle}>{f.flow_uuid}</td>
-                    <td style={{ ...tdStyle, fontFamily: "inherit" }}>
-                      {f.flow_label}
-                    </td>
-                    <td style={{ ...tdStyle, fontFamily: "inherit" }}>
-                      {f.flow_grouphint}
-                    </td>
-                  </tr>
+                {Object.entries(groupedFlows).map(([groupName, groupFlows]) => (
+                  <React.Fragment key={groupName}>
+                    <tr>
+                      <td colSpan={3} style={groupHeaderTdStyle}>
+                        {groupName}
+                      </td>
+                    </tr>
+                    {groupFlows.map((f) => (
+                      <tr key={f.flow_uuid}>
+                        <td style={tdStyle}>{f.flow_uuid}</td>
+                        <td style={{ ...tdStyle, fontFamily: "inherit" }}>{f.flow_label}</td>
+                        <td style={{ ...tdStyle, fontFamily: "inherit" }}>{f.flow_grouphint}</td>
+                      </tr>
+                    ))}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>
@@ -372,14 +411,60 @@ export default function App() {
         )}
       </div>
 
+      {/* ── Orphan Flows ───────────────────────────────────────────────────── */}
+      {selectedDomain && (
+        <div style={sectionStyle}>
+          <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "0.5rem" }}>
+            <h2 style={{ fontSize: "1.1rem", fontWeight: 600 }}>Orphan Flows</h2>
+            <button
+              style={{ ...btnStyle, opacity: 1 }}
+              onClick={fetchOrphanFlows}
+            >
+              Refresh
+            </button>
+            <span style={{ color: "#888", fontSize: "0.8rem" }}>
+              {orphanFlows.length} orphan(s)
+            </span>
+          </div>
+          <p style={{ color: "#555", fontSize: "0.78rem", marginBottom: "0.75rem" }}>
+            On-disk <code>.mxl-flow</code> directories not reported by{" "}
+            <code>mxl-info -d</code> — inactive, leftover, or unreadable flows.
+          </p>
+          {orphanFlows.length === 0 ? (
+            <p style={{ color: "#555", fontSize: "0.85rem" }}>No orphan flows found.</p>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    <th style={thStyle}>Flow UUID</th>
+                    <th style={thStyle}>Label</th>
+                    <th style={thStyle}>Group Hint</th>
+                    <th style={thStyle}>Directory</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orphanFlows.map((f) => (
+                    <tr key={f.flow_uuid}>
+                      <td style={tdStyle}>{f.flow_uuid}</td>
+                      <td style={{ ...tdStyle, fontFamily: "inherit" }}>
+                        {f.flow_label || <span style={{ color: "#444" }}>—</span>}
+                      </td>
+                      <td style={{ ...tdStyle, fontFamily: "inherit" }}>
+                        {f.flow_grouphint || <span style={{ color: "#444" }}>—</span>}
+                      </td>
+                      <td style={tdStyle}>{f.directory}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Flow 1 & Flow 2 side-by-side ──────────────────────────────────── */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: "1rem",
-        }}
-      >
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
         <FlowPanel label="Flow 1" flows={flows} selectedDomain={selectedDomain} />
         <FlowPanel label="Flow 2" flows={flows} selectedDomain={selectedDomain} />
       </div>

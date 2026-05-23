@@ -9,6 +9,7 @@ POST /get-domains          – scan /mxl-domain for domain_def.json files
 GET  /domains              – return cached domain list
 GET  /scan-domain          – list MXL flows in a domain  ?domain_path=<path>
 GET  /flow-info            – get detailed flow info       ?domain_path=<path>&flow_uuid=<uuid>
+GET  /orphan-flows         – list .mxl-flow dirs not reported by mxl-info ?domain_path=<path>
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,8 +32,14 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-MXL_INFO_BIN  = "/opt/mxl/tools/mxl-info/mxl-info"
+MXL_INFO_BIN    = "/opt/mxl/tools/mxl-info/mxl-info"
 MXL_DOMAIN_ROOT = os.environ.get("MXL_DOMAIN", "/mxl-domain")
+
+# UUID pattern used for matching in flow lines
+_UUID_RE = re.compile(
+    r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+    re.IGNORECASE,
+)
 
 app = FastAPI(title="MXL Info GUI")
 app.add_middleware(
@@ -59,8 +67,6 @@ def _scan_domains() -> list[dict]:
         try:
             data = json.loads(def_file.read_text())
             domain_id = data.get("id", "unknown")
-            # Store the directory that contains domain_def.json so we can pass
-            # it directly to: mxl-info -d <directory>
             found.append({"id": domain_id, "path": str(def_file.parent)})
         except Exception as exc:
             log.warning("Could not parse %s: %s", def_file, exc)
@@ -71,39 +77,64 @@ def _scan_domains() -> list[dict]:
 def _parse_scan_output(stdout: str) -> list[dict]:
     """Parse mxl-info -d output into a list of flow dicts.
 
-    Actual output format:
-        <Group Name>: <mxl-url>
-            <Format> : <UUID> - <Label>
-            ...
+    Output format (non-terminal):
+        <GroupName>: mxl:///<domain>?id=<uuid>...
+            <RoleInGroup> : <UUID> - <Label>
+
+    When the flow has no grouphint group name the header reads:
+        Invalid group name (empty string): mxl://...
+
+    When the flow has no grouphint role the role column reads "MISSING ROLE".
     """
     flows: list[dict] = []
     current_group = ""
     for line in stdout.splitlines():
         if not line.strip():
             continue
-        if line.startswith("\t") or line.startswith("  "):
-            # Flow line: "\tVideo : uuid - Label"
-            m = re.match(r'^\s*(\w+)\s*:\s*([0-9a-f-]+)\s*-\s*(.+)$', line)
+        if line[0] in ("\t", " "):
+            # Flow line: "\t<role> : <uuid> - <label>"
+            # role may be "MISSING ROLE" or a format string like "Video"
+            m = re.match(
+                r'^\s+(.+?)\s*:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*-\s*(.+)$',
+                line,
+                re.IGNORECASE,
+            )
             if m:
-                fmt       = m.group(1).strip()
-                uuid      = m.group(2).strip()
-                label     = m.group(3).strip()
-                grouphint = f"{current_group}:{fmt}" if current_group else fmt
+                role  = m.group(1).strip()
+                uuid  = m.group(2).strip()
+                label = m.group(3).strip()
+                # Treat "MISSING ROLE" as an absent role
+                if role.upper() == "MISSING ROLE":
+                    role = ""
+                if current_group and role:
+                    grouphint = f"{current_group}:{role}"
+                else:
+                    grouphint = current_group or role
                 flows.append({
                     "flow_uuid":      uuid,
                     "flow_label":     label,
                     "flow_grouphint": grouphint,
                 })
         else:
-            # Group header: "Media Function 1: mxl://..."
-            m = re.match(r'^([^:]+):', line)
-            if m:
-                current_group = m.group(1).strip()
+            # Group header line: "<GroupName>: mxl://..."
+            # Detect the special "invalid/empty group" marker
+            if line.strip().startswith("Invalid group name"):
+                current_group = ""
+            else:
+                m = re.match(r'^([^:]+):', line)
+                if m:
+                    current_group = m.group(1).strip()
     return flows
 
 
 def _parse_flow_info_output(stdout: str, flow_uuid: str) -> dict:
-    """Parse mxl-info -d … -f … output into a structured dict."""
+    """Parse mxl-info -d … -f … output into a structured dict.
+
+    Output format:
+        - Flow [<uuid>]
+            <Key padded>: <value>
+            ...
+    """
     fields: dict[str, str] = {}
     for line in stdout.splitlines():
         line = line.strip()
@@ -113,6 +144,28 @@ def _parse_flow_info_output(stdout: str, flow_uuid: str) -> dict:
             key, _, val = line.partition(":")
             fields[key.strip()] = val.strip()
     return {"flow_uuid": flow_uuid, "fields": fields}
+
+
+def _scan_domain_path(domain_path: str) -> list[dict]:
+    """Run mxl-info -d and return parsed flows (shared by two endpoints)."""
+    try:
+        result = subprocess.run(
+            [MXL_INFO_BIN, "-d", domain_path],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail=f"mxl-info binary not found at {MXL_INFO_BIN}")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="mxl-info scan timed out")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if result.returncode != 0:
+        log.warning("mxl-info stderr: %s", result.stderr.strip())
+
+    return _parse_scan_output(result.stdout)
 
 
 # ── Startup ────────────────────────────────────────────────────────────────────
@@ -140,26 +193,11 @@ async def api_domains() -> list[dict]:
 
 
 @app.get("/scan-domain")
-async def api_scan_domain(domain_path: str = Query(..., description="Absolute path to the MXL domain directory")) -> list[dict]:
+async def api_scan_domain(
+    domain_path: str = Query(..., description="Absolute path to the MXL domain directory"),
+) -> list[dict]:
     """Run mxl-info -d <domain_path> and return the list of MXL flows."""
-    try:
-        result = subprocess.run(
-            [MXL_INFO_BIN, "-d", domain_path],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail=f"mxl-info binary not found at {MXL_INFO_BIN}")
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=504, detail="mxl-info scan timed out")
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-    if result.returncode != 0:
-        log.warning("mxl-info scan-domain stderr: %s", result.stderr.strip())
-
-    return _parse_scan_output(result.stdout)
+    return _scan_domain_path(domain_path)
 
 
 @app.get("/flow-info")
@@ -186,3 +224,64 @@ async def api_flow_info(
         log.warning("mxl-info flow-info stderr: %s", result.stderr.strip())
 
     return _parse_flow_info_output(result.stdout, flow_uuid)
+
+
+@app.get("/orphan-flows")
+async def api_orphan_flows(
+    domain_path: str = Query(..., description="Absolute path to the MXL domain directory"),
+) -> list[dict]:
+    """Return .mxl-flow directories in domain_path that mxl-info -d does not report.
+
+    These are flows whose on-disk directories exist but whose flow definition
+    cannot be read by the MXL library (e.g. inactive, corrupt, or leftover
+    from a previous session).
+    """
+    domain = Path(domain_path)
+    if not domain.is_dir():
+        raise HTTPException(status_code=404, detail="Domain path not found")
+
+    # Collect UUIDs known to mxl-info
+    known_flows = _scan_domain_path(domain_path)
+    known_uuids = {f["flow_uuid"].lower() for f in known_flows}
+
+    orphans: list[dict] = []
+    for entry in sorted(domain.iterdir()):
+        if not (entry.is_dir() and entry.suffix == ".mxl-flow"):
+            continue
+        uuid_str = entry.stem
+        if not _UUID_RE.fullmatch(uuid_str):
+            continue
+        if uuid_str.lower() in known_uuids:
+            continue
+
+        # Attempt to read flow_def.json for basic metadata
+        label       = ""
+        grouphint   = ""
+        description = ""
+        flow_def_path = entry / "flow_def.json"
+        if flow_def_path.exists():
+            try:
+                flow_def = json.loads(flow_def_path.read_text())
+                label       = flow_def.get("label", "")
+                description = flow_def.get("description", "")
+                tags        = flow_def.get("tags", {})
+                gh_array    = tags.get("urn:x-nmos:tag:grouphint/v1.0", [])
+                if gh_array:
+                    grouphint = gh_array[0]
+            except Exception as exc:
+                log.warning("Could not parse flow_def.json for %s: %s", uuid_str, exc)
+
+        orphans.append({
+            "flow_uuid":      uuid_str,
+            "flow_label":     label,
+            "flow_grouphint": grouphint,
+            "description":    description,
+            "directory":      str(entry),
+        })
+
+    log.info("Orphan flow scan in %s found %d orphan(s)", domain_path, len(orphans))
+    return orphans
+
+
+# ── Static frontend (must be last — catches everything not matched above) ──────
+app.mount("/", StaticFiles(directory="/app/frontend/dist", html=True), name="static")

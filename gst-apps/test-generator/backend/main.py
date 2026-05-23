@@ -1,6 +1,6 @@
 """
 FastAPI backend for the MXL Test Generator.
-API on port 9600. Static frontend served separately on port 9700.
+Serves both the REST API and the React frontend on port 9600.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from backend.gst_generator import GstGenerator
@@ -198,3 +199,7 @@ def audio2_level_set(req: LevelReq):
 @app.get("/audio/flow2/level")
 def audio2_level_get():
     return {"level_db": generator.get_audio_level(2)}
+
+
+# ── Static frontend (must be last — catches everything not matched above) ──────
+app.mount("/", StaticFiles(directory="/app/frontend/dist", html=True), name="static")

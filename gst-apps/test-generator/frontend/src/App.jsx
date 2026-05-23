@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 
-const API = `http://${window.location.hostname}:9600`;
+const API = "";
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 

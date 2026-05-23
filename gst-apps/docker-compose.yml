@@ -17,10 +17,30 @@ services:
       context: ..
       dockerfile: gst-apps/test-generator/Dockerfile
     image: test-generator:latest
+    container_name: test-generator
+    hostname: test-generator
+    domainname: local
     ports:
-      - "9600:9600"
-      - "9700:9700"
+      - "9600:9600"   # FastAPI serves both API and React frontend
     volumes:
       - type: volume
         source: mxl-domain
         target: /mxl-domain
+
+  mxl-info-gui:
+      platform: linux/amd64
+      build:
+        context: ..
+        dockerfile: gst-apps/mxl-info-gui/Dockerfile
+      image: mxl-info-gui:latest
+      container_name: mxl-info-gui
+      hostname: mxl-info-gui
+      domainname: local
+      ports:
+      - "9699:9600"   # FastAPI serves both API and React frontend
+      volumes:
+        - type: volume
+          source: mxl-domain
+          target: /mxl-domain
+      environment:
+      - MXL_DOMAIN=/mxl-domain
