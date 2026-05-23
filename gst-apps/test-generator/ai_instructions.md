@@ -107,6 +107,7 @@ This section is enabled only once the pipeline is running (greyed-out and non-in
 
 **Step 3: React + Vite Frontend**
 - Initialize a React + Vite project.
+- **Header branding:** At the very top of the page, display the CBC Radio-Canada logo (`gst-apps/logo/rgb_cbc-radio-canada-col-coul.png`) inline beside the "MXL Test Generator" h1 title. Copy the logo into `frontend/public/cbc-logo.png` so Vite serves it as a static asset; reference it in JSX as `<img src="/cbc-logo.png" />` with `height: 2.2rem`. The logo and title must share a flex row (`display: flex; align-items: center; gap: 1rem`).
 - Structure the UI into two clearly labelled sections:
   - **Setup section** (always visible, disabled while running): MXL domain dropdown, resolution dropdown, frame rate dropdown, shared grouphint input, a three-row flow configuration table (Video / Audio Flow 1 / Audio Flow 2) each with an active checkbox, description, and label inputs, and a Start/Stop button. The Start button is disabled until a domain is selected and all active flows have non-empty description and label values.
   - **Operation section** (greyed-out and non-interactive until the pipeline is running): a Video panel (test pattern dropdown, timecode checkbox, ident text input with Apply button) and two independent Audio panels (test pattern dropdown, channel count numeric input, audio level fader with dBFS readout).

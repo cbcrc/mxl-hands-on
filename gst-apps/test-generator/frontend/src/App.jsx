@@ -402,10 +402,13 @@ export default function App() {
     <div style={{ maxWidth: "800px", width: "100%", margin: "0 auto" }}>
       {/* Header */}
       <div style={{ marginBottom: "1.5rem" }}>
-        <h1 style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>
-          MXL Test Generator
-          <span style={badge(running)}>{running ? "● RUNNING" : "○ STOPPED"}</span>
-        </h1>
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+          <img src="/cbc-logo.png" alt="CBC Radio-Canada" style={{ height: "2.2rem", objectFit: "contain" }} />
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>
+            MXL Test Generator
+            <span style={badge(running)}>{running ? "● RUNNING" : "○ STOPPED"}</span>
+          </h1>
+        </div>
         {running && status?.flow_uuids && (
           <p style={{ color: "#555", fontSize: "0.75rem", marginTop: "0.4rem", fontFamily: "monospace" }}>
             {Object.entries(status.flow_uuids).map(([k, v]) => `${k}: ${v}`).join(" · ")}
