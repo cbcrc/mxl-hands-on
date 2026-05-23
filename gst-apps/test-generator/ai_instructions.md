@@ -35,7 +35,7 @@ This section is used to configure the MXL flows before starting the GStreamer pi
    - **Active checkbox** — tick to include the flow in the pipeline. All three are active by default.
    - **Channels** — numeric input (1–64) for audio flows only (Video row shows "—"). Default: `2`. Channel count is fixed for the lifetime of the pipeline; changing it requires a Stop + Start.
    - **Description** — text input unique to each flow. Defaults: `video-out-1`, `audio-out-1`, `audio-out-2`.
-   - **Label** — text input unique to each flow. Defaults: `video-test-pattern`, `audio-test-pattern`, `audio-test-pattern`.
+   - **Label** — text input unique to each flow. Defaults: `video-test-pattern`, `audio-test-pattern-1`, `audio-test-pattern-2`.
    - Description and Label are mandatory fields; the Start button is disabled until all active flows have non-empty values.
 6. **Start / Stop button** — starts the GStreamer pipeline with the configured flow metadata when clicked. Changes to a **Stop** button once the pipeline is running. Only active flows are included in the pipeline.
 

@@ -217,8 +217,8 @@ function AudioPanel({ flowNum, audioPatterns, status, disabled }) {
 
 const DEFAULT_FLOWS = {
   video:  { active: true, description: "video-out-1",  label: "video-test-pattern"  },
-  audio1: { active: true, description: "audio-out-1",  label: "audio-test-pattern", channels: 2 },
-  audio2: { active: true, description: "audio-out-2",  label: "audio-test-pattern", channels: 2 },
+  audio1: { active: true, description: "audio-out-1",  label: "audio-test-pattern-1", channels: 2 },
+  audio2: { active: true, description: "audio-out-2",  label: "audio-test-pattern-2", channels: 2 },
 };
 
 export default function App() {
