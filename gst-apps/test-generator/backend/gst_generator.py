@@ -8,7 +8,9 @@ Pipeline (user-controlled start/stop):
   Audio 2: audiotestsrc → audioconvert → capsfilter(F32LE,Nch,48k) → queue → mxlsink
 
 Live-adjustable: video pattern, timecode, ident, audio pattern, audio level.
-Channel-count changes trigger a full pipeline rebuild with fresh UUIDs.
+Flow UUIDs are deterministic (UUID v5) derived from the group hint — restarting
+the pipeline with the same group hint reuses the same UUIDs, while changing
+the group hint produces a different set.
 """
 
 from __future__ import annotations
@@ -29,6 +31,10 @@ from gi.repository import GLib, Gst
 
 Gst.init(None)
 log = logging.getLogger(__name__)
+
+# Fixed namespace for UUID v5 derivation.  Changing this constant would
+# invalidate all previously written flow directories, so treat it as immutable.
+_MXL_TGEN_NS = uuid.UUID("7a4b2c1d-e5f6-4a7b-8c9d-0e1f2a3b4c5d")
 
 
 VIDEO_PATTERNS: dict[str, int] = {
@@ -251,13 +257,14 @@ class GstGenerator:
     # ── Pipeline ──────────────────────────────────────────────────────────────
 
     def _generate_uuids(self, config: dict) -> dict[str, str]:
+        grouphint = config.get("grouphint", "Test-Generator")
         uuids: dict[str, str] = {}
         if config.get("video", {}).get("active"):
-            uuids["video"] = str(uuid.uuid4())
+            uuids["video"]  = str(uuid.uuid5(_MXL_TGEN_NS, f"{grouphint}:video"))
         if config.get("audio1", {}).get("active"):
-            uuids["audio1"] = str(uuid.uuid4())
+            uuids["audio1"] = str(uuid.uuid5(_MXL_TGEN_NS, f"{grouphint}:audio1"))
         if config.get("audio2", {}).get("active"):
-            uuids["audio2"] = str(uuid.uuid4())
+            uuids["audio2"] = str(uuid.uuid5(_MXL_TGEN_NS, f"{grouphint}:audio2"))
         return uuids
 
     def _teardown_pipeline(self) -> None:
