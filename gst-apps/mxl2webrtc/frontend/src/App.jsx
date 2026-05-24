@@ -238,7 +238,13 @@ export default function App() {
   useEffect(() => {
     fetch(`${API}/config`)
       .then(r => r.json())
-      .then(d => setMediamtxUrl(d.mediamtx_webrtc_url))
+      .then(d => {
+        // Use the port from the configured URL but always substitute the
+        // browser's own hostname.  This makes the WHEP URL work whether the
+        // user opens the app on localhost or from a remote machine.
+        const cfg = new URL(d.mediamtx_webrtc_url);
+        setMediamtxUrl(`${cfg.protocol}//${window.location.hostname}:${cfg.port || "8889"}`);
+      })
       .catch(() => {});
     fetch(`${API}/domains`)
       .then(r => r.json())
