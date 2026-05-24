@@ -1,0 +1,26 @@
+# macOS Docker Desktop override.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.mac.yml up
+#
+# On macOS, network_mode: host makes mediamtx share the Docker Desktop Linux
+# VM's network — not the Mac host.  Port 8889 is therefore never forwarded to
+# the Mac, so other containers get "Connection refused" when they try to reach
+# host.docker.internal:8889.
+#
+# This override switches mediamtx to bridge networking with explicit port
+# publishing.  Docker Desktop's userspace proxy then listens on all host
+# interfaces (including the docker0 gateway that extra_hosts maps to
+# host.docker.internal), so mxl2webrtc can reach mediamtx without any URL
+# changes, and the browser can reach it via localhost:8889 as usual.
+#
+# Note: with bridge networking mediamtx generates ICE candidates using its
+# container IP.  If browser WebRTC playback fails (video/audio does not
+# appear), add a mediamtx.yml with webrtcAdditionalHosts set to your Mac's
+# LAN IP and mount it into the mediamtx service.
+
+services:
+  mediamtx:
+    network_mode: bridge   # replaces host; allows port publishing via Docker Desktop
+    ports:
+      - "8554:8554"        # RTSP
+      - "8889:8889"        # WebRTC HTTP (WHIP / WHEP)
+      - "8189:8189/udp"    # WebRTC ICE media
