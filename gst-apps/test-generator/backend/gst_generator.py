@@ -431,9 +431,13 @@ class GstGenerator:
             try:
                 with open(path) as f:
                     data = json.load(f)
-                data["grouphint"]   = grouphint
+                role = "Video" if key == "video" else "Audio"
+                full_grouphint = f"{grouphint}:{role}"
+                data["grouphint"]   = full_grouphint
                 data["description"] = flow_cfg.get("description", "")
                 data["label"]       = flow_cfg.get("label", "")
+                if isinstance(data.get("tags"), dict):
+                    data["tags"]["urn:x-nmos:tag:grouphint/v1.0"] = [full_grouphint]
                 with open(path, "w") as f:
                     json.dump(data, f, indent=2)
                 log.info("Patched flow_def.json: %s (%s)", key, flow_uuid)
