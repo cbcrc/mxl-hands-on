@@ -2,344 +2,448 @@
 // SPDX-License-Identifier: Apache-2.0
 import React, { useState, useEffect, useCallback, useRef } from "react";
 
-const API = `http://${window.location.hostname}:9650`;
-const WS_URL = `ws://${window.location.hostname}:8443`;
+const API = "";
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
-const sectionStyle = {
-  background: "#1c1c1c",
-  borderRadius: "8px",
-  padding: "1.5rem",
-  marginBottom: "1rem",
+const S = {
+  card: {
+    background: "#1c1c1c",
+    borderRadius: "8px",
+    padding: "1.25rem 1.5rem",
+    marginBottom: "1rem",
+  },
+  sectionTitle: {
+    fontSize: "0.7rem",
+    fontWeight: 700,
+    letterSpacing: "0.12em",
+    color: "#666",
+    textTransform: "uppercase",
+    marginBottom: "0.75rem",
+  },
+  label: {
+    display: "block",
+    marginBottom: "0.3rem",
+    color: "#aaa",
+    fontSize: "0.82rem",
+  },
+  select: {
+    width: "100%",
+    padding: "0.45rem 0.6rem",
+    background: "#2a2a2a",
+    color: "#fff",
+    border: "1px solid #444",
+    borderRadius: "4px",
+    fontSize: "0.95rem",
+    boxSizing: "border-box",
+  },
+  row: { display: "flex", gap: "0.75rem", alignItems: "flex-end" },
+  col: { flex: 1 },
 };
 
-const labelStyle = {
-  display: "block",
-  marginBottom: "0.6rem",
-  color: "#aaa",
-  fontSize: "0.85rem",
-  textTransform: "uppercase",
-  letterSpacing: "0.05em",
-};
-
-const stateBadge = (state) => ({
-  display: "inline-block",
-  padding: "0.25rem 0.75rem",
-  borderRadius: "20px",
-  background: state === "playing" ? "#1a5c2a" : state === "error" ? "#5c1a1a" : "#3a3a3a",
-  color: state === "playing" ? "#4caf50" : state === "error" ? "#f44336" : "#888",
-  fontSize: "0.8rem",
+const btn = (variant = "primary", disabled = false) => ({
+  padding: "0.5rem 1.25rem",
+  borderRadius: "4px",
+  border: "none",
+  cursor: disabled ? "not-allowed" : "pointer",
   fontWeight: 600,
-  marginLeft: "1rem",
+  fontSize: "0.95rem",
+  opacity: disabled ? 0.45 : 1,
+  background:
+    variant === "danger"  ? "#8b1a1a" :
+    variant === "success" ? "#0d7c3e" :
+    "#2a5caa",
+  color: "#fff",
 });
 
-const connDot = (connected) => ({
+const badge = (running) => ({
+  display: "inline-block",
+  padding: "0.2rem 0.65rem",
+  borderRadius: "20px",
+  background: running ? "#1a5c2a" : "#3a3a3a",
+  color:      running ? "#4caf50" : "#888",
+  fontSize: "0.75rem",
+  fontWeight: 700,
+  marginLeft: "0.75rem",
+  verticalAlign: "middle",
+});
+
+const connDot = (active) => ({
   display: "inline-block",
   width: "10px",
   height: "10px",
   borderRadius: "50%",
-  background: connected ? "#4caf50" : "#444",
+  background: active ? "#4caf50" : "#444",
   marginRight: "8px",
   flexShrink: 0,
 });
 
-// ── WebRTC player hook ────────────────────────────────────────────────────────
+const disabledOverlay = (disabled) => disabled ? { opacity: 0.4, pointerEvents: "none" } : {};
 
-/**
- * Connects to the webrtcsink embedded signaling server (gst-plugins-rs v1.1 protocol)
- * and returns a ref to attach to a <video> element.
- *
- * Protocol (gst-plugins-rs webrtcsink built-in signaller, v1.1):
- * 1. Connect to ws://<hostname>:8443
- * 2. Send: {"type":"setProtocolVersion","version":"v1_1"}
- * 3. Send: {"type":"setPeerStatus","roles":["consumer"],"meta":null,"peerId":"<client_id>"}
- * 4. Send: {"type":"list"} to discover registered producers
- * 5. Receive: {"type":"list","producers":[{"id":"<producer_id>","meta":...}]}
- *    OR Receive: {"type":"newPeer","peerId":"<producer_id>","roles":["producer"]}
- * 6. Send: {"type":"startSession","peerId":"<producer_id>"}
- * 7. Receive: {"type":"sessionStarted","peerId":"...","sessionId":"<session_id>"}
- * 8. Receive: {"type":"peer","sessionId":"...","sdp":{"type":"offer","sdp":"..."}}
- * 9. setRemoteDescription(offer), createAnswer, setLocalDescription(answer)
- * 10. Send:  {"type":"peer","sessionId":"...","sdp":<answer>}
- * 11. ICE:   {"type":"peer","sessionId":"...","ice":{...}} (bidirectional)
- * 12. On track: attach to video element
- */
-function useWebRtcPlayer(pipelinePlaying) {
+// ── Flow option helpers ───────────────────────────────────────────────────────
+
+function flowOptionLabel(f) {
+  const prefix = f.flow_uuid.slice(0, 8);
+  const desc   = f.description || "";
+  const label  = f.flow_label  || "";
+  const gh     = f.flow_grouphint || "";
+  return `(${prefix}…) ${desc || label}${desc && label && desc !== label ? ` — ${label}` : ""} [${gh}]`;
+}
+
+function flowRole(f) {
+  const parts = (f.flow_grouphint || "").split(":");
+  return parts.length > 1 ? parts.slice(1).join(":").trim().toLowerCase() : "";
+}
+
+const isVideoFlow = (f) => flowRole(f).includes("video");
+const isAudioFlow = (f) => flowRole(f).includes("audio");
+
+// ── WHEP player hook ──────────────────────────────────────────────────────────
+
+function useWhepPlayer(pipelinePlaying, mediamtxUrl) {
   const videoRef = useRef(null);
-  const [playerState, setPlayerState] = useState("idle"); // idle / connecting / playing / error
+  const pcRef    = useRef(null);
+  const [playerState, setPlayerState] = useState("idle");
   const [playerError, setPlayerError] = useState(null);
-  const [muted, setMuted] = useState(true); // start muted to guarantee autoplay
-  const wsRef  = useRef(null);
-  const pcRef  = useRef(null);
-  const sessionIdRef = useRef(null);
-  const producerIdRef = useRef(null);
 
   const cleanup = useCallback(() => {
     if (pcRef.current) {
+      pcRef.current.ontrack = null;
       pcRef.current.onconnectionstatechange = null;
       pcRef.current.close();
       pcRef.current = null;
     }
-    if (wsRef.current) {
-      wsRef.current.onclose = null;
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    sessionIdRef.current = null;
-    producerIdRef.current = null;
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
+    if (videoRef.current) videoRef.current.srcObject = null;
   }, []);
 
-  const connect = useCallback(() => {
-    cleanup();
+  useEffect(() => {
+    if (!pipelinePlaying || !mediamtxUrl) {
+      cleanup();
+      setPlayerState("idle");
+      setPlayerError(null);
+      return;
+    }
+
+    let cancelled = false;
     setPlayerState("connecting");
     setPlayerError(null);
 
-    const clientId = ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
-      (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
+    const whepUrl = `${mediamtxUrl}/mxl2webrtc/whep`;
 
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
-
-    const startSessionWith = (producerId) => {
-      if (producerIdRef.current) return; // already started
-      producerIdRef.current = producerId;
-      ws.send(JSON.stringify({ type: "startSession", peerId: producerId }));
-    };
-
-    const resetForNewProducer = () => {
-      // Pipeline rebuilt — close old PC, clear refs, wait for newPeer message
-      if (pcRef.current) {
-        pcRef.current.onconnectionstatechange = null;
-        pcRef.current.close();
-        pcRef.current = null;
-      }
-      if (videoRef.current) videoRef.current.srcObject = null;
-      sessionIdRef.current = null;
-      producerIdRef.current = null; // allow next newPeer to start a new session
-      setPlayerState("connecting");
-    };
-
-    ws.onopen = () => {
-      console.log("[WS] open — waiting for welcome");
-      // Do NOT register here. Wait for server's welcome message which
-      // carries the authoritative peerId. Registering before welcome
-      // causes a double-registration race that can corrupt the session.
-    };
-
-    ws.onmessage = async (event) => {
-      let msg;
-      try { msg = JSON.parse(event.data); } catch { return; }
-      console.log("[WS] rx", msg.type, msg);
-
-      // Server sends welcome with its assigned peerId — register with that ID only once
-      if (msg.type === "welcome") {
-        const peerId = msg.peerId || clientId;
-        console.log("[WS] welcome, registering as", peerId);
-        ws.send(JSON.stringify({ type: "setPeerStatus", roles: ["listener"], meta: null, peerId }));
-        ws.send(JSON.stringify({ type: "list" }));
-        return;
-      }
-
-      // Response to "list" – pick first available producer
-      if (msg.type === "list") {
-        const producers = msg.producers || [];
-        if (producers.length > 0) {
-          startSessionWith(producers[0].id || producers[0].peerId);
-        }
-        return;
-      }
-
-      // A producer came online (new pipeline built after input switch)
-      if (msg.type === "newPeer") {
-        startSessionWith(msg.peerId);
-        return;
-      }
-
-      // peerStatusChanged is also sent when a producer registers/unregisters.
-      // Handle the "producer came online" case here as well (server sends this
-      // instead of / in addition to newPeer depending on the protocol version).
-      if (msg.type === "peerStatusChanged") {
-        const roles = msg.roles || [];
-        if (roles.includes("producer") && msg.peerId) {
-          startSessionWith(msg.peerId);
-        }
-        return;
-      }
-
-      // Server tells us the session ended (producer pipeline torn down)
-      // Clear current session so the upcoming newPeer can start a fresh one
-      if (msg.type === "endSession") {
-        resetForNewProducer();
-        return;
-      }
-
-      if (msg.type === "sessionStarted") {
-        sessionIdRef.current = msg.sessionId;
-        return;
-      }
-
-      if (msg.type === "peer" && msg.sdp?.type === "offer") {
-        const sessionId = msg.sessionId ?? sessionIdRef.current;
-        sessionIdRef.current = sessionId;
-
-        // No external STUN — browser and container are on the same host (Docker bridge).
-        // External STUN causes mDNS .local candidates that the container can't resolve.
-        const pc = new RTCPeerConnection({ iceServers: [] });
-        pcRef.current = pc;
-
-        pc.ontrack = (e) => {
-          console.log("[PC] ontrack streams:", e.streams.length, "track:", e.track?.kind, e.track?.readyState);
-          if (videoRef.current && e.streams[0]) {
-            videoRef.current.srcObject = e.streams[0];
-            // Rely on the autoPlay HTML attribute — do NOT call play() here.
-            // Explicit play() from a WebRTC callback is always blocked by browser
-            // autoplay policy (no user gesture context). autoPlay attribute uses
-            // a more permissive code path on localhost.
-            setPlayerState("playing");
-          }
-        };
-
-        pc.onicecandidate = (e) => {
-          if (e.candidate && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-              type: "peer",
-              sessionId,
-              ice: e.candidate.toJSON(),
-            }));
-          }
-        };
-
-        pc.onconnectionstatechange = () => {
-          console.log("[PC] connectionState:", pc.connectionState);
-          if (pc.connectionState === "failed") {
-            setPlayerState("error");
-            setPlayerError("WebRTC connection failed");
-          } else if (pc.connectionState === "disconnected") {
-            setPlayerState("error");
-            setPlayerError("WebRTC connection disconnected");
-          }
-        };
-
-        await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-
-        ws.send(JSON.stringify({ type: "peer", sessionId, sdp: answer }));
-        return;
-      }
-
-      // ICE candidates from the producer
-      if (msg.type === "peer" && msg.ice && pcRef.current) {
+    const connect = async () => {
+      for (let i = 0; i < 12; i++) {
+        if (cancelled) return;
         try {
-          await pcRef.current.addIceCandidate(new RTCIceCandidate(msg.ice));
-        } catch (e) {
-          console.warn("addIceCandidate error:", e);
+          const pc = new RTCPeerConnection({ iceServers: [] });
+          pcRef.current = pc;
+
+          pc.addTransceiver("video", { direction: "recvonly" });
+          pc.addTransceiver("audio", { direction: "recvonly" });
+
+          pc.ontrack = (e) => {
+            if (cancelled) return;
+            if (videoRef.current && e.streams[0]) {
+              videoRef.current.srcObject = e.streams[0];
+              setPlayerState("playing");
+            }
+          };
+
+          pc.onconnectionstatechange = () => {
+            if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+              setPlayerState("error");
+              setPlayerError("WebRTC connection lost");
+            }
+          };
+
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+
+          // Wait for ICE gathering before sending the offer (avoids trickle ICE)
+          await new Promise((resolve) => {
+            if (pc.iceGatheringState === "complete") { resolve(); return; }
+            const t = setTimeout(resolve, 5000);
+            pc.onicegatheringstatechange = () => {
+              if (pc.iceGatheringState === "complete") { clearTimeout(t); resolve(); }
+            };
+          });
+
+          if (cancelled) { pc.close(); return; }
+
+          const resp = await fetch(whepUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/sdp" },
+            body: pc.localDescription.sdp,
+          });
+
+          if (!resp.ok) {
+            pc.close();
+            pcRef.current = null;
+            // 404 means MediaMTX has no publisher yet — retry
+            if (i < 11) { await new Promise(r => setTimeout(r, 2000)); continue; }
+            setPlayerState("error");
+            setPlayerError(`WHEP error ${resp.status}`);
+            return;
+          }
+
+          const answerSdp = await resp.text();
+          await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+          return; // success
+
+        } catch (err) {
+          if (pcRef.current) { pcRef.current.close(); pcRef.current = null; }
+          if (!cancelled && i < 11) { await new Promise(r => setTimeout(r, 2000)); continue; }
+          if (!cancelled) { setPlayerState("error"); setPlayerError(err.message); }
+          return;
         }
-        return;
       }
     };
 
-    ws.onerror = (e) => {
-      console.log("[WS] error", e);
-      setPlayerState("error");
-      setPlayerError("WebSocket connection failed");
-    };
-
-    ws.onclose = (e) => {
-      console.log("[WS] close code:", e.code, "reason:", e.reason, "clean:", e.wasClean);
-      setPlayerState((prev) => prev !== "idle" ? "idle" : prev);
-    };
-  }, [cleanup]);
-
-  useEffect(() => {
-    if (pipelinePlaying) {
-      // Small delay to let webrtcsink register with the signalling server
-      const t = setTimeout(connect, 1000);
-      return () => {
-        clearTimeout(t);
-        cleanup();
-        setPlayerState("idle");
-      };
-    } else {
+    // Give GStreamer a moment to announce to MediaMTX before the first WHEP attempt
+    const t = setTimeout(connect, 1500);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
       cleanup();
       setPlayerState("idle");
-    }
-  }, [pipelinePlaying, connect, cleanup]);
+    };
+  }, [pipelinePlaying, mediamtxUrl, cleanup]);
 
-  return { videoRef, playerState, playerError, muted, setMuted };
+  return { videoRef, playerState, playerError };
 }
 
-// ── App component ─────────────────────────────────────────────────────────────
+// ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [status, setStatus] = useState(null);
+  const [mediamtxUrl, setMediamtxUrl]       = useState(null);
+  const [domains, setDomains]               = useState([]);
+  const [selectedDomain, setSelectedDomain] = useState(null);
+  const [flows, setFlows]                   = useState([]);
+  const [flowsLoading, setFlowsLoading]     = useState(false);
+  const [videoFlowUuid, setVideoFlowUuid]   = useState("none");
+  const [audioFlowUuid, setAudioFlowUuid]   = useState("none");
+  const [status, setStatus]                 = useState(null);
+  const [starting, setStarting]             = useState(false);
 
-  const fetchStatus = useCallback(async () => {
-    try {
-      const r = await fetch(`${API}/status`);
-      const d = await r.json();
-      setStatus(d);
-    } catch {}
+  const running = status?.running === true;
+
+  // Fetch config + cached domains on mount
+  useEffect(() => {
+    fetch(`${API}/config`)
+      .then(r => r.json())
+      .then(d => setMediamtxUrl(d.mediamtx_webrtc_url))
+      .catch(() => {});
+    fetch(`${API}/domains`)
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d)) setDomains(d); })
+      .catch(() => {});
   }, []);
 
+  // Poll pipeline status every 2 s
   useEffect(() => {
-    fetchStatus();
-    const id = setInterval(fetchStatus, 2000);
+    const poll = () =>
+      fetch(`${API}/pipeline/status`).then(r => r.json()).then(setStatus).catch(() => {});
+    poll();
+    const id = setInterval(poll, 2000);
     return () => clearInterval(id);
-  }, [fetchStatus]);
+  }, []);
 
-  const pipelinePlaying = status?.state === "playing";
-  const { videoRef, playerState, playerError, muted, setMuted } = useWebRtcPlayer(pipelinePlaying);
+  // Load flows for selected domain
+  const loadFlows = useCallback((path) => {
+    if (!path) { setFlows([]); return; }
+    setFlowsLoading(true);
+    fetch(`${API}/scan-domain?domain_path=${encodeURIComponent(path)}`)
+      .then(r => r.json())
+      .then(d => setFlows(Array.isArray(d) ? d : []))
+      .catch(() => setFlows([]))
+      .finally(() => setFlowsLoading(false));
+  }, []);
 
-  const videoConnected = !!status?.video_flow_id;
-  const audioConnected = !!status?.audio_flow_id;
-  const pipelineState  = status?.state ?? "idle";
+  const handleDomainChange = (path) => {
+    setSelectedDomain(path || null);
+    setVideoFlowUuid("none");
+    setAudioFlowUuid("none");
+    loadFlows(path || null);
+  };
+
+  const rescanDomains = () =>
+    fetch(`${API}/get-domains`, { method: "POST" })
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d)) setDomains(d); })
+      .catch(() => {});
+
+  const refreshFlows = () => { if (selectedDomain) loadFlows(selectedDomain); };
+
+  const handleStart = async () => {
+    setStarting(true);
+    try {
+      const r = await fetch(`${API}/pipeline/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          domain_path:     selectedDomain,
+          video_flow_uuid: videoFlowUuid !== "none" ? videoFlowUuid : null,
+          audio_flow_uuid: audioFlowUuid !== "none" ? audioFlowUuid : null,
+        }),
+      });
+      setStatus(await r.json());
+    } catch {
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const handleStop = async () => {
+    await fetch(`${API}/pipeline/stop`, { method: "POST" }).catch(() => {});
+    fetch(`${API}/pipeline/status`).then(r => r.json()).then(setStatus).catch(() => {});
+  };
+
+  const videoFlows = flows.filter(isVideoFlow);
+  const audioFlows = flows.filter(isAudioFlow);
+  const canStart   = !running && !starting && !!selectedDomain && (videoFlowUuid !== "none" || audioFlowUuid !== "none");
+
+  const { videoRef, playerState, playerError } = useWhepPlayer(running, mediamtxUrl);
 
   return (
     <div>
       {/* Header */}
-      <div style={{ marginBottom: "1.5rem" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1.5rem" }}>
+        <img src="/cbc-logo.png" alt="CBC Radio-Canada" style={{ height: "2.2rem" }} />
         <h1 style={{ fontSize: "1.6rem", fontWeight: 700 }}>
-          MXL → WebRTC Gateway
-          <span style={stateBadge(pipelineState)}>
-            {pipelineState === "playing" ? "● PLAYING" : pipelineState === "error" ? "✕ ERROR" : "○ IDLE"}
+          MXL to WebRTC
+          <span style={badge(running)}>
+            {running ? "● RUNNING" : "○ STOPPED"}
           </span>
         </h1>
       </div>
 
-      {/* MXL connection status */}
-      <div style={sectionStyle}>
-        <span style={labelStyle}>MXL Connections</span>
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
-          <div style={{ display: "flex", alignItems: "center", fontSize: "0.85rem" }}>
-            <span style={connDot(videoConnected)} />
-            <span style={{ color: "#aaa", width: "60px" }}>Video</span>
-            <span style={{ fontFamily: "monospace", color: videoConnected ? "#ccc" : "#444" }}>
-              {status?.video_flow_id || "—"}
-            </span>
+      {/* ── Section 1: Setup ───────────────────────────────────────────── */}
+      <div style={S.card}>
+        <div style={S.sectionTitle}>1 — Setup</div>
+
+        <div style={disabledOverlay(running)}>
+          {/* Domain row */}
+          <div style={{ ...S.row, marginBottom: "0.75rem" }}>
+            <div style={S.col}>
+              <label style={S.label}>MXL Domain</label>
+              <select
+                style={S.select}
+                value={selectedDomain || ""}
+                onChange={e => handleDomainChange(e.target.value)}
+                disabled={running}
+              >
+                <option value="">— select a domain —</option>
+                {domains.map(d => (
+                  <option key={d.path} value={d.path}>
+                    {d.path}  ({(d.id || "").slice(0, 8)}…)
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{ ...S.label, visibility: "hidden" }}>.</label>
+              <button style={btn("primary", running)} onClick={rescanDomains} disabled={running}>
+                Scan Domains
+              </button>
+            </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", fontSize: "0.85rem" }}>
-            <span style={connDot(audioConnected)} />
-            <span style={{ color: "#aaa", width: "60px" }}>Audio</span>
-            <span style={{ fontFamily: "monospace", color: audioConnected ? "#ccc" : "#444" }}>
-              {status?.audio_flow_id || "—"}
-            </span>
+
+          {/* Flow selectors row */}
+          <div style={{ ...S.row, marginBottom: "0.75rem" }}>
+            <div style={S.col}>
+              <label style={S.label}>
+                Video Flow
+                {flowsLoading && <span style={{ color: "#555", marginLeft: "0.4rem" }}>(loading…)</span>}
+              </label>
+              <select
+                style={S.select}
+                value={videoFlowUuid}
+                onChange={e => setVideoFlowUuid(e.target.value)}
+                disabled={running || !selectedDomain}
+              >
+                <option value="none">None — video disabled</option>
+                {videoFlows.map(f => (
+                  <option key={f.flow_uuid} value={f.flow_uuid}>{flowOptionLabel(f)}</option>
+                ))}
+              </select>
+            </div>
+            <div style={S.col}>
+              <label style={S.label}>
+                Audio Flow
+                {flowsLoading && <span style={{ color: "#555", marginLeft: "0.4rem" }}>(loading…)</span>}
+              </label>
+              <select
+                style={S.select}
+                value={audioFlowUuid}
+                onChange={e => setAudioFlowUuid(e.target.value)}
+                disabled={running || !selectedDomain}
+              >
+                <option value="none">None — audio disabled</option>
+                {audioFlows.map(f => (
+                  <option key={f.flow_uuid} value={f.flow_uuid}>{flowOptionLabel(f)}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={{ ...S.label, visibility: "hidden" }}>.</label>
+              <button
+                style={btn("primary", running || !selectedDomain)}
+                onClick={refreshFlows}
+                disabled={running || !selectedDomain}
+              >
+                Refresh Flows
+              </button>
+            </div>
           </div>
         </div>
-        {!videoConnected && !audioConnected && (
-          <p style={{ color: "#555", fontSize: "0.75rem", marginTop: "0.75rem" }}>
-            Waiting for NMOS IS-05 activation on video and audio receivers…
-          </p>
-        )}
+
+        {/* Start / Stop button — outside disabled overlay so it always works */}
+        <div style={{ marginTop: "0.5rem" }}>
+          {!running ? (
+            <button style={btn("success", !canStart)} onClick={handleStart} disabled={!canStart}>
+              {starting ? "Starting…" : "Start"}
+            </button>
+          ) : (
+            <button style={btn("danger")} onClick={handleStop}>Stop</button>
+          )}
+        </div>
       </div>
 
-      {/* WebRTC player */}
-      <div style={sectionStyle}>
-        <span style={labelStyle}>WebRTC Player</span>
+      {/* ── Section 2: Operation ───────────────────────────────────────── */}
+      <div style={{ ...S.card, ...disabledOverlay(!running) }}>
+        <div style={S.sectionTitle}>2 — Operation</div>
+
+        {/* MXL input status */}
+        <div style={{ marginBottom: "1rem" }}>
+          <div style={{ ...S.label, marginBottom: "0.4rem" }}>MXL Input</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+            <div style={{ display: "flex", alignItems: "center", fontSize: "0.85rem" }}>
+              <span style={connDot(!!status?.video_flow_uuid)} />
+              <span style={{ color: "#aaa", width: "52px" }}>Video</span>
+              <span style={{ fontFamily: "monospace", color: status?.video_flow_uuid ? "#ccc" : "#555" }}>
+                {status?.video_flow_uuid || "—"}
+              </span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", fontSize: "0.85rem" }}>
+              <span style={connDot(!!status?.audio_flow_uuid)} />
+              <span style={{ color: "#aaa", width: "52px" }}>Audio</span>
+              <span style={{ fontFamily: "monospace", color: status?.audio_flow_uuid ? "#ccc" : "#555" }}>
+                {status?.audio_flow_uuid || "—"}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* WebRTC player */}
+        <div style={{ ...S.label, marginBottom: "0.5rem" }}>
+          WebRTC Player
+          {playerState === "playing" && (
+            <span style={{ ...badge(true), fontSize: "0.7rem" }}>● LIVE</span>
+          )}
+          {playerState === "connecting" && (
+            <span style={{ color: "#888", fontSize: "0.75rem", marginLeft: "0.75rem" }}>connecting…</span>
+          )}
+        </div>
+
         <div style={{
           position: "relative",
           background: "#0a0a0a",
@@ -354,68 +458,35 @@ export default function App() {
             ref={videoRef}
             autoPlay
             playsInline
-            muted={muted}
-            style={{
-              position: "absolute",
-              top: 0, left: 0,
-              width: "100%",
-              height: "100%",
-              objectFit: "contain",
-            }}
+            muted
+            style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", objectFit: "contain" }}
           />
           {playerState !== "playing" && (
             <div style={{
-              position: "absolute",
-              top: 0, left: 0, right: 0, bottom: 0,
+              position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
               background: "#0a0a0a",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: "#555",
-              fontSize: "0.9rem",
-              textAlign: "center",
-              padding: "2rem",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              color: "#555", fontSize: "0.9rem", textAlign: "center", padding: "2rem",
             }}>
-              {!pipelinePlaying
-                ? "Waiting for stream…"
+              {!running
+                ? "Start the pipeline to view the stream"
                 : playerState === "connecting"
-                ? "Connecting to WebRTC…"
+                ? "Connecting to MediaMTX…"
                 : playerState === "error"
-                ? `Error: ${playerError}`
+                ? `Player error: ${playerError}`
                 : "Waiting for stream…"}
             </div>
           )}
-          {playerState === "playing" && muted && (
-            <button
-              onClick={() => setMuted(false)}
-              style={{
-                position: "absolute",
-                bottom: "12px", right: "12px",
-                background: "rgba(0,0,0,0.6)",
-                border: "1px solid #555",
-                borderRadius: "6px",
-                color: "#fff",
-                padding: "0.4rem 0.8rem",
-                cursor: "pointer",
-                fontSize: "0.8rem",
-              }}
-            >
-              🔇 Click to unmute
-            </button>
-          )}
         </div>
-        <p style={{ color: "#555", fontSize: "0.72rem", marginTop: "0.5rem" }}>
-          Signaling: ws://{window.location.hostname}:8443 · ICE ports: 50000–50020/UDP
+
+        <p style={{ color: "#444", fontSize: "0.72rem", marginTop: "0.4rem" }}>
+          Receiving via WHEP · {mediamtxUrl ?? "…"}/mxl2webrtc/whep
         </p>
       </div>
 
       {/* Error banner */}
       {status?.error && (
-        <div style={{
-          ...sectionStyle,
-          background: "#2a0a0a",
-          border: "1px solid #5c1a1a",
-        }}>
+        <div style={{ ...S.card, background: "#2a0a0a", border: "1px solid #5c1a1a" }}>
           <span style={{ color: "#f44336", fontSize: "0.85rem" }}>
             Pipeline error: {status.error}
           </span>

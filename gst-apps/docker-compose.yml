@@ -44,3 +44,38 @@ services:
           target: /mxl-domain
       environment:
       - MXL_DOMAIN=/mxl-domain
+
+  # MediaMTX must use host networking so WebRTC ICE candidates reflect the real
+  # host IP.  All ports (8554 RTSP, 8889 WebRTC) are bound directly on the host.
+  mediamtx:
+    platform: linux/amd64
+    image: bluenviron/mediamtx:latest
+    container_name: mediamtx
+    hostname: mediamtx
+    network_mode: host
+
+  mxl2webrtc:
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: gst-apps/mxl2webrtc/Dockerfile
+    image: mxl2webrtc:latest
+    container_name: mxl2webrtc
+    hostname: mxl2webrtc
+    domainname: local
+    ports:
+      - "9601:9600"   # FastAPI serves both API and React frontend; change host port freely
+    volumes:
+      - type: volume
+        source: mxl-domain
+        target: /mxl-domain
+    environment:
+      - MXL_DOMAIN=/mxl-domain
+      # host.docker.internal resolves to the Docker bridge gateway on Linux when
+      # extra_hosts is set; mediamtx binds directly on the host via network_mode: host
+      - MEDIAMTX_WHIP_URL=http://host.docker.internal:8889/mxl2webrtc/whip
+      - MEDIAMTX_WEBRTC_URL=http://localhost:8889
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - mediamtx

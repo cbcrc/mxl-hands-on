@@ -3,250 +3,376 @@
 """
 GStreamer MXL-to-WebRTC pipeline.
 
-Architecture:
-  mxlsrc(video-flow-id)  → videoconvert → videoscale → video/x-raw,format=I420,1280x720 → queue → webrtcsink
-  mxlsrc(audio-flow-id)  → audioconvert → audioresample → audio/x-raw,format=S16LE,channels=2,rate=48000 → queue → webrtcsink
+Reads one MXL video flow and/or one MXL audio flow via mxlsrc, encodes them,
+and publishes to MediaMTX via WHIP using webrtcbin + a Python WHIP handshake.
+MediaMTX does a near-passthrough to WebRTC for the browser.
 
-webrtcsink is configured with:
-  - External signalling server at ws://127.0.0.1:8443/
-  - Default bitrate (congestion control disabled — rtpgccbwe unavailable)
+Supported modes (determined by which flow UUIDs are supplied):
+  video + audio  → mxlsrc(video) + mxlsrc(audio) → webrtcbin
+  video only     → mxlsrc(video) → webrtcbin
+  audio only     → mxlsrc(audio) → webrtcbin
 
-The pipeline is built/torn down when video/audio flow IDs change.
+WHIP handshake (triggered by webrtcbin's on-negotiation-needed signal):
+  1. on-offer-created  → set-local-description
+  2. on-ice-gathering-done → POST SDP offer to MEDIAMTX_WHIP_URL
+  3. set-remote-description with SDP answer (201 response body)
 """
 
 from __future__ import annotations
 
 import gc
-import json
 import logging
 import os
 import threading
-import time
+import urllib.error
+import urllib.request
 
 import gi
 
 gi.require_version("Gst", "1.0")
-from gi.repository import GLib, Gst
+gi.require_version("GstWebRTC", "1.0")
+gi.require_version("GstSdp", "1.0")
+from gi.repository import GLib, Gst, GstSdp, GstWebRTC
 
 Gst.init(None)
 log = logging.getLogger(__name__)
 
+MEDIAMTX_WHIP = os.environ.get("MEDIAMTX_WHIP_URL", "http://localhost:8889/mxl2webrtc/whip")
 
-class GstMxl2WebRtc:
+# ICE gathering timeout in seconds before sending the offer anyway
+_ICE_TIMEOUT = 10.0
+
+
+class GstReceiver:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._pipeline: Gst.Pipeline | None = None
-        self._mxl_domain = os.getenv("MXL_DOMAIN", "/mxl-domain")
-
-        self._video_flow_id: str | None = None
-        self._audio_flow_id: str | None = None
-        self._state: str = "idle"   # idle / playing / error
+        self._webrtcbin: Gst.Element | None = None
+        self._running = False
         self._error_msg: str | None = None
-        self._pipeline_gen: int = 0  # incremented on every rebuild; guards stale bus callbacks
-        self._start_retry_count: int = 0  # auto-retry counter; resets on successful PLAYING
+        self._video_flow_uuid: str | None = None
+        self._audio_flow_uuid: str | None = None
+        self._domain_path: str | None = None
 
         self._glib_loop = GLib.MainLoop()
         threading.Thread(target=self._glib_loop.run, daemon=True).start()
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def connect_video(self, flow_id: str) -> None:
+    def start(self, domain_path: str, video_flow_uuid: str | None, audio_flow_uuid: str | None) -> None:
         with self._lock:
-            log.info("connect_video: %s", flow_id)
-            self._video_flow_id = flow_id
-            self._rebuild_pipeline()
-
-    def connect_audio(self, flow_id: str) -> None:
-        with self._lock:
-            log.info("connect_audio: %s", flow_id)
-            self._audio_flow_id = flow_id
-            self._rebuild_pipeline()
-
-    def disconnect_video(self) -> None:
-        with self._lock:
-            log.info("disconnect_video")
             self._teardown()
-            self._video_flow_id = None
-            self._state = "idle"
+            self._domain_path = domain_path
+            self._video_flow_uuid = video_flow_uuid
+            self._audio_flow_uuid = audio_flow_uuid
+            self._error_msg = None
+            try:
+                self._build_pipeline()
+            except Exception as exc:
+                log.error("Failed to build pipeline: %s", exc)
+                self._error_msg = str(exc)
+                self._running = False
+                raise
 
-    def disconnect_audio(self) -> None:
+    def stop(self) -> None:
         with self._lock:
-            log.info("disconnect_audio")
             self._teardown()
-            self._audio_flow_id = None
-            self._state = "idle"
+            self._video_flow_uuid = None
+            self._audio_flow_uuid = None
+            self._domain_path = None
 
     def get_status(self) -> dict:
         with self._lock:
+            v = self._video_flow_uuid
+            a = self._audio_flow_uuid
+            if v and a:
+                mode = "video+audio"
+            elif v:
+                mode = "video"
+            elif a:
+                mode = "audio"
+            else:
+                mode = "stopped"
             return {
-                "state":            self._state,
-                "video_flow_id":    self._video_flow_id,
-                "audio_flow_id":    self._audio_flow_id,
+                "running":          self._running,
+                "video_flow_uuid":  v,
+                "audio_flow_uuid":  a,
+                "mode":             mode if self._running else "stopped",
                 "error":            self._error_msg,
-                "pipeline_version": self._pipeline_gen,
             }
 
-    # ── Pipeline ─────────────────────────────────────────────────────────────
+    # ── Pipeline construction ─────────────────────────────────────────────────
 
-    def _rebuild_pipeline(self) -> None:
-        """Tear down and rebuild if both flow IDs are set. Caller must hold lock."""
-        if not self._video_flow_id or not self._audio_flow_id:
-            log.info("Skipping rebuild: waiting for both video and audio flow IDs")
-            return
-        self._teardown()
+    def _build_pipeline(self) -> None:
+        v = self._video_flow_uuid
+        a = self._audio_flow_uuid
+        domain = self._domain_path
+
+        pipeline = Gst.Pipeline.new("mxl2webrtc")
+
+        webrtcbin = Gst.ElementFactory.make("webrtcbin", "webrtcbin")
+        if not webrtcbin:
+            raise RuntimeError("Could not create webrtcbin — is gstreamer1.0-plugins-bad installed?")
+        webrtcbin.set_property("bundle-policy", GstWebRTC.WebRTCBundlePolicy.MAX_BUNDLE)
+        webrtcbin.set_property("stun-server", "")
+        pipeline.add(webrtcbin)
+
+        if v:
+            self._add_video_branch(pipeline, webrtcbin, v, domain)
+        if a:
+            self._add_audio_branch(pipeline, webrtcbin, a, domain)
+
+        bus = pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message::error", self._on_error)
+        bus.connect("message::eos", self._on_eos)
+        bus.connect("message::state-changed", self._on_state_changed)
+
+        webrtcbin.connect("on-negotiation-needed", self._on_negotiation_needed)
+        webrtcbin.connect("on-ice-candidate", self._on_ice_candidate)
+
+        self._pipeline = pipeline
+        self._webrtcbin = webrtcbin
+
+        ret = pipeline.set_state(Gst.State.PLAYING)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            pipeline.set_state(Gst.State.NULL)
+            raise RuntimeError("Pipeline failed to reach PLAYING state")
+
+        self._running = True
+        mode = "video+audio" if v and a else "video" if v else "audio"
+        log.info("Pipeline started (mode: %s)", mode)
+
+    def _add_video_branch(
+        self,
+        pipeline: Gst.Pipeline,
+        webrtcbin: Gst.Element,
+        flow_uuid: str,
+        domain: str,
+    ) -> None:
+        elements = [
+            ("mxlsrc",      "mxlsrc-video"),
+            ("capsfilter",  "vcaps"),
+            ("videoconvert","vconv"),
+            ("x264enc",     "venc"),
+            ("h264parse",   "vparse"),
+            ("rtph264pay",  "vpay"),
+            ("queue",       "vqueue"),
+        ]
+        elems = self._make_and_add(pipeline, elements)
+
+        elems["mxlsrc-video"].set_property("video-flow-id", flow_uuid)
+        elems["mxlsrc-video"].set_property("domain", domain)
+
+        caps = Gst.Caps.from_string("video/x-raw,format=v210")
+        elems["vcaps"].set_property("caps", caps)
+
+        enc = elems["venc"]
+        enc.set_property("tune", 4)           # zerolatency
+        enc.set_property("speed-preset", 2)   # ultrafast
+        enc.set_property("key-int-max", 30)
+
+        pay = elems["vpay"]
+        pay.set_property("config-interval", -1)
+        pay.set_property("pt", 96)
+
+        self._link_elements(elems, ["mxlsrc-video", "vcaps", "vconv", "venc", "vparse", "vpay", "vqueue"])
+
+        # Request a video pad on webrtcbin
+        trans_caps = Gst.Caps.from_string("application/x-rtp,media=video,encoding-name=H264,payload=96")
+        src_pad = elems["vqueue"].get_static_pad("src")
+        sink_pad = webrtcbin.request_pad_simple("sink_%u")
+        if not sink_pad:
+            raise RuntimeError("Could not request video sink pad from webrtcbin")
+        if src_pad.link(sink_pad) != Gst.PadLinkReturn.OK:
+            raise RuntimeError("Failed to link video queue to webrtcbin")
+
+    def _add_audio_branch(
+        self,
+        pipeline: Gst.Pipeline,
+        webrtcbin: Gst.Element,
+        flow_uuid: str,
+        domain: str,
+    ) -> None:
+        elements = [
+            ("mxlsrc",       "mxlsrc-audio"),
+            ("capsfilter",   "acaps"),
+            ("audioconvert", "aconv"),
+            ("opusenc",      "aenc"),
+            ("rtpopuspay",   "apay"),
+            ("queue",        "aqueue"),
+        ]
+        elems = self._make_and_add(pipeline, elements)
+
+        elems["mxlsrc-audio"].set_property("audio-flow-id", flow_uuid)
+        elems["mxlsrc-audio"].set_property("domain", domain)
+
+        caps = Gst.Caps.from_string("audio/x-raw,format=F32LE,layout=interleaved")
+        elems["acaps"].set_property("caps", caps)
+
+        elems["apay"].set_property("pt", 97)
+
+        self._link_elements(elems, ["mxlsrc-audio", "acaps", "aconv", "aenc", "apay", "aqueue"])
+
+        src_pad = elems["aqueue"].get_static_pad("src")
+        sink_pad = webrtcbin.request_pad_simple("sink_%u")
+        if not sink_pad:
+            raise RuntimeError("Could not request audio sink pad from webrtcbin")
+        if src_pad.link(sink_pad) != Gst.PadLinkReturn.OK:
+            raise RuntimeError("Failed to link audio queue to webrtcbin")
+
+    @staticmethod
+    def _make_and_add(pipeline: Gst.Pipeline, elements: list[tuple[str, str]]) -> dict[str, Gst.Element]:
+        result: dict[str, Gst.Element] = {}
+        for factory, name in elements:
+            elem = Gst.ElementFactory.make(factory, name)
+            if not elem:
+                raise RuntimeError(f"Could not create GStreamer element '{factory}' (name='{name}')")
+            pipeline.add(elem)
+            result[name] = elem
+        return result
+
+    @staticmethod
+    def _link_elements(elems: dict[str, Gst.Element], order: list[str]) -> None:
+        for i in range(len(order) - 1):
+            src = elems[order[i]]
+            dst = elems[order[i + 1]]
+            if not src.link(dst):
+                raise RuntimeError(f"Failed to link {order[i]} → {order[i + 1]}")
+
+    # ── WHIP handshake ────────────────────────────────────────────────────────
+
+    def _on_negotiation_needed(self, webrtcbin: Gst.Element) -> None:
+        log.info("Negotiation needed — creating offer")
         try:
-            self._build_pipeline()
+            # Use a lambda closure so no user_data argument is needed
+            promise = Gst.Promise.new_with_change_func(
+                lambda p: self._on_offer_created(p, webrtcbin)
+            )
+            webrtcbin.emit("create-offer", None, promise)
         except Exception as exc:
-            log.error("Failed to build pipeline: %s", exc)
-            self._state = "error"
-            self._error_msg = str(exc)
+            log.error("create-offer failed: %s", exc, exc_info=True)
+
+    def _on_offer_created(self, promise: Gst.Promise, webrtcbin: Gst.Element) -> None:
+        log.info("Offer created — setting local description")
+        try:
+            reply = promise.get_reply()
+            if reply is None:
+                log.error("Promise reply is None")
+                return
+            offer = reply.get_value("offer")
+            if offer is None:
+                log.error("Offer is None in reply structure")
+                return
+            # Don't call wait() here — it can block inside a GLib promise callback
+            webrtcbin.emit("set-local-description", offer, Gst.Promise.new())
+            log.info("Local description set — waiting for ICE gathering (max %.0fs)", _ICE_TIMEOUT)
+            threading.Thread(target=self._wait_ice_then_whip, args=(webrtcbin,), daemon=True).start()
+        except Exception as exc:
+            log.error("_on_offer_created failed: %s", exc, exc_info=True)
+
+    def _wait_ice_then_whip(self, webrtcbin: Gst.Element) -> None:
+        import time
+        interval = 0.1
+        elapsed = 0.0
+        while elapsed < _ICE_TIMEOUT:
+            try:
+                state = webrtcbin.get_property("ice-gathering-state")
+                if state == GstWebRTC.WebRTCICEGatheringState.COMPLETE:
+                    log.info("ICE gathering complete after %.1fs", elapsed)
+                    break
+            except Exception as exc:
+                log.warning("Error reading ICE state: %s", exc)
+                break
+            time.sleep(interval)
+            elapsed += interval
+        else:
+            log.warning("ICE gathering did not complete in %.0fs, sending offer anyway", _ICE_TIMEOUT)
+
+        # Re-read local description after trickle ICE (all candidates inlined)
+        try:
+            local_desc = webrtcbin.get_property("local-description")
+            if local_desc is None:
+                log.error("local-description is None after ICE gathering — cannot send WHIP offer")
+                return
+            sdp_text = local_desc.sdp.as_text()
+            log.info("Sending WHIP offer (%d bytes) to %s", len(sdp_text), MEDIAMTX_WHIP)
+            self._do_whip(webrtcbin, sdp_text)
+        except Exception as exc:
+            log.error("Failed to read local-description: %s", exc, exc_info=True)
+
+    def _do_whip(self, webrtcbin: Gst.Element, sdp_offer: str) -> None:
+        whip_url = MEDIAMTX_WHIP
+        log.info("POSTing SDP offer to %s", whip_url)
+        try:
+            req = urllib.request.Request(
+                whip_url,
+                data=sdp_offer.encode(),
+                method="POST",
+                headers={"Content-Type": "application/sdp"},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if resp.status not in (200, 201):
+                    raise RuntimeError(f"WHIP endpoint returned HTTP {resp.status}")
+                answer_sdp = resp.read().decode()
+
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode(errors="replace")
+            msg = f"WHIP HTTP {exc.code}: {body[:200]}"
+            log.error(msg)
+            with self._lock:
+                self._error_msg = msg
+                self._running = False
+            return
+        except Exception as exc:
+            msg = f"WHIP error: {exc}"
+            log.error(msg)
+            with self._lock:
+                self._error_msg = msg
+                self._running = False
+            return
+
+        log.info("WHIP handshake complete — applying remote SDP answer")
+        _, sdp_msg = GstSdp.SDPMessage.new_from_text(answer_sdp)
+        answer = GstWebRTC.WebRTCSessionDescription.new(
+            GstWebRTC.WebRTCSDPType.ANSWER, sdp_msg
+        )
+        promise = Gst.Promise.new()
+        webrtcbin.emit("set-remote-description", answer, promise)
+        promise.wait()
+        log.info("Remote description set — streaming to MediaMTX")
+
+    def _on_ice_candidate(self, _webrtcbin: Gst.Element, mline_index: int, candidate: str) -> None:
+        # trickle ICE not used; MediaMTX accepts the full offer with gathered candidates
+        log.debug("ICE candidate [%d]: %s", mline_index, candidate)
+
+    # ── Teardown ──────────────────────────────────────────────────────────────
 
     def _teardown(self) -> None:
-        """Stop and release the current pipeline. Caller must hold lock."""
         if self._pipeline is None:
             return
         log.info("Tearing down pipeline…")
         self._pipeline.set_state(Gst.State.NULL)
         self._pipeline.get_state(5 * Gst.SECOND)
         self._pipeline = None
+        self._webrtcbin = None
+        self._running = False
         gc.collect()
         log.info("Teardown complete")
 
-    def _build_pipeline(self) -> None:
-        """Construct and start the GStreamer pipeline. Caller must hold lock."""
-        self._pipeline_gen += 1
-        my_gen = self._pipeline_gen
-        log.info("Building pipeline generation %d", my_gen)
-        domain = self._mxl_domain
+    # ── GStreamer bus callbacks ────────────────────────────────────────────────
 
-        pipeline = Gst.Pipeline.new("mxl2webrtc")
-
-        # ── Video branch ──────────────────────────────────────────────────────
-        vsrc = Gst.ElementFactory.make("mxlsrc", "vsrc")
-        vsrc.set_property("video-flow-id", self._video_flow_id)
-        vsrc.set_property("domain", domain)
-
-        vconv = Gst.ElementFactory.make("videoconvert", "vconv")
-        vscale = Gst.ElementFactory.make("videoscale", "vscale")
-        vcaps = Gst.ElementFactory.make("capsfilter", "vcaps")
-        vcaps.set_property("caps", Gst.Caps.from_string("video/x-raw,format=I420,width=1280,height=720"))
-        # Encode to H.264 ourselves so we control quality settings.
-        # tune=zerolatency: no lookahead buffering (essential for live/WebRTC)
-        # speed-preset=fast: good quality with low CPU
-        # bitrate=6000 kbps, max keyframe interval=60 frames (1 s at 60fps)
-        venc = Gst.ElementFactory.make("x264enc", "venc")
-        venc.set_property("tune", 0x00000004)     # zerolatency
-        venc.set_property("speed-preset", 5)      # fast
-        venc.set_property("bitrate", 6000)         # kbps
-        venc.set_property("key-int-max", 60)
-        vparse = Gst.ElementFactory.make("h264parse", "vparse")
-        vqueue = Gst.ElementFactory.make("queue", "vqueue")
-
-        # ── Audio branch ──────────────────────────────────────────────────────
-        asrc = Gst.ElementFactory.make("mxlsrc", "asrc")
-        asrc.set_property("audio-flow-id", self._audio_flow_id)
-        asrc.set_property("domain", domain)
-
-        aconv = Gst.ElementFactory.make("audioconvert", "aconv")
-        aresample = Gst.ElementFactory.make("audioresample", "aresample")
-        acaps = Gst.ElementFactory.make("capsfilter", "acaps")
-        acaps.set_property(
-            "caps",
-            Gst.Caps.from_string("audio/x-raw,format=S16LE,channels=2,rate=48000,layout=interleaved"),
-        )
-        aqueue = Gst.ElementFactory.make("queue", "aqueue")
-
-        # ── webrtcsink ────────────────────────────────────────────────────────
-        webrtcsink = Gst.ElementFactory.make("webrtcsink", "webrtcsink")
-        if not webrtcsink:
-            raise RuntimeError("Could not create webrtcsink element – is libgstrswebrtc.so installed?")
-        # The signalling server runs as a separate process on port 8443.
-        # The default signaller URI (ws://127.0.0.1:8443/) already points there.
-        try:
-            signaller = webrtcsink.get_property("signaller")
-            if signaller:
-                signaller.set_property("uri", "ws://127.0.0.1:8443/")
-                log.info("Signaller URI set to ws://127.0.0.1:8443/")
-        except Exception as e:
-            log.warning("Could not configure signaller URI: %s", e)
-        # Use H.264 — far better quality/bitrate ratio than VP8.
-        # We pre-encode with x264enc so video-caps tells webrtcsink to expect H.264 input.
-        webrtcsink.set_property(
-            "video-caps",
-            Gst.Caps.from_string("video/x-h264"),
-        )
-        log.info("webrtcsink: H.264 pre-encoded at 6 Mbps")
-        webrtcsink.connect("consumer-added", lambda sink, cid, wb: log.info("WebRTC consumer added: %s", cid))
-        # ── Assemble pipeline ─────────────────────────────────────────────────
-        for el in (vsrc, vconv, vscale, vcaps, venc, vparse, vqueue, asrc, aconv, aresample, acaps, aqueue, webrtcsink):
-            if not el:
-                raise RuntimeError(f"Could not create GStreamer element")
-            pipeline.add(el)
-
-        vsrc.link(vconv)
-        vconv.link(vscale)
-        vscale.link(vcaps)
-        vcaps.link(venc)
-        venc.link(vparse)
-        vparse.link(vqueue)
-
-        asrc.link(aconv)
-        aconv.link(aresample)
-        aresample.link(acaps)
-        acaps.link(aqueue)
-
-        video_sink_pad = webrtcsink.get_request_pad("video_%u")
-        audio_sink_pad = webrtcsink.get_request_pad("audio_%u")
-
-        vqueue.get_static_pad("src").link(video_sink_pad)
-        aqueue.get_static_pad("src").link(audio_sink_pad)
-
-        # ── Bus handlers ──────────────────────────────────────────────────────
-        bus = pipeline.get_bus()
-        bus.add_signal_watch()
-
-        def _on_error_guarded(_bus, msg, gen=my_gen):
-            err, debug = msg.parse_error()
-            log.error("GStreamer error (gen %d): %s  debug: %s", gen, err, debug)
-            should_retry = False
-            with self._lock:
-                if gen != self._pipeline_gen:
-                    log.info("Ignoring stale error from generation %d (current: %d)", gen, self._pipeline_gen)
-                    return
-                self._state     = "error"
-                self._error_msg = str(err)
-                # Auto-retry up to 3 times for transient mxlsrc startup failures
-                if self._video_flow_id and self._audio_flow_id and self._start_retry_count < 3:
-                    self._start_retry_count += 1
-                    should_retry = True
-                    log.info("Scheduling pipeline retry %d/3 in 2s…", self._start_retry_count)
-
-            if should_retry:
-                def _retry(gen=gen):
-                    time.sleep(2)
-                    with self._lock:
-                        if self._pipeline_gen == gen:  # no other rebuild happened
-                            log.info("Auto-retrying pipeline (was gen %d)…", gen)
-                            self._rebuild_pipeline()
-                threading.Thread(target=_retry, daemon=True).start()
-
-        bus.connect("message::error",         _on_error_guarded)
-        bus.connect("message::eos",           self._on_eos)
-        bus.connect("message::state-changed", self._on_state_changed)
-
-        ret = pipeline.set_state(Gst.State.PLAYING)
-        log.info("Pipeline set_state(PLAYING) → %s", ret)
-
-        self._pipeline = pipeline
-        self._state    = "playing"
-        self._error_msg = None
-
-        threading.Thread(target=self._patch_flow_defs, daemon=True).start()
-
-    # ── GStreamer callbacks ────────────────────────────────────────────────────
+    def _on_error(self, _bus: Gst.Bus, msg: Gst.Message) -> None:
+        err, debug = msg.parse_error()
+        log.error("GStreamer error: %s  debug: %s", err, debug)
+        with self._lock:
+            self._error_msg = str(err)
+            self._running = False
 
     def _on_eos(self, _bus: Gst.Bus, _msg: Gst.Message) -> None:
         log.info("End of stream")
+        with self._lock:
+            self._running = False
 
     def _on_state_changed(self, _bus: Gst.Bus, msg: Gst.Message) -> None:
         if msg.src != self._pipeline:
@@ -254,37 +380,8 @@ class GstMxl2WebRtc:
         _old, new, _pending = msg.parse_state_changed()
         if new == Gst.State.PLAYING:
             with self._lock:
-                self._state = "playing"
-                self._start_retry_count = 0  # reset on success
+                self._running = True
         elif new in (Gst.State.NULL, Gst.State.READY):
             with self._lock:
-                if self._state == "playing":
-                    self._state = "idle"
-
-    # ── Flow def patching ─────────────────────────────────────────────────────
-
-    def _patch_flow_defs(self) -> None:
-        """Patch flow_def.json for video and audio flows (called in background thread)."""
-        flows = {
-            self._video_flow_id: ("MXL to WebRTC – Video", "MXL video input for WebRTC output"),
-            self._audio_flow_id: ("MXL to WebRTC – Audio", "MXL audio input for WebRTC output"),
-        }
-        for flow_id, (label, description) in flows.items():
-            if not flow_id:
-                continue
-            path = os.path.join(self._mxl_domain, f"{flow_id}.mxl-flow", "flow_def.json")
-            for attempt in range(20):
-                try:
-                    with open(path) as f:
-                        data = json.load(f)
-                    data["label"]       = label
-                    data["description"] = description
-                    with open(path, "w") as f:
-                        json.dump(data, f, indent=2)
-                    log.info("Patched flow_def.json for %s (attempt %d)", flow_id, attempt + 1)
-                    break
-                except FileNotFoundError:
-                    time.sleep(0.5)
-                except Exception as exc:
-                    log.warning("Could not patch flow_def.json for %s: %s", flow_id, exc)
-                    break
+                if self._running:
+                    self._running = False

@@ -1,4 +1,4 @@
 fastapi
 uvicorn[standard]
-requests
 pydantic
+aiofiles>=23.0.0
