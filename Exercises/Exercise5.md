@@ -97,7 +97,10 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
     ```
 1. Start the system with the start script.
     ```sh
-        ./start.sh
+        ./start.sh # For linux based machine
+    ```
+    ```sh
+        ./start-mac.sh # For mac based machine
     ```
 
 1. Reference HLS stream that are 1920x1080p60
