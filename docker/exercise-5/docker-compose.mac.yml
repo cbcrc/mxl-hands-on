@@ -2,31 +2,40 @@
 # Usage: docker compose -f docker-compose.yml -f docker-compose.mac.yml up
 #
 # On macOS, network_mode: host shares the Docker Desktop Linux VM's network,
-# not the Mac host.  Ports are not forwarded to the Mac, so mxl2webrtc gets
-# "Connection refused" on the WHIP URL, and WebRTC ICE fails because mediamtx
-# ends up on an isolated network that the other containers cannot reach.
+# not the Mac host.  Two problems arise:
 #
-# This override removes the host network mode from mediamtx so it joins the
-# compose project network alongside mxl2webrtc, publishes the WebRTC ports via
-# Docker Desktop, and tells mediamtx to advertise host.docker.internal (= the
-# Mac host IP) as an additional ICE candidate so the browser's media traffic
-# is routed through Docker Desktop's published port 8189/udp.
+#  1. WHIP connection refused: mxl2webrtc uses host.docker.internal which on
+#     Mac resolves to the Mac host, but mediamtx is on the VM's host network
+#     and its ports are not forwarded to the Mac.
+#
+#  2. WebRTC ICE failure: if mediamtx and mxl2webrtc land on different Docker
+#     bridge networks (compose network vs. docker0), iptables isolates them and
+#     ICE connectivity checks fail silently — WHIP returns 201 but no media
+#     ever reaches mediamtx, so WHEP returns 404.
+#
+# Fix: switch both mediamtx and mxl2webrtc to docker0 (network_mode: bridge).
+# They share the same subnet, so ICE candidate IPs are directly reachable
+# between the containers.  Docker's userspace proxy listens on the docker0
+# gateway for the published ports, so host.docker.internal:8889 (used for
+# WHIP) reaches mediamtx regardless of which /etc/hosts entry wins.
+# MTX_WEBRTCADDITIONALHOSTS tells mediamtx to advertise the Mac host IP in
+# WHEP answers so the browser's ICE traffic is forwarded by Docker Desktop
+# through the published port 8189/udp.
 
 services:
   mediamtx:
-    network_mode: ""          # remove host networking; joins compose default network
+    network_mode: bridge          # docker0; allows port publishing and shared subnet with mxl2webrtc
     ports:
-      - "8554:8554"           # RTSP
-      - "8889:8889"           # WebRTC HTTP (WHIP / WHEP)
-      - "8189:8189/udp"       # WebRTC ICE media
+      - "8554:8554"               # RTSP
+      - "8889:8889"               # WebRTC HTTP (WHIP / WHEP)
+      - "8189:8189/udp"           # WebRTC ICE media
     environment:
-      # mediamtx resolves this hostname to the Mac host IP and adds it to the
-      # ICE candidates in WHEP answers.  The browser reaches it through Docker
-      # Desktop's published port 8189/udp.
-      - MTX_WEBRTCADDITIONALHOSTS=host.docker.internal
+      - MTX_WEBRTCADDITIONALHOSTS=host.docker.internal   # Mac host IP → browser ICE via published port
 
   mxl2webrtc:
+    network_mode: bridge          # same docker0 subnet as mediamtx → ICE works
     environment:
-      # mediamtx is now on the compose network — reach it by service name
-      - MEDIAMTX_WHIP_URL=http://mediamtx:8889/mxl2webrtc/whip
+      # Docker's userspace proxy listens on the docker0 gateway (= host.docker.internal)
+      # for port 8889, forwarding to the mediamtx container.
+      - MEDIAMTX_WHIP_URL=http://host.docker.internal:8889/mxl2webrtc/whip
       - MEDIAMTX_WEBRTC_URL=http://localhost:8889
