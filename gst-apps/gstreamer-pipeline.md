@@ -86,8 +86,9 @@ gst-launch-1.0 \
 ```
 
 > **Note:** `volume=0.1` ≈ −20 dBFS (`10^(−20/20)`). `wave=0` is a sine wave.
-> `pattern=19` is the 100% colour bars (SMPTE full-range). Each flow gets a fresh `uuid4`
-> generated at pipeline start — UUIDs are never reused across restarts.
+> `pattern=19` is the 100% colour bars (SMPTE full-range). Flow UUIDs are **deterministic
+> (UUID v5)** derived from the group hint — restarting with the same group hint reuses the
+> same UUIDs; changing the group hint produces a different set.
 
 ### Explanation
 
@@ -122,9 +123,9 @@ section before the pipeline starts and is fixed for its lifetime — it cannot b
 without a Stop + Start because caps renegotiation across a running mxlsink is not
 reliable. Audio level (−60 … 0 dBFS in 0.5 dB steps) is adjustable live.
 
-After the pipeline reaches PLAYING state, the backend polls for each flow's
-`{domain}/{uuid}.mxl-flow/flow_def.json` and patches the `grouphint`, `description`,
-and `label` fields with the values entered in the Setup form.
+The pipeline is brought directly to `PLAYING` state. A background thread then polls for
+each flow's `{domain}/{uuid}.mxl-flow/flow_def.json` (up to 15 s) and patches the
+`grouphint`, `description`, and `label` fields with the values entered in the Setup form.
 
 ### Diagram
 
@@ -433,45 +434,59 @@ flowchart LR
 
 ```bash
 gst-launch-1.0 \
-  webrtcsink name=ws \
+  webrtcbin name=wb bundle-policy=3 stun-server="" \
   mxlsrc video-flow-id="<video-flow-id>" domain="/mxl-domain" \
-       ! videoconvert ! videoscale \
-       ! "video/x-raw,format=I420,width=1280,height=720" \
-       ! x264enc tune=4 speed-preset=5 bitrate=6000 key-int-max=60 \
-       ! h264parse ! queue \
-       ! ws.video_0 \
-  mxlsrc audio-flow-id="<audio-flow-id>" domain="/mxl-domain" \
-       ! audioconvert ! audioresample \
-       ! "audio/x-raw,format=S16LE,channels=2,rate=48000,layout=interleaved" \
+       ! "video/x-raw,format=v210" \
+       ! videoconvert \
+       ! x264enc tune=4 speed-preset=2 key-int-max=30 \
+       ! h264parse \
+       ! rtph264pay pt=96 config-interval=-1 \
+       ! "application/x-rtp,media=video,encoding-name=H264,payload=96" \
        ! queue \
-       ! ws.audio_0
+       ! wb.sink_%u \
+  mxlsrc audio-flow-id="<audio-flow-id>" domain="/mxl-domain" \
+       ! "audio/x-raw,format=F32LE,layout=interleaved" \
+       ! audioconvert ! audioresample \
+       ! opusenc \
+       ! rtpopuspay pt=97 \
+       ! queue \
+       ! wb.sink_%u
 ```
 
-> **Signaller:** the `webrtcsink` signaller URI is set to `ws://127.0.0.1:8443/` at runtime
-> (not expressible as a `gst-launch` property; requires the element API).
-> `tune=4` is the `zerolatency` flag bitmask for x264enc.
+> **WHIP signalling:** the SDP offer/answer exchange with MediaMTX is handled entirely by
+> the Python code (HTTP POST to `MEDIAMTX_WHIP_URL`) and cannot be expressed in a
+> `gst-launch` command. `bundle-policy=3` is `MAX_BUNDLE`. `tune=4` is the `zerolatency`
+> bitmask for x264enc. `speed-preset=2` is `ultrafast`.
 
 ### Explanation
 
-Transcodes two MXL flows (video + audio) and delivers them to WebRTC consumers via a
-local signalling server.
+Transcodes two MXL flows (video + audio), packages them as RTP, and publishes to a
+**MediaMTX** server via **WHIP** (WebRTC HTTP Ingest Protocol). Browsers watch the stream
+from MediaMTX via **WHEP** (WebRTC HTTP Egress Protocol).
 
-The **video branch** reads the MXL video flow, scales it down from 1080p to 720p (1280×720)
-to reduce bandwidth, and encodes it with `x264enc` using the `zerolatency` tune for minimum
-latency, a `fast` speed preset for balanced quality/CPU, 6 Mbps target bitrate, and a keyframe
-every 60 frames (1 second at 60 fps).  `h264parse` re-frames the bitstream into a form
-`webrtcsink` can consume.
+The **video branch** reads the MXL video flow as v210 and converts it to a format
+`x264enc` accepts.  The encoder is tuned for minimum latency (`zerolatency`) and maximum
+speed (`ultrafast`, `speed-preset=2`), with a keyframe every 30 frames.  `h264parse`
+normalises the bitstream, and `rtph264pay` wraps it in RTP at payload type 96.
 
-The **audio branch** converts the MXL audio to S16LE stereo 48 kHz — the standard PCM format
-expected by WebRTC before Opus encoding inside `webrtcsink`.
+The **audio branch** reads the MXL audio as F32LE interleaved, converts and resamples to
+what `opusenc` needs, encodes to Opus, and wraps the result in RTP via `rtpopuspay` at
+payload type 97.
 
-`webrtcsink` handles SDP negotiation, ICE, DTLS-SRTP, and RTP packetisation internally.
-It accepts pre-encoded H.264 video (declared via `video-caps`) so the bitstream from `x264enc`
-is passed through without re-encoding.
+Both RTP streams are fed into **`webrtcbin`** with `bundle-policy=MAX_BUNDLE` (single
+transport for both media). No STUN server is configured — the app runs within a local
+Docker network where ICE host candidates are sufficient.
 
-A generation counter guards against stale bus-error callbacks after a pipeline rebuild.
-Transient startup errors trigger up to 3 automatic retries (2 s apart) to handle `mxlsrc`
-ring-buffer availability races.
+**WHIP handshake** (Python-managed, not in the GStreamer pipeline):
+1. `webrtcbin` fires `on-negotiation-needed` → Python calls `create-offer`.
+2. Python sets the local description and waits up to 10 s for ICE gathering to complete.
+3. The fully-gathered SDP offer is HTTP POST'd to the MediaMTX WHIP endpoint
+   (`MEDIAMTX_WHIP_URL`, default `http://localhost:8889/mxl2webrtc/whip`).
+4. MediaMTX responds with a 201 and an SDP answer; Python calls `set-remote-description`.
+
+**MediaMTX** acts as a WebRTC relay: it ingests the stream via WHIP and re-exposes it
+for browsers via WHEP. The browser navigates to the MediaMTX WHEP URL and receives the
+H.264 + Opus stream directly.
 
 ### Diagram
 
@@ -479,28 +494,32 @@ ring-buffer availability races.
 flowchart LR
     subgraph "Video branch"
         vsrc["mxlsrc\nvideo-flow-id"]
+        vcaps["capsfilter\nformat=v210"]
         vconv["videoconvert"]
-        vscale["videoscale"]
-        vcaps["capsfilter\nI420, 1280×720"]
-        venc["x264enc\n6 Mbps, zerolatency\nspeed-preset=fast\nkeyframe every 60"]
+        venc["x264enc\nzerolatency, ultrafast\nkeyframe every 30"]
         vparse["h264parse"]
+        vpay["rtph264pay\npt=96"]
         vqueue["queue"]
-        vsrc --> vconv --> vscale --> vcaps --> venc --> vparse --> vqueue
+        vsrc --> vcaps --> vconv --> venc --> vparse --> vpay --> vqueue
     end
 
     subgraph "Audio branch"
         asrc["mxlsrc\naudio-flow-id"]
+        acaps["capsfilter\nF32LE, interleaved"]
         aconv["audioconvert"]
         aresample["audioresample"]
-        acaps["capsfilter\nS16LE, 2 ch, 48 kHz"]
+        aenc["opusenc"]
+        apay["rtpopuspay\npt=97"]
         aqueue["queue"]
-        asrc --> aconv --> aresample --> acaps --> aqueue
+        asrc --> acaps --> aconv --> aresample --> aenc --> apay --> aqueue
     end
 
-    ws["webrtcsink\nsignaller=ws://127.0.0.1:8443/\nvideo-caps=video/x-h264"]
+    wb["webrtcbin\nbundle-policy=MAX_BUNDLE\nno STUN"]
 
-    vqueue -->|"video_0"| ws
-    aqueue -->|"audio_0"| ws
+    vqueue -->|"sink_%u (video)"| wb
+    aqueue -->|"sink_%u (audio)"| wb
 
-    ws -->|"WebRTC / SDP+ICE"| browser["Browser\n(WebRTC consumer)"]
+    wb -- "WHIP\nSDP offer (HTTP POST)" --> mediamtx["MediaMTX\n(WHIP ingest)"]
+    mediamtx -- "SDP answer (201)" --> wb
+    mediamtx -->|"WHEP egress"| browser["Browser\n(WebRTC consumer)"]
 ```
