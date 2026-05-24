@@ -32,9 +32,10 @@ The UI is divided into two distinct sections: **Setup** and **Operation**.
 This section is used to configure and select the MXL input flows before starting the GStreamer pipeline. The pipeline does **not** start until the user clicks the **Start** button. All controls in this section are disabled while the pipeline is running.
 
 1. **MXL Domain Selector:** Scan `/mxl-domain` recursively for `domain_def.json` files. Read the `id` field for the domain UUID and use the containing directory path as the domain path. Provide a dropdown to select the target MXL domain. Changing the domain resets both flow selectors.
-2. **Video Flow Selector:** A dropdown populated from the flow list for the selected domain. Each option displays the flow label, group hint, and the first 8 characters of the UUID in the format `<Label> — <GroupHint> (<UUID prefix>…)`. Includes a **"None"** option at the top — selecting "None" means no video input (audio-only mode).
-3. **Audio Flow Selector:** A dropdown populated from the same domain flow list, following the same display format. Includes a **"None"** option at the top — selecting "None" means no audio input (video-only mode).
-4. **Start / Stop button** — starts the GStreamer pipeline with the selected flows. At least one flow (video or audio) must be selected for the Start button to be enabled. Changes to a **Stop** button while the pipeline is running.
+2. **Video Flow Selector:** A dropdown populated from the flow list for the selected domain. Each option displays the flow label, group hint, and the first 8 characters of the UUID in the format `(<UUID prefix>…), <Description> — <Label> — <GroupHint> `. Flows are **grouped by group name** (the prefix before `:` in `flow_grouphint`); each group is shown with a coloured header row spanning all four columns. Scales up to 20 rows; scrollable beyond that. Polls `scan_domain` every **30 seconds** when a domain is selected. Includes a **"None"** option at the top — selecting "None" means no video input (audio-only mode). **Only show flows that have Video after : in their group hint**
+3. **Audio Flow Selector:** A dropdown populated from the same domain flow list, following the same display format. Includes a **"None"** option at the top — selecting "None" means no audio input (video-only mode). **Only show flows that have Audio after : in their group hint**
+4. **Refresh Flow List button** — manually triggers `scan_domain` for the selected domain.
+5. **Start / Stop button** — starts the GStreamer pipeline with the selected flows. At least one flow (video or audio) must be selected for the Start button to be enabled. Changes to a **Stop** button while the pipeline is running.
 
 > ℹ️ Both flow selectors are populated using the same domain-scanning and parsing logic as `mxl-info-gui` — calling `mxl-info -d <domain_path>` and parsing the output. Only active flows (those reported by `mxl-info`) are shown.
 
@@ -70,7 +71,7 @@ This section is enabled only once the pipeline is running (greyed-out and non-in
     hostname: mxl2webrtc
     domainname: local
     ports:
-      - "9650:9600"   # FastAPI serves both API and React frontend; change host port freely
+      - "9601:9600"   # FastAPI serves both API and React frontend; change host port freely
     volumes:
       - type: volume
         source: mxl-domain
@@ -102,7 +103,7 @@ This section is enabled only once the pipeline is running (greyed-out and non-in
 
 - The build context is the **repository root** (`..` relative to `./gst-apps/`). All `COPY` paths in the Dockerfile are relative to the repository root (e.g. `COPY gst-apps/mxl2webrtc/backend/ /app/backend/`).
 - The Dockerfile uses **two stages**: a `node:18-bullseye-slim` stage to build the React frontend, and an `ubuntu:24.04` runtime stage. There is **no NMOS stage**.
-- Add port mapping `9650:9650` only — FastAPI serves both the API and React frontend on the same port.
+- Add port mapping `9601:9600` only — FastAPI serves both the API and React frontend on the same port. The host-side port (`9601`) can be changed freely in `docker-compose.yml`.
 
 **Stage 1 (Frontend Builder):**
 ```dockerfile
@@ -129,12 +130,9 @@ RUN npm run build
   RUN chmod +x /opt/mxl/tools/mxl-info/mxl-info
 
   COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.1 /opt/mxl/lib/libmxl.so.1.1
-  COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl-common.so.1.1 /opt/mxl/lib/libmxl-common.so.1.1
   RUN cd /opt/mxl/lib \
    && ln -sf libmxl.so.1.1 libmxl.so.1 \
    && ln -sf libmxl.so.1 libmxl.so \
-   && ln -sf libmxl-common.so.1.1 libmxl-common.so.1 \
-   && ln -sf libmxl-common.so.1 libmxl-common.so \
    && ldconfig /opt/mxl/lib /usr/lib/x86_64-linux-gnu/gstreamer-1.0 \
    && mkdir -p /workspace/mxl/build/Linux-Clang-Release/lib \
    && ln -sf /opt/mxl/lib/libmxl.so /workspace/mxl/build/Linux-Clang-Release/lib/libmxl.so
@@ -157,7 +155,7 @@ RUN npm run build
 
 ### Step 2: FastAPI & GStreamer Backend
 
-Create a FastAPI application at `backend/main.py` running on **port 9650**.
+Create a FastAPI application at `backend/main.py` running on **port 9600**.
 
 **Configuration:**
 ```python
