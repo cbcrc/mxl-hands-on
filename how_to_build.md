@@ -17,10 +17,19 @@ mxl lib is integrated as submodule, i.e. an external repo that needs to be initi
 ```bash
 git submodule update --init
 ```
+Update the submodule to latest commit of main branch.
+    ```sh
+        cd ~/mxl-hands-on/dmf-mxl
+        git checkout main
+        git pull origin main
+        cd ..
+    ```
 
 Setting up the TAG variable according to the version you are building:
 ```sh
-   TAG=[version_tag]  # ex: TAG=v1.0.0-rc2-Clang
+   MAIN_HASH=$(git rev-parse --short HEAD) && \
+   SUB_HASH=$(git -C dmf-mxl rev-parse --short HEAD) && \
+   TAG="hands-on-${MAIN_HASH}-mxl-${SUB_HASH}"
 ```
 
 This means hands-on repo is tied to a specific version of the mxl library.
@@ -36,19 +45,12 @@ First, build the project, if you build on linux under x86-amd64 use the followin
 ./build_linux.sh
 ```
 
-If you are building on Mac os on an amr64 use the following
-
-```bash
-# Run this on a arm based mac for arm based build
-# This need Homebrew, doxygen, ccache and Gstreamer runtime installer and development installer found here:
-# https://gstreamer.freedesktop.org/download/#macos
-build_darwin.sh
-```
-
-These scripts will:
+This scripts will:
 
 - Build the project in the ./dmf-mxl/ directory
 - Place build artifacts in ./dmf-mxl/build/
+- Build the rust part of the project in the ./dmf-mxl/rust directory
+- Place the rust build artifacts in ./dmf-mxl/rust/target
 
 ## Step 2: Creating `portable mxl app`
 
@@ -112,7 +114,16 @@ the nomenclature of the generated tag is:
 Exemple:
 ```mxl-reader:v1.0.0-rc1-24-g8d280db-Clang```
 
-## Step 5: Upload to image repository
+## Step 5: Build the GStreamer based application images.
+
+```sh
+   # Navigate to the gst-apps directory first
+   cd gst-apps
+   docker compose build
+```
+
+
+## Step 6: Upload to image repository
 
 Let's push the freshly built images with the fixed tag `v1.0.0-rc2..` and push to Github Container Registry.
 
@@ -122,9 +133,15 @@ Let's push the freshly built images with the fixed tag `v1.0.0-rc2..` and push t
    docker tag mxl-writer:$TAG ghcr.io/cbcrc/mxl-writer:$TAG
    docker tag mxl-reader:$TAG ghcr.io/cbcrc/mxl-reader:$TAG
    docker tag mxl-clip-player:$TAG ghcr.io/cbcrc/mxl-clip-player:$TAG
+   docker tag mxl-info-gui:$TAG ghcr.io/cbcrc/mxl-info-gui:$TAG
+   docker tag test-generator:$TAG ghcr.io/cbcrc/test-generator:$TAG
+   docker tag mxl2webrtc:$TAG ghcr.io/cbcrc/mxl2webrtc:$TAG
    docker push ghcr.io/cbcrc/mxl-writer:$TAG
    docker push ghcr.io/cbcrc/mxl-reader:$TAG
    docker push ghcr.io/cbcrc/mxl-clip-player:$TAG
+   docker push ghcr.io/cbcrc/mxl-info-gui:$TAG
+   docker push ghcr.io/cbcrc/test-generator:$TAG
+   docker push ghcr.io/cbcrc/mxl2webrtc:$TAG
 ```
 
 Let's consider this versions as the **latest stable** version of mxl that we want to deploy by default.
@@ -134,12 +151,18 @@ Let's attach the moving tag `latest` and push.
    docker tag mxl-writer:$TAG ghcr.io/cbcrc/mxl-writer:latest
    docker tag mxl-reader:$TAG ghcr.io/cbcrc/mxl-reader:latest
    docker tag mxl-clip-player:$TAG ghcr.io/cbcrc/mxl-clip-player:latest
+   docker tag mxl-info-gui:$TAG ghcr.io/cbcrc/mxl-info-gui:latest
+   docker tag test-generator:$TAG ghcr.io/cbcrc/test-generator:latest
+   docker tag mxl2webrtc:$TAG ghcr.io/cbcrc/mxl2webrtc:latest
    docker push ghcr.io/cbcrc/mxl-writer:latest
    docker push ghcr.io/cbcrc/mxl-reader:latest
    docker push ghcr.io/cbcrc/mxl-clip-player:latest
+   docker push ghcr.io/cbcrc/mxl-info-gui:latest
+   docker push ghcr.io/cbcrc/test-generator:latest
+   docker push ghcr.io/cbcrc/mxl2webrtc:latest
 ```
 
-## Step 6 Test with Exercises
+## Step 7 Test with Exercises
 
 After building the Docker images, follow the exercises in the repository to test and explore MXL functionality:
 
@@ -153,21 +176,14 @@ The repository contains three exercises:
 - Exercise1.md - Introduction to MXL basics
 - Exercise2.md - Working with MXL flows
 - Exercise3.md - Advanced MXL features
+- Exercise4.md - Portable MXL application
+- Exercise5.md - Gstreamer based MXL application with complex workflow
 
 Each exercise contains step-by-step instructions to test different aspects of the MXL project using the Docker images you've built.
 
 ```bash
 # Follow each exercise in order for the best learning experience
 cat Exercise1.md
-```
-
-## Verifying Multi-Architecture Support
-
-To check that your images support multiple architectures:
-
-```bash
-# View image manifest tree structure
-docker image ls --tree
 ```
 
 ## Troubleshooting

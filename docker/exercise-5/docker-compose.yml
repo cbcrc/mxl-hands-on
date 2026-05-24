@@ -1,4 +1,5 @@
-# Creating the MXL domain volume
+# the device must point to a directory on the host that contains
+# domain_def.json
 volumes:
   mxl-domain:
     driver: local
@@ -7,165 +8,63 @@ volumes:
       device: /Volumes/mxl/domain_1
       o: "bind,nosuid,strictatime"
 
-
 services:
-  # Setting up the Nmos Registry and dummy Nmos node:
-  nmos-registry:
-    platform: linux/amd64
-    image: ghcr.io/cbcrc/mxl-nmos-cpp:latest
-    container_name: nmos-registry
-    hostname: nmos-registry
-    domainname: local
-    ports:
-    - "80:80"
-    - "81:81"
-    - "1883:1883"
-    volumes:
-    - "./data/registry.json:/home/registry.json"
-    environment:
-    - RUN_NODE=FALSE
-
-  file-player:
-    platform: linux/amd64
-    image: ghcr.io/cbcrc/mxl-file-player:latest
-    container_name: file-player
-    hostname: file-player
-    domainname: local
-    ports:
-    - "9500:9500"   # NMOS IS-04/IS-05 node
-    - "9600:9600"   # FastAPI media-player backend
-    - "9700:9700"   # React frontend (static files)
-    volumes:
-    - "./data/file-player/Clips:/home/file"   # media files
-    - "mxl-domain:/mxl-domain"               # shared MXL domain
-    environment:
-    - MEDIA_DIR=/home/file
-    - MXL_DOMAIN=/mxl-domain
-    - NMOS_NODE_URL=http://localhost:9500
-    depends_on:
-    - nmos-registry
-
-  hls2mxl:
-    platform: linux/amd64
-    image: ghcr.io/cbcrc/mxl-hls2mxl:latest
-    container_name: hls2mxl
-    hostname: hls2mxl
-    domainname: local
-    ports:
-    - "9520:9520"   # NMOS IS-04/IS-05 node
-    - "9620:9620"   # FastAPI hls2mxl backend
-    - "9720:9720"   # React frontend (static files)
-    volumes:
-    - "mxl-domain:/mxl-domain"               # shared MXL domain
-    environment:
-    - MXL_DOMAIN=/mxl-domain
-    - NMOS_NODE_URL=http://localhost:9520
-    depends_on:
-    - nmos-registry
-
   test-generator:
     platform: linux/amd64
-    image: ghcr.io/cbcrc/mxl-test-generator:latest
+    image: ghcr.io/cbcrc/test-generator:latest
     container_name: test-generator
     hostname: test-generator
     domainname: local
     ports:
-    - "9510:9510"   # NMOS IS-04/IS-05 node
-    - "9610:9610"   # FastAPI test-generator backend
-    - "9710:9710"   # React frontend (static files)
+      - "9600:9600"   # FastAPI serves both API and React frontend
     volumes:
-    - "mxl-domain:/mxl-domain"               # shared MXL domain
-    environment:
-    - MXL_DOMAIN=/mxl-domain
-    - NMOS_NODE_URL=http://localhost:9510
-    depends_on:
-    - nmos-registry
+      - type: volume
+        source: mxl-domain
+        target: /mxl-domain
 
-  input-selector:
-    platform: linux/amd64
-    image: ghcr.io/cbcrc/mxl-input-selector:latest
-    container_name: input-selector
-    hostname: input-selector
-    domainname: local
-    ports:
-    - "9530:9530"   # NMOS IS-04/IS-05 node
-    - "9630:9630"   # FastAPI input-selector backend
-    - "9730:9730"   # React frontend (static files)
-    volumes:
-    - "mxl-domain:/mxl-domain"               # shared MXL domain
-    environment:
-    - MXL_DOMAIN=/mxl-domain
-    - NMOS_NODE_URL=http://localhost:9530
-    depends_on:
-    - nmos-registry
+  mxl-info-gui:
+      platform: linux/amd64
+      image: ghcr.io/cbcrc/mxl-info-gui:latest
+      container_name: mxl-info-gui
+      hostname: mxl-info-gui
+      domainname: local
+      ports:
+      - "9699:9600"   # FastAPI serves both API and React frontend
+      volumes:
+        - type: volume
+          source: mxl-domain
+          target: /mxl-domain
+      environment:
+      - MXL_DOMAIN=/mxl-domain
 
-  html5-keyer:
+  # MediaMTX must use host networking so WebRTC ICE candidates reflect the real
+  # host IP.  All ports (8554 RTSP, 8889 WebRTC) are bound directly on the host.
+  mediamtx:
     platform: linux/amd64
-    image: ghcr.io/cbcrc/mxl-html5-keyer:latest
-    container_name: html5-keyer
-    hostname: html5-keyer
-    domainname: local
-    ports:
-    - "9540:9540"   # NMOS IS-04/IS-05 node
-    - "9640:9640"   # FastAPI HTML5 Keyer backend
-    - "9740:9740"   # React frontend (static files)
-    shm_size: "256mb"                          # required for CEF multi-process IPC
-    volumes:
-    - "mxl-domain:/mxl-domain"               # shared MXL domain
-    environment:
-    - MXL_DOMAIN=/mxl-domain
-    - NMOS_NODE_URL=http://localhost:9540
-    - SPX_URL=http://spx-server:5660/renderer/
-    depends_on:
-    - nmos-registry
-    - spx-server
+    image: bluenviron/mediamtx:latest
+    container_name: mediamtx
+    hostname: mediamtx
+    network_mode: host
 
   mxl2webrtc:
     platform: linux/amd64
-    image: ghcr.io/cbcrc/mxl-mxl2webrtc:latest
+    image: ghcr.io/cbcrc/mxl2webrtc:latest
     container_name: mxl2webrtc
     hostname: mxl2webrtc
     domainname: local
     ports:
-    - "9550:9550"   # NMOS IS-04/IS-05 node
-    - "9650:9650"   # FastAPI mxl2webrtc backend
-    - "9750:9750"   # React frontend (static files)
-    - "8443:8443"   # webrtcsink signaling server
-    - "50000-50020:50000-50020/udp"   # WebRTC media transport
+      - "9601:9600"   # FastAPI serves both API and React frontend; change host port freely
     volumes:
-    - "mxl-domain:/mxl-domain"
+      - type: volume
+        source: mxl-domain
+        target: /mxl-domain
     environment:
-    - MXL_DOMAIN=/mxl-domain
-    - NMOS_NODE_URL=http://localhost:9550
+      - MXL_DOMAIN=/mxl-domain
+      # host.docker.internal resolves to the Docker bridge gateway on Linux when
+      # extra_hosts is set; mediamtx binds directly on the host via network_mode: host
+      - MEDIAMTX_WHIP_URL=http://host.docker.internal:8889/mxl2webrtc/whip
+      - MEDIAMTX_WEBRTC_URL=http://localhost:8889
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-    - nmos-registry
-  
-  mxl-info-gui:
-    platform: linux/amd64
-    image: ghcr.io/cbcrc/mxl-info-gui:latest
-    container_name: mxl-info-gui
-    hostname: mxl-info-gui
-    domainname: local
-    ports:
-    - "9660:9660"   # FastAPI mxl-info-gui backend
-    - "9760:9760"   # React frontend (static files)
-    volumes:
-    - "mxl-domain:/mxl-domain"               # shared MXL domain
-    environment:
-    - MXL_DOMAIN=/mxl-domain
-
-  spx-server:
-    image: ghcr.io/cbcrc/spx-server:v1.0.3
-    container_name: spx-server
-    hostname: spx-server
-    domainname: local
-    ports:
-    - "5660:5660"
-    volumes:
-    - ./data/spx-server/ASSETS:/app/ASSETS
-    - ./data/spx-server/DATAROOT:/app/DATAROOT
-    - ./data/spx-server/locales:/app/locales
-    - ./data/spx-server/config.docker.json:/app/config.json
-    - ./data/spx-server/bin:/app/bin
-    - ./data/spx-server/LOG:/app/LOG
-    restart: unless-stopped
+      - mediamtx
