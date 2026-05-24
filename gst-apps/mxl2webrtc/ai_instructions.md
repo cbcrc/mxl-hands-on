@@ -194,7 +194,7 @@ The pipeline is built programmatically (not via `parse_launch`) using `webrtcbin
 - Pipeline construction:
   1. Create `webrtcbin` with `bundle-policy = MAX_BUNDLE`.
   2. For video: chain `mxlsrc(video-flow-id) → capsfilter(v210) → videoconvert → x264enc(zerolatency/ultrafast/key-int-max=30) → h264parse → rtph264pay(pt=96) → queue → webrtcbin sink pad`.
-  3. For audio: chain `mxlsrc(audio-flow-id) → capsfilter(F32LE) → audioconvert → opusenc → rtpopuspay(pt=97) → queue → webrtcbin sink pad`.
+  3. For audio: chain `mxlsrc(audio-flow-id) → capsfilter(F32LE) → audioconvert → audioresample → opusenc → rtpopuspay(pt=97) → queue → webrtcbin sink pad`. The `audioresample` element is required because Opus only accepts 8/12/16/24/48 kHz — without it a 96 kHz or 44.1 kHz source produces no audio.
   4. Use `webrtcbin.request_pad_simple("sink_%u")` to obtain sink pads; link queue src pads to them.
 
 - **WHIP handshake** (triggered by `on-negotiation-needed` signal):
@@ -258,6 +258,7 @@ Initialize a React + Vite project inside the `frontend/` directory targeting Vit
   - Retry up to 12 times at 2-second intervals (MediaMTX may not have the stream immediately after the pipeline starts). Start with a 1.5-second initial delay to allow the WHIP handshake to complete first.
   - When the pipeline stops, close the peer connection and clear the `<video>` `srcObject`.
   - Show player state (`connecting…` / `● LIVE` / error message) below the video element.
+  - The `<video>` element must start with `muted` set to allow browser autoplay. Once the player reaches "playing" state, display a **Mute / Unmute** button in the player header that toggles `videoRef.current.muted` and reflects the current state.
 
 **`vite.config.js`** — proxy all API paths to `http://localhost:9600` for local development:
 ```js
@@ -290,3 +291,5 @@ exec python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 9600
 | Promise callback never fires | `Gst.Promise.new_with_change_func(func, user_data)` does not forward `user_data` correctly in PyGObject | Use `lambda p: callback(p, captured_var)` instead of passing `user_data` |
 | WHEP returns 404 | WHIP handshake failed silently (callback exception swallowed by GLib) | Wrap all GLib callbacks in `try/except`; use lambda closures for promise callbacks |
 | `set_promise.wait()` blocks | Calling `wait()` inside a GLib promise callback can deadlock | Pass `Gst.Promise.new()` to `set-local-description` and never call `wait()` on it inside a callback |
+| No audio in browser despite green status dot | `<video muted>` permanently silences audio; browser autoplay blocks unmuted streams | Start the video element muted, then show a Mute/Unmute button once playing so the user can enable audio |
+| No audio from Opus even though pipeline starts | `opusenc` only accepts 8/12/16/24/48 kHz; a 96 kHz or 44.1 kHz MXL source fails to negotiate | Add `audioresample` between `audioconvert` and `opusenc` in the audio branch |

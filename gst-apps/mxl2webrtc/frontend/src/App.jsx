@@ -105,6 +105,14 @@ function useWhepPlayer(pipelinePlaying, mediamtxUrl) {
   const pcRef    = useRef(null);
   const [playerState, setPlayerState] = useState("idle");
   const [playerError, setPlayerError] = useState(null);
+  const [muted, setMuted] = useState(true);
+
+  const toggleMute = useCallback(() => {
+    if (videoRef.current) {
+      videoRef.current.muted = !videoRef.current.muted;
+      setMuted(videoRef.current.muted);
+    }
+  }, []);
 
   const cleanup = useCallback(() => {
     if (pcRef.current) {
@@ -208,7 +216,7 @@ function useWhepPlayer(pipelinePlaying, mediamtxUrl) {
     };
   }, [pipelinePlaying, mediamtxUrl, cleanup]);
 
-  return { videoRef, playerState, playerError };
+  return { videoRef, playerState, playerError, muted, toggleMute };
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -301,7 +309,7 @@ export default function App() {
   const audioFlows = flows.filter(isAudioFlow);
   const canStart   = !running && !starting && !!selectedDomain && (videoFlowUuid !== "none" || audioFlowUuid !== "none");
 
-  const { videoRef, playerState, playerError } = useWhepPlayer(running, mediamtxUrl);
+  const { videoRef, playerState, playerError, muted, toggleMute } = useWhepPlayer(running, mediamtxUrl);
 
   return (
     <div>
@@ -434,13 +442,31 @@ export default function App() {
         </div>
 
         {/* WebRTC player */}
-        <div style={{ ...S.label, marginBottom: "0.5rem" }}>
-          WebRTC Player
+        <div style={{ ...S.label, marginBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <span>WebRTC Player</span>
           {playerState === "playing" && (
             <span style={{ ...badge(true), fontSize: "0.7rem" }}>● LIVE</span>
           )}
           {playerState === "connecting" && (
-            <span style={{ color: "#888", fontSize: "0.75rem", marginLeft: "0.75rem" }}>connecting…</span>
+            <span style={{ color: "#888", fontSize: "0.75rem" }}>connecting…</span>
+          )}
+          {playerState === "playing" && (
+            <button
+              onClick={toggleMute}
+              style={{
+                marginLeft: "auto",
+                padding: "0.2rem 0.7rem",
+                background: muted ? "#5c3a00" : "#1a4a1a",
+                color: muted ? "#ffb74d" : "#81c784",
+                border: "none",
+                borderRadius: "4px",
+                fontSize: "0.78rem",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              {muted ? "Unmute" : "Mute"}
+            </button>
           )}
         </div>
 

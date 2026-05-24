@@ -195,12 +195,13 @@ class GstReceiver:
         domain: str,
     ) -> None:
         elements = [
-            ("mxlsrc",       "mxlsrc-audio"),
-            ("capsfilter",   "acaps"),
-            ("audioconvert", "aconv"),
-            ("opusenc",      "aenc"),
-            ("rtpopuspay",   "apay"),
-            ("queue",        "aqueue"),
+            ("mxlsrc",        "mxlsrc-audio"),
+            ("capsfilter",    "acaps"),
+            ("audioconvert",  "aconv"),
+            ("audioresample", "aresample"),
+            ("opusenc",       "aenc"),
+            ("rtpopuspay",    "apay"),
+            ("queue",         "aqueue"),
         ]
         elems = self._make_and_add(pipeline, elements)
 
@@ -212,7 +213,7 @@ class GstReceiver:
 
         elems["apay"].set_property("pt", 97)
 
-        self._link_elements(elems, ["mxlsrc-audio", "acaps", "aconv", "aenc", "apay", "aqueue"])
+        self._link_elements(elems, ["mxlsrc-audio", "acaps", "aconv", "aresample", "aenc", "apay", "aqueue"])
 
         src_pad = elems["aqueue"].get_static_pad("src")
         sink_pad = webrtcbin.request_pad_simple("sink_%u")
