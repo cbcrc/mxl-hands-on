@@ -196,9 +196,9 @@ class GstReceiver:
     ) -> None:
         elements = [
             ("mxlsrc",        "mxlsrc-audio"),
-            ("capsfilter",    "acaps"),
             ("audioconvert",  "aconv"),
             ("audioresample", "aresample"),
+            ("capsfilter",    "acaps"),
             ("opusenc",       "aenc"),
             ("rtpopuspay",    "apay"),
             ("queue",         "aqueue"),
@@ -208,12 +208,12 @@ class GstReceiver:
         elems["mxlsrc-audio"].set_property("audio-flow-id", flow_uuid)
         elems["mxlsrc-audio"].set_property("domain", domain)
 
-        caps = Gst.Caps.from_string("audio/x-raw,format=F32LE,layout=interleaved")
+        caps = Gst.Caps.from_string("audio/x-raw,layout=interleaved,channels=2")
         elems["acaps"].set_property("caps", caps)
 
         elems["apay"].set_property("pt", 97)
 
-        self._link_elements(elems, ["mxlsrc-audio", "acaps", "aconv", "aresample", "aenc", "apay", "aqueue"])
+        self._link_elements(elems, ["mxlsrc-audio", "aconv", "aresample", "acaps", "aenc", "apay", "aqueue"])
 
         src_pad = elems["aqueue"].get_static_pad("src")
         sink_pad = webrtcbin.request_pad_simple("sink_%u")

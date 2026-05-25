@@ -501,8 +501,8 @@ gst-launch-1.0 \
        ! queue \
        ! wb.sink_%u \
   mxlsrc audio-flow-id="<audio-flow-id>" domain="/mxl-domain" \
-       ! "audio/x-raw,format=F32LE,layout=interleaved" \
        ! audioconvert ! audioresample \
+       ! "audio/x-raw,layout=interleaved,channels=2" \
        ! opusenc \
        ! rtpopuspay pt=97 \
        ! queue \
@@ -525,9 +525,12 @@ The **video branch** reads the MXL video flow as v210 and converts it to a forma
 speed (`ultrafast`, `speed-preset=2`), with a keyframe every 30 frames.  `h264parse`
 normalises the bitstream, and `rtph264pay` wraps it in RTP at payload type 96.
 
-The **audio branch** reads the MXL audio as F32LE interleaved, converts and resamples to
-what `opusenc` needs, encodes to Opus, and wraps the result in RTP via `rtpopuspay` at
-payload type 97.
+The **audio branch** reads the MXL audio, converts and resamples it, downmixes to stereo
+(2 channels — the reliable maximum for Opus), encodes to Opus, and wraps the result in RTP
+via `rtpopuspay` at payload type 97. The `capsfilter(channels=2)` is placed **after**
+`audioconvert` and `audioresample` so those elements can negotiate the downmix; placing it
+directly after `mxlsrc` causes an "Internal data stream error" when the source has more
+than 2 channels.
 
 Both RTP streams are fed into **`webrtcbin`** with `bundle-policy=MAX_BUNDLE` (single
 transport for both media). No STUN server is configured — the app runs within a local
@@ -561,13 +564,13 @@ flowchart LR
 
     subgraph "Audio branch"
         asrc["mxlsrc\naudio-flow-id"]
-        acaps["capsfilter\nF32LE, interleaved"]
         aconv["audioconvert"]
         aresample["audioresample"]
+        acaps["capsfilter\ninterleaved, 2 ch"]
         aenc["opusenc"]
         apay["rtpopuspay\npt=97"]
         aqueue["queue"]
-        asrc --> acaps --> aconv --> aresample --> aenc --> apay --> aqueue
+        asrc --> aconv --> aresample --> acaps --> aenc --> apay --> aqueue
     end
 
     wb["webrtcbin\nbundle-policy=MAX_BUNDLE\nno STUN"]

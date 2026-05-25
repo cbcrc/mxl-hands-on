@@ -19,7 +19,7 @@ This single-port design means the browser always uses the **same origin** for bo
 - **MXL-info binary:** `/opt/mxl/tools/mxl-info/mxl-info` — used for flow discovery (same as `mxl-info-gui`).
   > ⚠️ In the build tree the tool path is `./dmf-mxl/build/Linux-Clang-Release/tools/mxl-info/mxl-info` — the directory and the executable share the same name.
 - **libgstmxl.so build path:** `./dmf-mxl/rust/target/release/libgstmxl.so` (compiled from the Rust GStreamer plugin source).
-- **mxlsrc capsfilter requirements:** A `capsfilter` with `video/x-raw,format=v210` **must** be placed immediately after every MXL video source, and a `capsfilter` with `audio/x-raw,format=F32LE,layout=interleaved` **must** be placed immediately after every MXL audio source. Without these, auto-negotiation may land on an incompatible format.
+- **mxlsrc capsfilter requirements:** A `capsfilter` with `video/x-raw,format=v210` **must** be placed immediately after every MXL video source. For audio sources, place `audioconvert → audioresample` **first**, then a `capsfilter` with `audio/x-raw,layout=interleaved,channels=2` after them — this lets `audioconvert` downmix multi-channel sources to stereo before the caps constraint is applied. Placing the audio capsfilter directly after `mxlsrc` causes an "Internal data stream error" when the source has more than 2 channels.
 - **Signaling / relay:** GStreamer publishes to MediaMTX via WHIP (`http://host.docker.internal:8889/mxl2webrtc/whip`). The browser receives from `http://<host>:8889/mxl2webrtc/whep`. The `mxl2webrtc` container reaches the host-networked MediaMTX via `extra_hosts: host.docker.internal:host-gateway`.
 - **Mode support:** The pipeline must support **video + audio**, **video only**, or **audio only**, depending on which flows the user selects in the Setup section. A mode with no flows selected must not be startable.
 
@@ -194,7 +194,7 @@ The pipeline is built programmatically (not via `parse_launch`) using `webrtcbin
 - Pipeline construction:
   1. Create `webrtcbin` with `bundle-policy = MAX_BUNDLE`.
   2. For video: chain `mxlsrc(video-flow-id) → capsfilter(v210) → videoconvert → x264enc(zerolatency/ultrafast/key-int-max=30) → h264parse → rtph264pay(pt=96) → queue → webrtcbin sink pad`.
-  3. For audio: chain `mxlsrc(audio-flow-id) → capsfilter(F32LE) → audioconvert → audioresample → opusenc → rtpopuspay(pt=97) → queue → webrtcbin sink pad`. The `audioresample` element is required because Opus only accepts 8/12/16/24/48 kHz — without it a 96 kHz or 44.1 kHz source produces no audio.
+  3. For audio: chain `mxlsrc(audio-flow-id) → audioconvert → audioresample → capsfilter(layout=interleaved,channels=2) → opusenc → rtpopuspay(pt=97) → queue → webrtcbin sink pad`. `audioconvert` handles format conversion and channel downmixing; `audioresample` ensures Opus-compatible sample rates (8/12/16/24/48 kHz). The `capsfilter` **must** be placed after both converters — placing it directly after `mxlsrc` causes "Internal data stream error" when the source has more than 2 channels.
   4. Use `webrtcbin.request_pad_simple("sink_%u")` to obtain sink pads; link queue src pads to them.
 
 - **WHIP handshake** (triggered by `on-negotiation-needed` signal):
@@ -293,3 +293,4 @@ exec python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 9600
 | `set_promise.wait()` blocks | Calling `wait()` inside a GLib promise callback can deadlock | Pass `Gst.Promise.new()` to `set-local-description` and never call `wait()` on it inside a callback |
 | No audio in browser despite green status dot | `<video muted>` permanently silences audio; browser autoplay blocks unmuted streams | Start the video element muted, then show a Mute/Unmute button once playing so the user can enable audio |
 | No audio from Opus even though pipeline starts | `opusenc` only accepts 8/12/16/24/48 kHz; a 96 kHz or 44.1 kHz MXL source fails to negotiate | Add `audioresample` between `audioconvert` and `opusenc` in the audio branch |
+| `Internal data stream error` with multi-channel audio | `capsfilter(channels=2)` placed directly after `mxlsrc` asks the source to produce 2 channels — impossible when the source has more | Move `audioconvert → audioresample` before the `capsfilter`; `audioconvert` can then downmix N→2 channels as negotiated by the downstream caps |
