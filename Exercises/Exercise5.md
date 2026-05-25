@@ -102,8 +102,16 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
     ```sh
         ./start-mac.sh # For mac based machine
     ```
+1. Use the application and try to reproduce the workflow above. You have more documentation on application usage [here](../gst-apps/README.md)
 
-1. Reference HLS stream that are 1920x1080p60
+| App | URL | API Swagger Page |
+|-----|-----|-----|
+| Test Generator | http://localhost:9600 | http://localhost:9600/docs |
+| MXL Info GUI | http://localhost:9699 | http://localhost:9699/docs |
+| MXL to WebRTC | http://localhost:9601 | http://localhost:9601/docs |
+
+
+Reference HLS stream that are 1920x1080p60
     ```sh
         https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8
     ```

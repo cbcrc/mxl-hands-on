@@ -8,9 +8,9 @@ This directory contains three GStreamer-based web applications that produce, ins
 
 | App | Image | Port | What it does |
 |-----|-------|------|--------------|
-| [Test Generator](#1-test-generator) | `test-generator:latest` | `9600` | Generates synthetic colour-bar video and tone audio, publishes to MXL |
-| [MXL Info GUI](#2-mxl-info-gui) | `mxl-info-gui:latest` | `9699` | Probes MXL domains and displays live flow metadata |
-| [MXL to WebRTC](#3-mxl-to-webrtc) | `mxl2webrtc:latest` | `9601` | Reads MXL flows and relays them as a low-latency WebRTC stream in the browser |
+| [Test Generator](#1-test-generator) | `test-generator:latest` | `Depending on Docker compose config` | Generates synthetic colour-bar video and tone audio, publishes to MXL |
+| [MXL Info GUI](#2-mxl-info-gui) | `mxl-info-gui:latest` | `Depending on Docker compose config` | Probes MXL domains and displays live flow metadata |
+| [MXL to WebRTC](#3-mxl-to-webrtc) | `mxl2webrtc:latest` | `Depending on Docker compose config` | Reads MXL flows and relays them as a low-latency WebRTC stream in the browser |
 
 Pre-built images are published to `ghcr.io/cbcrc` — see [Exercise 5](../Exercises/Exercise5.md) to spin up the whole system without compiling anything.
 
@@ -25,27 +25,33 @@ Pre-built images are published to `ghcr.io/cbcrc` — see [Exercise 5](../Exerci
 
 ## Running the apps
 
-```bash
-cd gst-apps
+**Make sure you have your tmpfs volume mounted as in the preparation steps for [Linux](../Preparation/WSL-Ubuntu.md) or [Mac](../Preparation/MAC.md)**
 
-# Point the shared volume at your MXL domain directory
-export MXL_DOMAIN_DEVICE=/path/to/your/mxl-domain
+On linux
+```sh
+cd ~/mxl-hands-on/docker/exercise-5
+./start.sh
+```
 
-# Start all services
-docker compose up -d
+On Mac
+```sh
+cd ~/mxl-hands-on/docker/exercise-5
+./start-mac.sh
+```
 
-# Or start only what you need
+## Or start only what you need (Domain need to be setup as per the starting script)
+```sh
 docker compose up -d test-generator mxl-info-gui
 docker compose up -d mediamtx mxl2webrtc
 ```
 
 Open the UIs in a browser once the containers are up:
 
-| App | URL |
-|-----|-----|
-| Test Generator | http://localhost:9600 |
-| MXL Info GUI | http://localhost:9699 |
-| MXL to WebRTC | http://localhost:9601 |
+| App | URL | API Swagger Page |
+|-----|-----|-----|
+| Test Generator | http://localhost:9600 | http://localhost:9600/docs |
+| MXL Info GUI | http://localhost:9699 | http://localhost:9699/docs |
+| MXL to WebRTC | http://localhost:9601 | http://localhost:9601/docs |
 
 ---
 
@@ -110,13 +116,8 @@ For the full GStreamer pipeline breakdown see [gstreamer-pipeline.md — Section
 
 ## Building from source
 
-If you want to build the Docker images yourself (requires the MXL SDK compiled first), follow [how_to_build.md](../how_to_build.md).
+If you want to build the Docker images yourself (requires the MXL SDK compiled first), follow [how_to_build.md](../how_to_build.md) part 0,1 and 2.
 
-```bash
-# After building the MXL SDK (see how_to_build.md Steps 1–2)
-cd gst-apps
-docker compose build
-```
 
 ---
 

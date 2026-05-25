@@ -52,7 +52,15 @@ This scripts will:
 - Build the rust part of the project in the ./dmf-mxl/rust directory
 - Place the rust build artifacts in ./dmf-mxl/rust/target
 
-## Step 2: Creating `portable mxl app`
+## Step 2: Build the GStreamer based application images.
+
+```sh
+   # Navigate to the gst-apps directory first
+   cd gst-apps
+   docker compose build
+```
+
+## Step 3: Creating `portable mxl app`
 
 ```sh
    # Creating amd64 portable app
@@ -64,7 +72,7 @@ This scripts will:
    ./create_portable_arm.sh
 ```
 
-## Step 3: Upload portable apps in the release of the repository
+## Step 4: Upload portable apps in the release of the repository
 
 This will upload the tar.gz portable apps to the release using a proper tag.
 
@@ -93,7 +101,7 @@ Cleaning up tar.gz files
    ./Portable-mxl-app/mxl-writer/x86_64/portable-mxl-writer-x86_64.tar.gz \
 ```
 
-## Step 4: Build Docker Images. ONLY WORK UNDER LINUX
+## Step 5: Build Docker Images. ONLY WORK UNDER LINUX
 
 After the project is built, create the Docker images:
 
@@ -113,15 +121,6 @@ the nomenclature of the generated tag is:
 ```<service>:<mxl_recent_tag>-<num_of_commit_since_tag>-<actual_commit_hash>-<compiler>```
 Exemple:
 ```mxl-reader:v1.0.0-rc1-24-g8d280db-Clang```
-
-## Step 5: Build the GStreamer based application images.
-
-```sh
-   # Navigate to the gst-apps directory first
-   cd gst-apps
-   docker compose build
-```
-
 
 ## Step 6: Upload to image repository
 
