@@ -127,6 +127,7 @@ Reference HLS stream that are 1920x1080p60
 | [React DOM](https://github.com/facebook/react) | Frontend | MIT | ✓ | ✓ | ✓ |
 | [Vite](https://github.com/vitejs/vite) | Frontend | MIT | ✓ | ✓ | ✓ |
 | [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react) | Frontend | MIT | ✓ | ✓ | ✓ |
+| [MXL](https://github.com/dmf-mxl/mxl) | Backend | Apache-2.0 | ✓ | ✓ | ✓ |
 | [FastAPI](https://github.com/tiangolo/fastapi) | Backend | MIT | ✓ | ✓ | ✓ |
 | [Uvicorn](https://github.com/encode/uvicorn) | Backend | BSD-3-Clause | ✓ | ✓ | ✓ |
 | [aiofiles](https://github.com/Tinche/aiofiles) | Backend | Apache-2.0 | ✓ | ✓ | ✓ |
