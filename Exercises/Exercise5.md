@@ -2,7 +2,7 @@
 
 ### Synopsis
 
-In this exercise, we will compile the latest commit of the MXL SDK including rust bindings and the rust Gstreamer plugins. Then we will build a full stream augmentation workflow supported by various open source project, including MediaMTX, CEF, **need to complete the full list**.
+In this exercise, we will compile the latest commit of the MXL SDK including rust bindings and the rust Gstreamer plugins. Then we will build a full stream augmentation workflow supported by various open source project. A full list is found at the end of this document.
 
 ```mermaid
     flowchart LR
@@ -118,3 +118,29 @@ Reference HLS stream that are 1920x1080p60
     ```sh
         https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
     ```
+
+### Open Source Components
+
+| Component | Category | License | Test Generator | MXL Info GUI | MXL2WebRTC |
+|-----------|----------|---------|:--------------:|:------------:|:----------:|
+| [React](https://github.com/facebook/react) | Frontend | MIT | ✓ | ✓ | ✓ |
+| [React DOM](https://github.com/facebook/react) | Frontend | MIT | ✓ | ✓ | ✓ |
+| [Vite](https://github.com/vitejs/vite) | Frontend | MIT | ✓ | ✓ | ✓ |
+| [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react) | Frontend | MIT | ✓ | ✓ | ✓ |
+| [FastAPI](https://github.com/tiangolo/fastapi) | Backend | MIT | ✓ | ✓ | ✓ |
+| [Uvicorn](https://github.com/encode/uvicorn) | Backend | BSD-3-Clause | ✓ | ✓ | ✓ |
+| [aiofiles](https://github.com/Tinche/aiofiles) | Backend | Apache-2.0 | ✓ | ✓ | ✓ |
+| [python-multipart](https://github.com/andrew-d/python-multipart) | Backend | Apache-2.0 | ✓ | ✓ | — |
+| [Requests](https://github.com/psf/requests) | Backend | Apache-2.0 | ✓ | — | — |
+| [Pydantic](https://github.com/pydantic/pydantic) | Backend | MIT | — | — | ✓ |
+| [PyGObject](https://gitlab.gnome.org/GNOME/pygobject) | Runtime | LGPL-2.1+ | ✓ | — | ✓ |
+| [GStreamer](https://gstreamer.freedesktop.org) | Runtime | LGPL-2.0+ | ✓ | — | ✓ |
+| [GStreamer plugins-base](https://gstreamer.freedesktop.org/modules/gst-plugins-base.html) | Runtime | LGPL-2.0+ | ✓ | — | ✓ |
+| [GStreamer plugins-good](https://gstreamer.freedesktop.org/modules/gst-plugins-good.html) | Runtime | LGPL-2.0+ | ✓ | — | ✓ |
+| [GStreamer plugins-bad](https://gstreamer.freedesktop.org/modules/gst-plugins-bad.html) | Runtime | LGPL-2.0+ | ✓ | — | ✓ |
+| [GStreamer plugins-ugly](https://gstreamer.freedesktop.org/modules/gst-plugins-ugly.html) | Runtime | LGPL-2.0+ | ✓ | — | ✓ |
+| [GStreamer libav](https://gstreamer.freedesktop.org/modules/gst-libav.html) | Runtime | LGPL-2.0+ | ✓ | — | ✓ |
+| [GStreamer nice (libnice)](https://libnice.freedesktop.org) | Runtime | LGPL-2.1 | — | — | ✓ |
+| [MediaMTX](https://github.com/bluenviron/mediamtx) | Infrastructure | MIT | — | — | ✓ |
+| [Ubuntu 24.04](https://ubuntu.com) | Base Image | Various | ✓ | ✓ | ✓ |
+| [Node.js 18](https://nodejs.org) | Build | MIT | ✓ | ✓ | ✓ |
