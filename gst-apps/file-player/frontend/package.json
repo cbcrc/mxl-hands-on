@@ -1,18 +1,18 @@
 {
-  "name": "file-player-frontend",
-  "version": "0.1.0",
-  "private": true,
+  "name": "file-player-ui",
+  "version": "1.0.0",
+  "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev":   "vite --host 0.0.0.0 --port 9710",
     "build": "vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "react": "^18.2.0",
+    "react":     "^18.2.0",
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.2.1",
-    "vite": "^5.0.0"
+    "@vitejs/plugin-react": "^4.0.0",
+    "vite":                 "^5.0.0"
   }
 }

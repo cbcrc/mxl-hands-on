@@ -1,249 +1,500 @@
-import { useState, useEffect, useCallback } from 'react'
+import React, { useCallback, useEffect, useState } from "react";
 
-// The API lives on port 9600 of the same host
-const API = `http://${window.location.hostname}:9600`
+const API = "";
 
-const STATE_COLORS = {
-  idle:     '#64748b',
-  playing:  '#22c55e',
-  stopped:  '#ef4444',
-  error:    '#ef4444',
-}
+// ── Styles ────────────────────────────────────────────────────────────────────
 
-async function api(path, method = 'GET', body = undefined) {
-  const opts = { method, headers: { 'Content-Type': 'application/json' } }
-  if (body !== undefined) opts.body = JSON.stringify(body)
-  const res = await fetch(`${API}${path}`, opts)
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`${res.status}: ${text}`)
+const S = {
+  card: {
+    background: "#1c1c1c",
+    borderRadius: "8px",
+    padding: "1.25rem 1.5rem",
+    marginBottom: "1rem",
+  },
+  sectionTitle: {
+    fontSize: "0.7rem",
+    fontWeight: 700,
+    letterSpacing: "0.12em",
+    color: "#666",
+    textTransform: "uppercase",
+    marginBottom: "0.75rem",
+  },
+  label: {
+    display: "block",
+    marginBottom: "0.3rem",
+    color: "#aaa",
+    fontSize: "0.82rem",
+  },
+  input: {
+    width: "100%",
+    padding: "0.45rem 0.6rem",
+    background: "#2a2a2a",
+    color: "#fff",
+    border: "1px solid #444",
+    borderRadius: "4px",
+    fontSize: "0.95rem",
+    boxSizing: "border-box",
+  },
+  inputDisabled: { opacity: 0.4, cursor: "not-allowed" },
+  row: { display: "flex", gap: "0.75rem", alignItems: "flex-start" },
+  col: { flex: 1 },
+};
+
+const btn = (variant = "primary", disabled = false) => ({
+  padding: "0.5rem 1.25rem",
+  borderRadius: "4px",
+  border: "none",
+  cursor: disabled ? "not-allowed" : "pointer",
+  fontWeight: 600,
+  fontSize: "0.95rem",
+  opacity: disabled ? 0.45 : 1,
+  transition: "opacity 0.15s",
+  background:
+    variant === "danger"  ? "#8b1a1a" :
+    variant === "success" ? "#0d7c3e" :
+    "#2a5caa",
+  color: "#fff",
+});
+
+const badge = (running) => ({
+  display: "inline-block",
+  padding: "0.2rem 0.65rem",
+  borderRadius: "20px",
+  background: running ? "#1a5c2a" : "#3a3a3a",
+  color:      running ? "#4caf50" : "#888",
+  fontSize: "0.75rem",
+  fontWeight: 700,
+  marginLeft: "0.75rem",
+  verticalAlign: "middle",
+});
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+async function post(path, body) {
+  const r = await fetch(`${API}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.detail || r.statusText);
   }
-  return res.json()
+  return r.json();
 }
+
+function Input({ label, value, onChange, disabled, placeholder }) {
+  return (
+    <div>
+      {label && <label style={S.label}>{label}</label>}
+      <input
+        type="text"
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        style={{ ...S.input, ...(disabled ? S.inputDisabled : {}) }}
+      />
+    </div>
+  );
+}
+
+function Select({ label, value, onChange, options, disabled }) {
+  return (
+    <div>
+      {label && <label style={S.label}>{label}</label>}
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        style={{ ...S.input, ...(disabled ? S.inputDisabled : {}) }}
+      >
+        {options.map((o) =>
+          typeof o === "string" ? (
+            <option key={o} value={o}>{o}</option>
+          ) : (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          )
+        )}
+      </select>
+    </div>
+  );
+}
+
+// ── Stream info rendering ─────────────────────────────────────────────────────
+
+function fmtFramerate(fr) {
+  if (!fr || typeof fr !== "string" || !fr.includes("/")) return fr ?? "?";
+  const [n, d] = fr.split("/").map(Number);
+  if (!d) return `${n}`;
+  const fps = n / d;
+  return Number.isInteger(fps) ? `${fps}` : fps.toFixed(2);
+}
+
+function StreamLine({ s }) {
+  if (s.type === "video") {
+    return (
+      <div style={{ fontSize: "0.85rem", color: "#ccc", marginBottom: "0.2rem" }}>
+        <strong style={{ color: "#fff" }}>Video:</strong>{" "}
+        {s.codec} · {s.width}×{s.height} @ {fmtFramerate(s.framerate)} fps
+      </div>
+    );
+  }
+  return (
+    <div style={{ fontSize: "0.85rem", color: "#ccc", marginBottom: "0.2rem" }}>
+      <strong style={{ color: "#fff" }}>Audio:</strong>{" "}
+      {s.codec} · {s.sample_rate} Hz · {s.channels} ch
+    </div>
+  );
+}
+
+// ── Defaults ──────────────────────────────────────────────────────────────────
+
+const DEFAULT_FLOWS = {
+  video: { active: true, description: "video-out-1", label: "clip-player-video" },
+  audio: { active: true, description: "audio-out-1", label: "clip-player-audio" },
+};
+
+// ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [files, setFiles]           = useState([])
-  const [selected, setSelected]     = useState('')
-  const [status, setStatus]         = useState(null)
-  const [error, setError]           = useState('')
-  const [loading, setLoading]       = useState(false)
+  // Fetched data
+  const [status,  setStatus]  = useState(null);
+  const [domains, setDomains] = useState([]);
+  const [files,   setFiles]   = useState([]);
 
-  const clearError = () => setError('')
+  // Setup form state
+  const [domain,    setDomain]    = useState("");
+  const [file,      setFile]      = useState("");
+  const [grouphint, setGrouphint] = useState("Clip-Player");
+  const [flows,     setFlows]     = useState(DEFAULT_FLOWS);
+  const [probe,     setProbe]     = useState(null);   // probe result for selected file
+  const [probing,   setProbing]   = useState(false);
 
-  // Poll status every 2 s
+  const [error, setError] = useState("");
+
+  const running = status?.running ?? false;
+
+  // ── Data fetching ─────────────────────────────────────────────────────────
+
   const fetchStatus = useCallback(async () => {
     try {
-      const s = await api('/status')
-      setStatus(s)
-    } catch {
-      // backend not yet ready – ignore
-    }
-  }, [])
+      const r = await fetch(`${API}/pipeline/status`);
+      setStatus(await r.json());
+    } catch {}
+  }, []);
 
-  useEffect(() => {
-    fetchStatus()
-    const id = setInterval(fetchStatus, 2000)
-    return () => clearInterval(id)
-  }, [fetchStatus])
-
-  // Load file list once on mount
-  useEffect(() => {
-    api('/files')
-      .then(d => {
-        setFiles(d.files || [])
-        if (d.files?.length) setSelected(d.files[0])
-      })
-      .catch(() => {})
-  }, [])
-
-  const cmd = async (path, body) => {
-    setLoading(true)
-    clearError()
+  const fetchFiles = useCallback(async () => {
     try {
-      await api(path, 'POST', body)
-      await fetchStatus()
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
-    }
-  }
+      const r = await fetch(`${API}/files`);
+      const d = await r.json();
+      setFiles(d.files ?? []);
+    } catch {}
+  }, []);
 
-  const stateColor = STATUS_COLORS[status?.state] ?? '#64748b'
-  const currentState = status?.state ?? 'unknown'
+  useEffect(() => {
+    (async () => {
+      try {
+        const d = await fetch(`${API}/domains`).then((r) => r.json());
+        setDomains(d.domains ?? []);
+        if (d.domains?.length > 0) setDomain(d.domains[0].path);
+      } catch {}
+    })();
+    fetchFiles();
+    fetchStatus();
+    const id = setInterval(fetchStatus, 2000);
+    return () => clearInterval(id);
+  }, [fetchFiles, fetchStatus]);
+
+  // Auto-probe when file selection changes
+  useEffect(() => {
+    if (!file) { setProbe(null); return; }
+    let aborted = false;
+    setProbing(true);
+    setError("");
+    (async () => {
+      try {
+        const r = await fetch(`${API}/files/probe?path=${encodeURIComponent(file)}`);
+        const d = await r.json();
+        if (aborted) return;
+        if (!r.ok) {
+          setError(d.detail || "probe failed");
+          setProbe(null);
+        } else {
+          setProbe(d);
+          // Disable flows the file does not contain
+          setFlows((prev) => ({
+            video: { ...prev.video, active: prev.video.active && d.has_video },
+            audio: { ...prev.audio, active: prev.audio.active && d.has_audio },
+          }));
+        }
+      } catch (e) {
+        if (!aborted) { setError(String(e)); setProbe(null); }
+      } finally {
+        if (!aborted) setProbing(false);
+      }
+    })();
+    return () => { aborted = true; };
+  }, [file]);
+
+  // ── Setup validation ──────────────────────────────────────────────────────
+
+  const activeFlowsValid = ["video", "audio"].every((k) => {
+    const f = flows[k];
+    if (!f.active) return true;
+    return f.description.trim() !== "" && f.label.trim() !== "";
+  });
+
+  const anyActive =
+    (flows.video.active && probe?.has_video) ||
+    (flows.audio.active && probe?.has_audio);
+
+  const canStart = !running &&
+    domain !== "" &&
+    file !== "" &&
+    probe !== null &&
+    !probing &&
+    anyActive &&
+    activeFlowsValid;
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+
+  const updateFlow = (key, field, value) =>
+    setFlows((prev) => ({ ...prev, [key]: { ...prev[key], [field]: value } }));
+
+  const handleStart = async () => {
+    setError("");
+    try {
+      await post("/pipeline/start", {
+        domain,
+        file,
+        grouphint,
+        video: flows.video,
+        audio: flows.audio,
+      });
+      await fetchStatus();
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const handleStop = async () => {
+    setError("");
+    try {
+      await post("/pipeline/stop", {});
+      await fetchStatus();
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  // ── Domain / file options ────────────────────────────────────────────────
+
+  const domainOptions = domains.map((d) => ({
+    value: d.path,
+    label: d.label ? `${d.label} (${d.path})` : d.path,
+  }));
+
+  const fileOptions = files.length > 0
+    ? [{ value: "", label: "— select a file —" }, ...files.map((f) => ({ value: f, label: f }))]
+    : [{ value: "", label: "No files found in /home/file" }];
+
+  // ── Flow row ──────────────────────────────────────────────────────────────
+
+  const FlowRow = ({ flowKey, label, present }) => {
+    const f = flows[flowKey];
+    const rowDisabled = running || !present;
+    return (
+      <tr style={{ opacity: present ? 1 : 0.4 }}>
+        <td style={{ padding: "0.4rem 0.5rem", color: "#ccc", whiteSpace: "nowrap" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: rowDisabled ? "not-allowed" : "pointer" }}>
+            <input
+              type="checkbox"
+              checked={f.active && present}
+              onChange={(e) => !rowDisabled && updateFlow(flowKey, "active", e.target.checked)}
+              disabled={rowDisabled}
+              style={{ width: "16px", height: "16px" }}
+            />
+            {label}
+          </label>
+        </td>
+        <td style={{ padding: "0.4rem 0.5rem" }}>
+          <input
+            style={{ ...S.input, ...(rowDisabled ? S.inputDisabled : {}) }}
+            value={f.description}
+            onChange={(e) => updateFlow(flowKey, "description", e.target.value)}
+            disabled={rowDisabled}
+            placeholder="description"
+          />
+        </td>
+        <td style={{ padding: "0.4rem 0.5rem" }}>
+          <input
+            style={{ ...S.input, ...(rowDisabled ? S.inputDisabled : {}) }}
+            value={f.label}
+            onChange={(e) => updateFlow(flowKey, "label", e.target.value)}
+            disabled={rowDisabled}
+            placeholder="label"
+          />
+        </td>
+      </tr>
+    );
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ width: '100%', maxWidth: 640 }}>
-      <h1 style={{ fontSize: '1.5rem', marginBottom: '1.5rem', letterSpacing: '0.05em' }}>
-        🎬 MXL File Player
-      </h1>
-
-      {/* Status badge */}
-      <div style={styles.card}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.5rem' }}>
-          <span style={{ ...styles.badge, background: stateColor }}>
-            {currentState.toUpperCase()}
-          </span>
-          {status?.file && (
-            <span style={{ fontSize: '0.85rem', color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {status.file.split('/').pop()}
-            </span>
-          )}
+    <div style={{ maxWidth: "800px", width: "100%", margin: "0 auto" }}>
+      {/* Header */}
+      <div style={{ marginBottom: "1.5rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+          <img src="/cbc-logo.png" alt="CBC Radio-Canada" style={{ height: "2.2rem", objectFit: "contain" }} />
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>
+            MXL File Player
+            <span style={badge(running)}>{running ? "● RUNNING" : "○ STOPPED"}</span>
+          </h1>
         </div>
-        {status?.video_flow_id && (
-          <div style={styles.flowInfo}>
-            <FlowRow label="Video flow" id={status.video_flow_id} />
-            <FlowRow label="Audio flow" id={status.audio_flow_id} />
-            <FlowRow label="MXL domain" id={status.mxl_domain} />
-          </div>
+        {running && status?.flow_uuids && (
+          <p style={{ color: "#555", fontSize: "0.75rem", marginTop: "0.4rem", fontFamily: "monospace" }}>
+            {Object.entries(status.flow_uuids).map(([k, v]) => `${k}: ${v}`).join(" · ")}
+          </p>
         )}
       </div>
 
-      {/* File selector */}
-      <div style={styles.card}>
-        <label style={styles.label}>Media file</label>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {files.length > 0 ? (
-            <select
-              value={selected}
-              onChange={e => setSelected(e.target.value)}
-              style={styles.select}
-            >
-              {files.map(f => <option key={f} value={f}>{f}</option>)}
-            </select>
-          ) : (
-            <input
-              value={selected}
-              onChange={e => setSelected(e.target.value)}
-              placeholder="filename.mp4"
-              style={styles.input}
-            />
-          )}
-          <Btn onClick={() => cmd('/load', { filename: selected })} disabled={!selected || loading} color="#3b82f6">
-            Load
-          </Btn>
-        </div>
-      </div>
-
-      {/* Transport controls */}
-      <div style={styles.card}>
-        <label style={styles.label}>Transport</label>
-        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-          <Btn onClick={() => cmd('/play')}  disabled={loading} color="#22c55e">▶ Play</Btn>
-          <Btn onClick={() => cmd('/stop')}  disabled={loading} color="#ef4444">⏹ Stop</Btn>
-        </div>
-      </div>
-
       {error && (
-        <div style={styles.errorBox}>
-          ⚠ {error}
-          <button onClick={clearError} style={styles.closeBtn}>✕</button>
+        <div style={{ background: "#3a1010", border: "1px solid #8b1a1a", borderRadius: "6px", padding: "0.6rem 1rem", marginBottom: "1rem", color: "#f88" }}>
+          {error}
         </div>
       )}
+
+      {/* ── SETUP SECTION ── */}
+      <div style={{ ...S.card, border: "1px solid #2a2a2a" }}>
+        <div style={S.sectionTitle}>Setup</div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+          {/* Domain + grouphint */}
+          <div style={S.row}>
+            <div style={{ flex: 2 }}>
+              <Select
+                label="MXL Domain"
+                value={domain}
+                onChange={setDomain}
+                options={domainOptions.length > 0 ? domainOptions : [{ value: "", label: "No domains found" }]}
+                disabled={running}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <Input
+                label="Group Hint"
+                value={grouphint}
+                onChange={setGrouphint}
+                disabled={running}
+              />
+            </div>
+          </div>
+
+          {/* File + refresh */}
+          <div>
+            <label style={S.label}>Media File</label>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "stretch" }}>
+              <div style={{ flex: 1 }}>
+                <Select
+                  value={file}
+                  onChange={setFile}
+                  options={fileOptions}
+                  disabled={running}
+                />
+              </div>
+              <button
+                style={btn("primary", running)}
+                onClick={fetchFiles}
+                disabled={running}
+                title="Re-scan /home/file"
+              >
+                ↻ Refresh
+              </button>
+            </div>
+            {probing && (
+              <p style={{ color: "#888", fontSize: "0.8rem", marginTop: "0.4rem" }}>
+                Probing file…
+              </p>
+            )}
+          </div>
+
+          {/* Flow configuration table */}
+          <div>
+            <label style={S.label}>Flow Configuration</label>
+            <table style={{ width: "100%", borderCollapse: "collapse", background: "#222", borderRadius: "6px", overflow: "hidden" }}>
+              <thead>
+                <tr style={{ background: "#2a2a2a" }}>
+                  <th style={{ padding: "0.4rem 0.5rem", textAlign: "left", color: "#888", fontSize: "0.78rem", fontWeight: 600 }}>Flow</th>
+                  <th style={{ padding: "0.4rem 0.5rem", textAlign: "left", color: "#888", fontSize: "0.78rem", fontWeight: 600 }}>Description</th>
+                  <th style={{ padding: "0.4rem 0.5rem", textAlign: "left", color: "#888", fontSize: "0.78rem", fontWeight: 600 }}>Label</th>
+                </tr>
+              </thead>
+              <tbody>
+                <FlowRow flowKey="video" label="Video" present={!!probe?.has_video} />
+                <FlowRow flowKey="audio" label="Audio" present={!!probe?.has_audio} />
+              </tbody>
+            </table>
+            {probe && !probe.has_video && !probe.has_audio && (
+              <p style={{ color: "#f88", fontSize: "0.8rem", marginTop: "0.4rem" }}>
+                No playable streams detected in this file.
+              </p>
+            )}
+          </div>
+
+          {/* Start / Stop */}
+          <div>
+            {running ? (
+              <button style={btn("danger")} onClick={handleStop}>
+                ■ Stop Pipeline
+              </button>
+            ) : (
+              <button style={btn("success", !canStart)} onClick={handleStart} disabled={!canStart}>
+                ▶ Start Pipeline
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── OPERATION SECTION ── */}
+      <div style={{ opacity: running ? 1 : 0.35, pointerEvents: running ? "auto" : "none", transition: "opacity 0.2s" }}>
+        <div style={{ ...S.card, border: "1px solid #2a2a2a" }}>
+          <div style={S.sectionTitle}>Playback Info</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+            <div>
+              <label style={S.label}>Now Playing</label>
+              <div style={{ fontFamily: "monospace", color: "#fff", fontSize: "0.95rem" }}>
+                {status?.file ?? "—"}
+              </div>
+            </div>
+
+            <div>
+              <label style={S.label}>Stream Info</label>
+              {status?.streams?.streams?.length > 0 ? (
+                status.streams.streams.map((s, i) => <StreamLine key={i} s={s} />)
+              ) : (
+                <div style={{ color: "#666", fontSize: "0.85rem" }}>—</div>
+              )}
+            </div>
+
+            <div>
+              <span style={{
+                display: "inline-block",
+                padding: "0.25rem 0.75rem",
+                borderRadius: "20px",
+                background: running ? "#1a3a5c" : "#2a2a2a",
+                color:      running ? "#4ca8f4" : "#666",
+                fontSize: "0.78rem",
+                fontWeight: 700,
+              }}>
+                ↻ Looping
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
-  )
-}
-
-// Fix typo: alias STATE_COLORS as STATUS_COLORS for runtime usage
-const STATUS_COLORS = STATE_COLORS
-
-function FlowRow({ label, id }) {
-  return (
-    <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.75rem', color: '#94a3b8' }}>
-      <span style={{ minWidth: 90, color: '#64748b' }}>{label}:</span>
-      <span style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>{id}</span>
-    </div>
-  )
-}
-
-function Btn({ onClick, disabled, color, children }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      style={{
-        padding: '0.5rem 1.25rem',
-        borderRadius: '0.375rem',
-        border: 'none',
-        background: disabled ? '#334155' : color,
-        color: disabled ? '#64748b' : '#fff',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        fontWeight: 600,
-        fontSize: '0.9rem',
-        transition: 'opacity 0.15s',
-      }}
-    >
-      {children}
-    </button>
-  )
-}
-
-const styles = {
-  card: {
-    background: '#1e2535',
-    border: '1px solid #2d3748',
-    borderRadius: '0.5rem',
-    padding: '1rem 1.25rem',
-    marginBottom: '1rem',
-  },
-  label: {
-    display: 'block',
-    fontSize: '0.75rem',
-    fontWeight: 700,
-    letterSpacing: '0.1em',
-    color: '#64748b',
-    textTransform: 'uppercase',
-    marginBottom: '0.5rem',
-  },
-  badge: {
-    display: 'inline-block',
-    padding: '0.2rem 0.6rem',
-    borderRadius: '9999px',
-    fontSize: '0.7rem',
-    fontWeight: 700,
-    letterSpacing: '0.08em',
-    color: '#fff',
-  },
-  flowInfo: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '0.2rem',
-    marginTop: '0.5rem',
-  },
-  select: {
-    flex: 1,
-    background: '#0f1117',
-    border: '1px solid #2d3748',
-    borderRadius: '0.375rem',
-    color: '#e2e8f0',
-    padding: '0.45rem 0.75rem',
-    fontSize: '0.9rem',
-  },
-  input: {
-    flex: 1,
-    background: '#0f1117',
-    border: '1px solid #2d3748',
-    borderRadius: '0.375rem',
-    color: '#e2e8f0',
-    padding: '0.45rem 0.75rem',
-    fontSize: '0.9rem',
-  },
-  errorBox: {
-    background: '#450a0a',
-    border: '1px solid #ef4444',
-    borderRadius: '0.5rem',
-    padding: '0.75rem 1rem',
-    fontSize: '0.85rem',
-    color: '#fca5a5',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  closeBtn: {
-    background: 'none',
-    border: 'none',
-    color: '#fca5a5',
-    cursor: 'pointer',
-    fontSize: '1rem',
-  },
+  );
 }

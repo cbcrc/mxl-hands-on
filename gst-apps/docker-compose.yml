@@ -27,6 +27,25 @@ services:
         source: mxl-domain
         target: /mxl-domain
 
+  file-player:
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: gst-apps/file-player/Dockerfile
+    image: file-player:latest
+    container_name: file-player
+    hostname: file-player
+    domainname: local
+    ports:
+      - "9602:9600"   # FastAPI serves both API and React frontend
+    volumes:
+      - type: volume
+        source: mxl-domain
+        target: /mxl-domain
+      - ${MEDIA_DEVICE}:/home/file:ro
+    environment:
+      - MXL_DOMAIN=/mxl-domain
+
   mxl-info-gui:
       platform: linux/amd64
       build:

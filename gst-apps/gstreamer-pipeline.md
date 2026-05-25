@@ -11,50 +11,106 @@ Each section below describes one of the six GStreamer-based services, gives the 
 
 ```bash
 gst-launch-1.0 \
-  filesrc location="/path/to/media/file" \
-  ! decodebin name=dec \
-  dec. ! videoconvert ! videoscale \
+  uridecodebin uri="file:///home/file/<clip>" name=dec \
+  dec. ! queue ! videoconvert \
        ! "video/x-raw,format=v210" \
        ! queue \
-       ! mxlsink flow-id="<video-flow-id>" domain="/mxl-domain" \
-  dec. ! audioresample ! audioconvert \
-       ! "audio/x-raw,format=F32LE,layout=interleaved" \
+       ! mxlsink flow-id="<video-uuid>" domain="/mxl-domain/<domain-uuid>.mxl-domain" \
+  dec. ! queue ! audioconvert ! audioresample \
+       ! "audio/x-raw,format=F32LE,layout=interleaved,rate=48000" \
        ! queue \
-       ! mxlsink flow-id="<audio-flow-id>" domain="/mxl-domain"
+       ! mxlsink flow-id="<audio-uuid>" domain="/mxl-domain/<domain-uuid>.mxl-domain"
 ```
+
+> **Note:** Flow UUIDs are **deterministic (UUID v5)** derived from the group hint
+> (e.g. `Clip-Player:video`, `Clip-Player:audio`) — restarting with the same group hint
+> reuses the same UUIDs and overwrites the existing flow files in the domain.
+> Looping (seek-on-EOS) cannot be expressed in a `gst-launch` command and is implemented
+> in Python on the bus watch.
 
 ### Explanation
 
-Reads a media file from disk and demuxes/decodes it with `decodebin`.
-The decoded video stream is colour-converted and scaled, then a `capsfilter` locks the pixel
-format to `v210` — the only format `mxlsink` accepts for video — before the frame is written to
-the MXL flow. The decoded audio stream is resampled and converted, then a `capsfilter` locks the
-format to `F32LE` interleaved — the only audio format `mxlsink` accepts — before being written to
-the second MXL flow. Without these explicit capsfilters the pipeline relies on auto-negotiation
-which may land on an incompatible format and cause a hard failure at runtime. Once the file reaches end-of-stream the pipeline seeks back to position 0 to
-loop indefinitely.
+Reads a local media file (`.ts` or `.mp4`, any resolution/frame rate) from `/home/file` and
+republishes it as one or two MXL flows. The pipeline is user-controlled: the UI's **Setup**
+section configures domain, group hint, file, and per-flow metadata; the pipeline only starts
+when the user clicks **Start**.
 
-The pipeline is first brought to `PAUSED` so that `mxlsink` has time to write `flow_def.json`,
-then the label/description in that file is patched before playback starts.
+**Source/decode** — `uridecodebin` is used in preference to a fixed demuxer + decoder pair
+because the container and codecs are not known up-front: `.ts` files carry MPEG-TS with
+H.264 or H.265, `.mp4` files carry ISO BMFF with the same, and the same UI must accept all
+of them. `uridecodebin` inspects the file, picks the right demuxer + parser + decoder, and
+exposes ready-to-consume raw video/audio pads via the `pad-added` signal. The backend probes
+the file beforehand (`GstPbutils.Discoverer`) so it knows which branches to build, but the
+actual pad-to-branch wiring happens dynamically at runtime once the pads appear.
+
+**Dynamic pad linking** — the video and audio branches are pre-built (each ends at an
+`mxlsink`) and their head queues' sink pads are held aside. When `uridecodebin` emits
+`pad-added`, the new pad's caps are inspected: `video/*` pads are linked to the video branch
+head, `audio/*` pads to the audio branch head. Pads for which no active branch was created
+(e.g. audio pads on a video-only configuration) are ignored. This makes the pipeline
+work uniformly for video-only, audio-only, and audio+video files.
+
+**Video branch** — `queue → videoconvert → capsfilter(v210) → queue → mxlsink`
+`videoconvert` is mandatory because the decoded video can arrive in many pixel formats
+(I420, NV12, P010, …) depending on the source codec, and `mxlsink` only accepts the packed
+10-bit `v210` format. The explicit `capsfilter` locks the negotiation to `v210`; without it
+auto-negotiation may land on whatever the upstream prefers and cause a hard runtime failure.
+
+**Audio branch** — `queue → audioconvert → audioresample → capsfilter(F32LE @ 48 kHz interleaved) → queue → mxlsink`
+`audioconvert` handles sample-format conversion (the decoded audio is typically S16/S32 LE,
+not float), `audioresample` rebinds the rate to 48 kHz regardless of the source rate
+(44.1 kHz, 32 kHz, etc.), and the `capsfilter` locks the format to `F32LE` interleaved —
+the only audio format `mxlsink` accepts. Channel count is whatever the source file provides.
+
+**Looping** — playback runs continuously. A `message::eos` handler on the pipeline bus
+catches end-of-stream and immediately issues a flushing key-unit seek to position 0:
+
+```python
+pipeline.seek_simple(Gst.Format.TIME,
+                     Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, 0)
+```
+
+This restarts the file from the beginning without rebuilding the pipeline, so the MXL
+flows remain alive across loops and consumers see a single continuous stream.
+
+**Flow_def.json patching** — once the pipeline reaches PLAYING, a background thread polls
+each `{domain}/{flow-uuid}.mxl-flow/flow_def.json` (up to 15 s) and patches `grouphint`,
+`tags["urn:x-nmos:tag:grouphint/v1.0"]`, `description`, and `label` with the values entered
+in the Setup form (`<grouphint>:Video` and `<grouphint>:Audio` respectively).
 
 ### Diagram
 
 ```mermaid
-flowchart LR
-    filesrc["filesrc\nlocation=file"]
-    decodebin["decodebin\nname=dec"]
-    vconv["videoconvert"]
-    vscale["videoscale"]
-    vqueue["queue"]
-    vsink["mxlsink\nflow-id=video"]
-    aresample["audioresample"]
-    aconv["audioconvert"]
-    aqueue["queue"]
-    asink["mxlsink\nflow-id=audio"]
+flowchart TB
+    src["uridecodebin\nuri=file:///home/file/&lt;clip&gt;\nname=dec"]
 
-    filesrc --> decodebin
-    decodebin -->|"video pad"| vconv --> vscale --> vcaps["capsfilter\nformat=v210"] --> vqueue --> vsink
-    decodebin -->|"audio pad"| aresample --> aconv --> acaps["capsfilter\nF32LE, interleaved"] --> aqueue --> asink
+    subgraph video_branch["Video branch (built when file has video)"]
+        direction LR
+        vqueue_in["queue"]
+        vconv["videoconvert"]
+        vcaps["capsfilter\nformat=v210"]
+        vqueue_out["queue"]
+        vsink["mxlsink\nflow-id=video-uuid"]
+
+        vqueue_in --> vconv --> vcaps --> vqueue_out --> vsink
+    end
+
+    subgraph audio_branch["Audio branch (built when file has audio)"]
+        direction LR
+        aqueue_in["queue"]
+        aconv["audioconvert"]
+        aresample["audioresample"]
+        acaps["capsfilter\nF32LE, 48 kHz, interleaved"]
+        aqueue_out["queue"]
+        asink["mxlsink\nflow-id=audio-uuid"]
+
+        aqueue_in --> aconv --> aresample --> acaps --> aqueue_out --> asink
+    end
+
+    src -- "pad-added (video/*)" --> vqueue_in
+    src -- "pad-added (audio/*)" --> aqueue_in
+
+    eos["bus: message::eos\n→ seek_simple(FLUSH|KEY_UNIT, 0)"] -. "loop" .-> src
 ```
 
 ---
