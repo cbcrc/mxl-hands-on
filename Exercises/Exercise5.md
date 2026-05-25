@@ -1,4 +1,4 @@
-## Exercise 4 - Full open source DMF with Nmos support
+## Exercise 5 - Full open source DMF
 
 ### Synopsis
 
