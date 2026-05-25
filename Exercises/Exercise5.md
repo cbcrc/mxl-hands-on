@@ -95,6 +95,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
     ```sh
         cd ~/mxl-hands-on/docker/exercise-5
     ```
+1. If you want to use the file player application, put your clip files (.ts or .mp4) in the ./data/Clips folder.
 1. Start the system with the start script.
     ```sh
         ./start.sh # For linux based machine
