@@ -169,7 +169,8 @@ class GstReceiver:
 
         enc = elems["venc"]
         enc.set_property("tune", 4)           # zerolatency
-        enc.set_property("speed-preset", 2)   # ultrafast
+        enc.set_property("speed-preset", 2)   # 1 is ultrafast 2 is superfast and 3 is veryfast
+        enc.set_property("bitrate", 10000)
         enc.set_property("key-int-max", 30)
 
         pay = elems["vpay"]
