@@ -109,6 +109,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
 | Test Generator | http://localhost:9600 | http://localhost:9600/docs |
 | MXL Info GUI | http://localhost:9699 | http://localhost:9699/docs |
 | MXL to WebRTC | http://localhost:9601 | http://localhost:9601/docs |
+| File Player | http://localhost:9602 | http://localhost:9602/docs |
 
 
 Reference HLS stream that are 1920x1080p60

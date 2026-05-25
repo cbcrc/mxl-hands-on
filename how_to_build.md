@@ -134,12 +134,14 @@ Let's push the freshly built images with the fixed tag `v1.0.0-rc2..` and push t
    docker tag mxl-clip-player:$TAG ghcr.io/cbcrc/mxl-clip-player:$TAG
    docker tag mxl-info-gui:latest ghcr.io/cbcrc/mxl-info-gui:$TAG
    docker tag test-generator:latest ghcr.io/cbcrc/test-generator:$TAG
+   docker tag file-player:latest ghcr.io/cbcrc/file-player:$TAG
    docker tag mxl2webrtc:latest ghcr.io/cbcrc/mxl2webrtc:$TAG
    docker push ghcr.io/cbcrc/mxl-writer:$TAG
    docker push ghcr.io/cbcrc/mxl-reader:$TAG
    docker push ghcr.io/cbcrc/mxl-clip-player:$TAG
    docker push ghcr.io/cbcrc/mxl-info-gui:$TAG
    docker push ghcr.io/cbcrc/test-generator:$TAG
+   docker push ghcr.io/cbcrc/file-player:$TAG
    docker push ghcr.io/cbcrc/mxl2webrtc:$TAG
 ```
 
@@ -152,12 +154,14 @@ Let's attach the moving tag `latest` and push.
    docker tag mxl-clip-player:$TAG ghcr.io/cbcrc/mxl-clip-player:latest
    docker tag mxl-info-gui:latest ghcr.io/cbcrc/mxl-info-gui:latest
    docker tag test-generator:latest ghcr.io/cbcrc/test-generator:latest
+   docker tag file-player:latest ghcr.io/cbcrc/file-player:latest
    docker tag mxl2webrtc:latest ghcr.io/cbcrc/mxl2webrtc:latest
    docker push ghcr.io/cbcrc/mxl-writer:latest
    docker push ghcr.io/cbcrc/mxl-reader:latest
    docker push ghcr.io/cbcrc/mxl-clip-player:latest
    docker push ghcr.io/cbcrc/mxl-info-gui:latest
    docker push ghcr.io/cbcrc/test-generator:latest
+   docker push ghcr.io/cbcrc/file-player:latest
    docker push ghcr.io/cbcrc/mxl2webrtc:latest
 ```
 

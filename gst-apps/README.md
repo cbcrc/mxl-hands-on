@@ -1,6 +1,6 @@
 # GStreamer MXL Apps — Quick Start
 
-This directory contains three GStreamer-based web applications that produce, inspect, and consume [MXL](../dmf-mxl) flows. Each app runs as a single Docker container: a FastAPI backend (also serving GStreamer pipelines where needed) and a React frontend, both on the same port.
+This directory contains four GStreamer-based web applications that produce, inspect, and consume [MXL](../dmf-mxl) flows. Each app runs as a single Docker container: a FastAPI backend (also serving GStreamer pipelines where needed) and a React frontend, both on the same port.
 
 ---
 
@@ -11,6 +11,7 @@ This directory contains three GStreamer-based web applications that produce, ins
 | [Test Generator](#1-test-generator) | `test-generator:latest` | `Depending on Docker compose config` | Generates synthetic colour-bar video and tone audio, publishes to MXL |
 | [MXL Info GUI](#2-mxl-info-gui) | `mxl-info-gui:latest` | `Depending on Docker compose config` | Probes MXL domains and displays live flow metadata |
 | [MXL to WebRTC](#3-mxl-to-webrtc) | `mxl2webrtc:latest` | `Depending on Docker compose config` | Reads MXL flows and relays them as a low-latency WebRTC stream in the browser |
+| [File Player](#4-file-player) | `file-player:latest` | `Depending on Docker compose config` | Loops a media file (MP4/TS) and publishes its video and/or audio streams to MXL |
 
 Pre-built images are published to `ghcr.io/cbcrc` — see [Exercise 5](../Exercises/Exercise5.md) to spin up the whole system without compiling anything.
 
@@ -52,6 +53,7 @@ Open the UIs in a browser once the containers are up:
 | Test Generator | http://localhost:9600 | http://localhost:9600/docs |
 | MXL Info GUI | http://localhost:9699 | http://localhost:9699/docs |
 | MXL to WebRTC | http://localhost:9601 | http://localhost:9601/docs |
+| File Player | http://localhost:9602 | http://localhost:9602/docs |
 
 ---
 
@@ -111,6 +113,26 @@ mxlsrc → opusenc → rtpopuspay ──┘
 **Operation panel:** shows the active flow UUIDs, pipeline status, and the live WebRTC player with a mute/unmute toggle.
 
 For the full GStreamer pipeline breakdown see [gstreamer-pipeline.md — Section 6](./gstreamer-pipeline.md#6-mxl-to-webrtc-gst_mxl2webrtcpy).
+
+---
+
+## 4. File Player
+
+**Image:** `ghcr.io/cbcrc/file-player:latest`
+
+Reads a local media file (`.mp4` or `.ts`) and publishes its video and/or audio streams as continuously looping MXL flows. No external signal source required — the pipeline decodes the file as-is and forwards raw frames to `mxlsink`. When the end of file is reached, a flushing seek restarts playback seamlessly from the beginning.
+
+**Setup panel** (before starting the pipeline):
+- Select the MXL domain and the media file to play (files are loaded from a host directory mounted at `/home/file` inside the container). A **Refresh** button re-scans the directory.
+- Set the **Group Hint** shared by all flows (default: `Clip-Player`).
+- The **Flow Configuration Table** is populated automatically when a file is selected: up to one Video row and one Audio row, each with an **Active** checkbox, a **Description**, and a **Label** field. Individual streams can be excluded from the pipeline by unchecking their Active box.
+
+**Operation panel** (while running):
+- **Now Playing:** the filename currently loaded in the pipeline.
+- **Stream Info:** codec, resolution, and frame rate for the video stream; codec, sample rate, and channel count for the audio stream.
+- **Loop indicator:** a badge confirming that playback is looping.
+
+For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 1](./gstreamer-pipeline.md#1-file-player-gst_playerpy).
 
 ---
 
