@@ -95,6 +95,17 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
     ```sh
         cd ~/mxl-hands-on/docker/exercise-5
     ```
+1. If you did **NOT** do the preparations steps for either WLS or MacOS, make sure you have a /Volumes/mxl mounted in *tmpfs* or *ram*.
+   ```sh
+   sudo mount -t tmpfs -o size=512m,uid=1000,gid=1000,mode=0755 tmpfs /Volumes/mxl # on WSL linux
+   sudo mkdir -p /Volumes/mxl/domain_1
+   sudo chown 1000:1000 /Volumes/mxl/domain_1
+   ```
+   ```sh
+   diskutil erasevolume HFS+ mxl $(hdiutil attach -nomount ram://1048576) # on MacOS
+   sudo mkdir -p /Volumes/mxl/domain_1
+   sudo chown 1000:1000 /Volumes/mxl/domain_1
+   ```
 1. If you want to use the file player application, put your clip files (.ts or .mp4) in the ./data/Clips folder.
 1. Start the system with the start script.
     ```sh
