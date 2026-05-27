@@ -24,6 +24,26 @@ Pre-built images are published to `ghcr.io/cbcrc` — see [Exercise 5](../Exerci
 
 ---
 
+## Environment setup
+
+Docker Compose reads a `.env` file in this directory to resolve variables used in `docker-compose.yml`. A template is provided — copy it and fill in your local paths before starting any service:
+
+```sh
+cd ~/mxl-hands-on/gst-apps
+cp .env.template .env
+# then open .env in your editor and set MEDIA_DEVICE
+```
+
+> **Note:** `.env` is git-ignored so your local paths are never committed to the repository.
+
+### Variables
+
+| Variable | Used by | Description |
+|----------|---------|-------------|
+| `MEDIA_DEVICE` | `file-player` | Absolute path to a host directory containing the `.mp4` / `.ts` files you want the File Player to loop. Mounted read-only inside the container at `/home/file`. |
+
+---
+
 ## Running the apps
 
 **Make sure you have your tmpfs volume mounted as in the preparation steps for [Linux](../Preparation/WSL-Ubuntu.md) or [Mac](../Preparation/MAC.md)**
@@ -121,6 +141,8 @@ For the full GStreamer pipeline breakdown see [gstreamer-pipeline.md — Section
 **Image:** `ghcr.io/cbcrc/file-player:latest`
 
 Reads a local media file (`.mp4` or `.ts`) and publishes its video and/or audio streams as continuously looping MXL flows. No external signal source required — the pipeline decodes the file as-is and forwards raw frames to `mxlsink`. When the end of file is reached, a flushing seek restarts playback seamlessly from the beginning.
+
+> **Before starting:** make sure `MEDIA_DEVICE` is set in your `.env` file (see [Environment setup](#environment-setup)). It must point to the host directory that contains your clip files.
 
 **Setup panel** (before starting the pipeline):
 - Select the MXL domain and the media file to play (files are loaded from a host directory mounted at `/home/file` inside the container). A **Refresh** button re-scans the directory.
