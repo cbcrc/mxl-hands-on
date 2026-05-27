@@ -1,6 +1,6 @@
 # GStreamer MXL Apps — Quick Start
 
-This directory contains four GStreamer-based web applications that produce, inspect, and consume [MXL](../dmf-mxl) flows. Each app runs as a single Docker container: a FastAPI backend (also serving GStreamer pipelines where needed) and a React frontend, both on the same port.
+This directory contains five GStreamer-based web applications that produce, inspect, and consume [MXL](../dmf-mxl) flows. Each app runs as a single Docker container: a FastAPI backend (also serving GStreamer pipelines where needed) and a React frontend, both on the same port.
 
 ---
 
@@ -12,6 +12,7 @@ This directory contains four GStreamer-based web applications that produce, insp
 | [MXL Info GUI](#2-mxl-info-gui) | `mxl-info-gui:latest` | `Depending on Docker compose config` | Probes MXL domains and displays live flow metadata |
 | [MXL to WebRTC](#3-mxl-to-webrtc) | `mxl2webrtc:latest` | `Depending on Docker compose config` | Reads MXL flows and relays them as a low-latency WebRTC stream in the browser |
 | [File Player](#4-file-player) | `file-player:latest` | `Depending on Docker compose config` | Loops a media file (MP4/TS) and publishes its video and/or audio streams to MXL |
+| [HLS to MXL Gateway](#5-hls-to-mxl-gateway) | `hls2mxl:latest` | `Depending on Docker compose config` | Ingests a live HLS stream and republishes it as MXL video and audio flows |
 
 Pre-built images are published to `ghcr.io/cbcrc` — see [Exercise 5](../Exercises/Exercise5.md) to spin up the whole system without compiling anything.
 
@@ -74,6 +75,7 @@ Open the UIs in a browser once the containers are up:
 | MXL Info GUI | http://localhost:9699 | http://localhost:9699/docs |
 | MXL to WebRTC | http://localhost:9601 | http://localhost:9601/docs |
 | File Player | http://localhost:9602 | http://localhost:9602/docs |
+| HLS to MXL Gateway | http://localhost:9603 | http://localhost:9603/docs |
 
 ---
 
@@ -155,6 +157,37 @@ Reads a local media file (`.mp4` or `.ts`) and publishes its video and/or audio 
 - **Loop indicator:** a badge confirming that playback is looping.
 
 For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 3](./gstreamer-pipeline.md#1-file-player-gst_playerpy).
+
+---
+
+## 5. HLS to MXL Gateway
+
+**Image:** `ghcr.io/cbcrc/hls2mxl:latest`
+
+Ingests any live HLS stream and republishes it as one video flow and one audio flow in an MXL domain. No manual resolution, frame rate, or channel-count selection is required — the pipeline adapts automatically to whatever the HLS source delivers.
+
+**How it works:**
+
+```
+uridecodebin (HLS URI)
+  ├─ [pad-added] → videoconvert → capsfilter(v210) → queue → mxlsink   (Video flow)
+  └─ [pad-added] → audioconvert → audioresample → capsfilter(F32LE 48k) → queue → mxlsink   (Audio flow)
+```
+
+A **two-phase stabilisation** approach is used to let the HLS adaptive-bitrate logic settle before writing to the MXL domain:
+1. **Phase 1 — Warmup (10 s):** the stream is decoded into `fakesink` elements so the HLS client can ramp up to the highest quality variant.
+2. **Phase 2 — Real pipeline:** the warmup is torn down and a fresh pipeline with `mxlsink` is started. Flow UUIDs are **deterministic** (UUID v5 derived from the group hint), so restarting or switching HLS URLs does not orphan existing flow directories.
+
+**Setup panel** (before starting the pipeline):
+- Select the MXL domain and enter the HLS stream URL.
+- Set the **Group Hint** shared by both flows (default: `HLS2MXL`).
+- Fill in per-flow **Description** and **Label** for the Video and Audio flows. Both flows are always active; channel count is detected automatically from the stream.
+- A status badge shows `Stabilising…` for the first 10 seconds, then `Running`.
+
+**Operation panel** (while running):
+- Update the **HLS URL** field and press **Apply** to switch to a new stream source. The pipeline tears down, re-enters the 10-second stabilisation window, and resumes with the same flow UUIDs and metadata.
+
+For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 4](./gstreamer-pipeline.md#4-hls-to-mxl-gateway-gst_hls2mxlpy).
 
 ---
 
