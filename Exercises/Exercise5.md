@@ -126,6 +126,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
 | MXL to WebRTC | http://localhost:9601 | http://localhost:9601/docs |
 | File Player | http://localhost:9602 | http://localhost:9602/docs |
 | HLS to MXL Gateway | http://localhost:9603 | http://localhost:9603/docs |
+| Input Selector | http://localhost:9604 | http://localhost:9604/docs |
 
 
 Reference HLS stream that are 1920x1080p60
