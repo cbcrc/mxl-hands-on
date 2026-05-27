@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev":   "vite --host 0.0.0.0 --port 9720",
-    "build": "vite build",
+    "dev":     "vite --host 0.0.0.0 --port 9703",
+    "build":   "vite build",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -5,10 +5,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      "/status":   "http://localhost:9620",
-      "/hls-link": "http://localhost:9620",
-      "/apply":    "http://localhost:9620",
-      "/stop":     "http://localhost:9620",
+      "/domains":  "http://localhost:9600",
+      "/pipeline": "http://localhost:9600",
+      "/hls":      "http://localhost:9600",
     },
   },
 });

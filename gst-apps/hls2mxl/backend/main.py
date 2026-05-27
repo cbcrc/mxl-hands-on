@@ -1,34 +1,28 @@
 """
-FastAPI backend for the HLS-to-MXL gateway.
-
-Endpoints
----------
-GET  /status      – current state (playing/idle/error, current URL, flow IDs)
-POST /hls-link    – set the HLS URL          {"url": "https://...m3u8"}
-POST /apply       – connect to the set URL and start streaming to MXL
-POST /stop        – stop the current stream
+FastAPI backend for the MXL HLS Gateway.
+Serves both the REST API and the React frontend on port 9600.
 """
 
 from __future__ import annotations
 
+import json
 import logging
-import threading
+import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from backend.gst_hls import GstHls
-from backend.nmos_bridge import NmosBridge
+from backend.gst_hls2mxl import GstHLS2MXL
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S,%f",
 )
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="HLS to MXL Gateway")
+app = FastAPI(title="MXL HLS Gateway")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -36,68 +30,94 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-player = GstHls()
-bridge = NmosBridge(
-    nmos_base="http://localhost:9520",
-    on_activate=lambda: _safe(player.apply),
-    on_deactivate=lambda: _safe(player.stop),
-)
-
-
-def _safe(fn):
-    try:
-        fn()
-    except Exception as exc:
-        log.error("Error in callback: %s", exc)
-
-
-# ── Startup ───────────────────────────────────────────────────────────────────
-
-@app.on_event("startup")
-async def startup() -> None:
-    def _init():
-        flow_ids = bridge.discover_flow_ids()
-        vid = flow_ids.get("video")
-        aud = flow_ids.get("audio")
-        if vid and aud:
-            player.set_flow_ids(vid, aud)
-        else:
-            log.error("Could not discover video/audio flow IDs")
-        bridge.run()  # blocks – poll loop
-
-    threading.Thread(target=_init, name="nmos-bridge", daemon=True).start()
+gateway = GstHLS2MXL()
 
 
 # ── Models ────────────────────────────────────────────────────────────────────
 
-class HlsLinkReq(BaseModel):
+
+class FlowCfg(BaseModel):
+    description: str
+    label: str
+
+
+class StartRequest(BaseModel):
+    domain: str
+    grouphint: str = "HLS2MXL"
+    hls_url: str
+    video: FlowCfg
+    audio: FlowCfg
+
+
+class ApplyRequest(BaseModel):
     url: str
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
+# ── Domains ───────────────────────────────────────────────────────────────────
 
-@app.get("/status")
-async def status():
-    return player.get_status()
 
-@app.post("/hls-link")
-async def hls_link(req: HlsLinkReq):
+@app.get("/domains")
+def get_domains():
+    results = []
+    mxl_root = "/mxl-domain"
+    if not os.path.isdir(mxl_root):
+        return {"domains": []}
+    for root, _dirs, files in os.walk(mxl_root):
+        if "domain_def.json" in files:
+            path = os.path.join(root, "domain_def.json")
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+                domain_id = data.get("id", data.get("uuid", ""))
+                label = data.get("label", os.path.basename(root))
+            except Exception:
+                domain_id = ""
+                label = os.path.basename(root)
+            results.append({"path": root, "id": domain_id, "label": label})
+    return {"domains": results}
+
+
+# ── Pipeline ──────────────────────────────────────────────────────────────────
+
+
+@app.get("/pipeline/status")
+def pipeline_status():
+    return gateway.get_status()
+
+
+@app.post("/pipeline/start")
+def pipeline_start(req: StartRequest):
+    try:
+        uuids = gateway.start(req.model_dump())
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"status": "started", "flow_uuids": uuids}
+
+
+@app.post("/pipeline/stop")
+def pipeline_stop():
+    gateway.stop()
+    return {"status": "stopped"}
+
+
+# ── HLS ───────────────────────────────────────────────────────────────────────
+
+
+@app.get("/hls/url")
+def hls_url():
+    return {"url": gateway.get_status()["hls_url"]}
+
+
+@app.post("/hls/apply")
+def hls_apply(req: ApplyRequest):
     if not req.url.strip():
         raise HTTPException(status_code=400, detail="URL cannot be empty")
-    player.set_url(req.url.strip())
-    return {"status": "ok", "url": req.url.strip()}
-
-@app.post("/apply")
-async def apply():
     try:
-        player.apply()
-        bridge.set_senders_active(True)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return {"status": "ok"}
+        uuids = gateway.apply(req.url.strip())
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {"status": "applying", "flow_uuids": uuids}
 
-@app.post("/stop")
-async def stop():
-    player.stop()
-    bridge.set_senders_active(False)
-    return {"status": "ok"}
+
+# ── Static frontend (must be last — catches everything not matched above) ──────
+app.mount("/", StaticFiles(directory="/app/frontend/dist", html=True), name="static")

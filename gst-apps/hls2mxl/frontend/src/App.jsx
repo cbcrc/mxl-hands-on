@@ -1,164 +1,398 @@
 import React, { useState, useEffect, useCallback } from "react";
 
-const API = `http://${window.location.hostname}:9620`;
+const API = "";
 
-const STATE_COLOR = {
-  playing: "#4caf50",
-  idle:    "#64748b",
-  error:   "#f44336",
+// ── Styles ────────────────────────────────────────────────────────────────────
+
+const S = {
+  card: {
+    background: "#1c1c1c",
+    borderRadius: "8px",
+    padding: "1.25rem 1.5rem",
+    marginBottom: "1rem",
+  },
+  sectionTitle: {
+    fontSize: "0.7rem",
+    fontWeight: 700,
+    letterSpacing: "0.12em",
+    color: "#666",
+    textTransform: "uppercase",
+    marginBottom: "0.75rem",
+  },
+  label: {
+    display: "block",
+    marginBottom: "0.3rem",
+    color: "#aaa",
+    fontSize: "0.82rem",
+  },
+  input: {
+    width: "100%",
+    padding: "0.45rem 0.6rem",
+    background: "#2a2a2a",
+    color: "#fff",
+    border: "1px solid #444",
+    borderRadius: "4px",
+    fontSize: "0.95rem",
+    boxSizing: "border-box",
+  },
+  inputDisabled: {
+    opacity: 0.4,
+    cursor: "not-allowed",
+  },
+  row: { display: "flex", gap: "0.75rem", alignItems: "flex-start" },
 };
 
-const sectionStyle = {
-  background: "#1c1c1c",
-  borderRadius: "8px",
-  padding: "1.5rem",
-  marginBottom: "1rem",
-};
-const labelStyle = {
-  display: "block",
-  marginBottom: "0.4rem",
-  color: "#aaa",
-  fontSize: "0.85rem",
-};
-const inputStyle = {
-  width: "100%",
-  padding: "0.5rem",
-  background: "#2a2a2a",
-  color: "#fff",
-  border: "1px solid #444",
+const btn = (variant = "primary", disabled = false) => ({
+  padding: "0.5rem 1.25rem",
   borderRadius: "4px",
-  fontSize: "1rem",
-};
-const btnStyle = (color = "#0d7c3e") => ({
-  padding: "0.55rem 1.2rem",
-  background: color,
-  color: "#fff",
   border: "none",
-  borderRadius: "4px",
-  cursor: "pointer",
+  cursor: disabled ? "not-allowed" : "pointer",
   fontWeight: 600,
   fontSize: "0.95rem",
-});
-const statusBadge = (state) => ({
-  display: "inline-block",
-  padding: "0.25rem 0.75rem",
-  borderRadius: "20px",
-  background: state === "playing" ? "#1a5c2a" : state === "error" ? "#5c1a1a" : "#2a2a2a",
-  color: STATE_COLOR[state] || "#aaa",
-  fontSize: "0.8rem",
-  fontWeight: 600,
-  marginLeft: "1rem",
-  textTransform: "uppercase",
+  opacity: disabled ? 0.45 : 1,
+  background:
+    variant === "danger"  ? "#8b1a1a" :
+    variant === "success" ? "#0d7c3e" :
+    "#2a5caa",
+  color: "#fff",
 });
 
+const badge = (running, stabilising) => ({
+  display: "inline-block",
+  padding: "0.2rem 0.65rem",
+  borderRadius: "20px",
+  background: !running ? "#3a3a3a" : stabilising ? "#3a2a00" : "#1a5c2a",
+  color:      !running ? "#888"    : stabilising ? "#f0a000" : "#4caf50",
+  fontSize: "0.75rem",
+  fontWeight: 700,
+  marginLeft: "0.75rem",
+  verticalAlign: "middle",
+});
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+async function post(path, body) {
+  const r = await fetch(`${API}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error(d.detail || r.statusText);
+  }
+  return r.json();
+}
+
+function Input({ label, value, onChange, disabled, placeholder }) {
+  return (
+    <div>
+      {label && <label style={S.label}>{label}</label>}
+      <input
+        type="text"
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        style={{ ...S.input, ...(disabled ? S.inputDisabled : {}) }}
+      />
+    </div>
+  );
+}
+
+function Select({ label, value, onChange, options, disabled }) {
+  return (
+    <div>
+      {label && <label style={S.label}>{label}</label>}
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        style={{ ...S.input, ...(disabled ? S.inputDisabled : {}) }}
+      >
+        {options.map((o) =>
+          typeof o === "string" ? (
+            <option key={o} value={o}>{o}</option>
+          ) : (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          )
+        )}
+      </select>
+    </div>
+  );
+}
+
+// ── Default flow config ───────────────────────────────────────────────────────
+
+const DEFAULT_FLOWS = {
+  video: { description: "hls-video-out", label: "hls-video" },
+  audio: { description: "hls-audio-out", label: "hls-audio" },
+};
+
+// ── App ───────────────────────────────────────────────────────────────────────
+
 export default function App() {
-  const [status, setStatus] = useState(null);
-  const [urlDraft, setUrlDraft] = useState("");
+  const [status,    setStatus]    = useState(null);
+  const [domains,   setDomains]   = useState([]);
+  const [domain,    setDomain]    = useState("");
+  const [grouphint, setGrouphint] = useState("HLS2MXL");
+  const [hlsUrl,    setHlsUrl]    = useState("");
+  const [flows,     setFlows]     = useState(DEFAULT_FLOWS);
+  const [opUrl,     setOpUrl]     = useState("");
+  const [error,     setError]     = useState("");
+
+  const running     = status?.running     ?? false;
+  const stabilising = status?.stabilising ?? false;
+
+  // ── Data fetching ─────────────────────────────────────────────────────────
 
   const fetchStatus = useCallback(async () => {
     try {
-      const r = await fetch(`${API}/status`);
+      const r = await fetch(`${API}/pipeline/status`);
       setStatus(await r.json());
     } catch {}
   }, []);
 
   useEffect(() => {
+    (async () => {
+      try {
+        const d = await fetch(`${API}/domains`).then((r) => r.json());
+        setDomains(d.domains ?? []);
+        if (d.domains?.length > 0) setDomain(d.domains[0].path);
+      } catch {}
+    })();
     fetchStatus();
     const id = setInterval(fetchStatus, 2000);
     return () => clearInterval(id);
   }, [fetchStatus]);
 
-  // Pre-fill draft from server once
+  // Sync the operation URL field when the pipeline starts
   useEffect(() => {
-    if (status && !urlDraft && status.hls_url) {
-      setUrlDraft(status.hls_url);
-    }
-  }, [status?.state]);
+    if (running && status?.hls_url) setOpUrl(status.hls_url);
+  }, [running]);
 
-  const post = async (path, body = undefined) => {
-    await fetch(`${API}${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    fetchStatus();
+  // ── Validation ────────────────────────────────────────────────────────────
+
+  const canStart =
+    !running &&
+    domain !== "" &&
+    hlsUrl.trim() !== "" &&
+    flows.video.description.trim() !== "" && flows.video.label.trim() !== "" &&
+    flows.audio.description.trim() !== "" && flows.audio.label.trim() !== "";
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+
+  const updateFlow = (key, field, value) =>
+    setFlows((prev) => ({ ...prev, [key]: { ...prev[key], [field]: value } }));
+
+  const handleStart = async () => {
+    setError("");
+    try {
+      await post("/pipeline/start", {
+        domain,
+        grouphint,
+        hls_url: hlsUrl.trim(),
+        video: flows.video,
+        audio: flows.audio,
+      });
+      await fetchStatus();
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const handleStop = async () => {
+    setError("");
+    try {
+      await post("/pipeline/stop", {});
+      await fetchStatus();
+    } catch (e) {
+      setError(e.message);
+    }
   };
 
   const handleApply = async () => {
-    if (!urlDraft.trim()) return;
-    await post("/hls-link", { url: urlDraft.trim() });
-    await post("/apply");
+    if (!opUrl.trim() || stabilising) return;
+    setError("");
+    try {
+      await post("/hls/apply", { url: opUrl.trim() });
+      await fetchStatus();
+    } catch (e) {
+      setError(e.message);
+    }
   };
 
-  const state = status?.state ?? "idle";
+  const domainOptions = domains.map((d) => ({
+    value: d.path,
+    label: d.label ? `${d.label} (${d.path})` : d.path,
+  }));
+
+  // ── Flow table row ────────────────────────────────────────────────────────
+
+  const FlowRow = ({ flowKey, flowLabel }) => {
+    const f = flows[flowKey];
+    return (
+      <tr>
+        <td style={{ padding: "0.4rem 0.5rem", color: "#ccc", whiteSpace: "nowrap" }}>
+          {flowLabel}
+        </td>
+        <td style={{ padding: "0.4rem 0.5rem" }}>
+          <input
+            style={{ ...S.input, ...(running ? S.inputDisabled : {}) }}
+            value={f.description}
+            onChange={(e) => updateFlow(flowKey, "description", e.target.value)}
+            disabled={running}
+            placeholder="description"
+          />
+        </td>
+        <td style={{ padding: "0.4rem 0.5rem" }}>
+          <input
+            style={{ ...S.input, ...(running ? S.inputDisabled : {}) }}
+            value={f.label}
+            onChange={(e) => updateFlow(flowKey, "label", e.target.value)}
+            disabled={running}
+            placeholder="label"
+          />
+        </td>
+      </tr>
+    );
+  };
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ maxWidth: "640px", width: "100%" }}>
+    <div style={{ maxWidth: "800px", width: "100%", margin: "0 auto" }}>
+
       {/* Header */}
       <div style={{ marginBottom: "1.5rem" }}>
-        <h1 style={{ fontSize: "1.6rem", fontWeight: 700 }}>
-          HLS → MXL Gateway
-          <span style={statusBadge(state)}>● {state}</span>
-        </h1>
-        {status && (
-          <p style={{ color: "#666", fontSize: "0.8rem", marginTop: "0.4rem" }}>
-            Video: {status.video_flow_id || "—"} &nbsp;|&nbsp; Audio: {status.audio_flow_id || "—"}
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+          <img src="/cbc-logo.png" alt="CBC Radio-Canada" style={{ height: "2.2rem", objectFit: "contain" }} />
+          <h1 style={{ fontSize: "1.5rem", fontWeight: 700, margin: 0 }}>
+            MXL HLS Gateway
+            <span style={badge(running, stabilising)}>
+              {!running ? "○ STOPPED" : stabilising ? "◌ STABILISING" : "● RUNNING"}
+            </span>
+          </h1>
+        </div>
+        {running && status?.flow_uuids && (
+          <p style={{ color: "#555", fontSize: "0.75rem", marginTop: "0.4rem", fontFamily: "monospace" }}>
+            {Object.entries(status.flow_uuids).map(([k, v]) => `${k}: ${v}`).join(" · ")}
           </p>
         )}
       </div>
 
-      {/* Error banner */}
-      {status?.error && (
-        <div style={{
-          background: "#3b1a1a", border: "1px solid #f44", borderRadius: "6px",
-          padding: "0.75rem 1rem", marginBottom: "1rem", color: "#f44", fontSize: "0.9rem",
-        }}>
-          ⚠ {status.error}
+      {error && (
+        <div style={{ background: "#3a1010", border: "1px solid #8b1a1a", borderRadius: "6px", padding: "0.6rem 1rem", marginBottom: "1rem", color: "#f88" }}>
+          {error}
         </div>
       )}
 
-      {/* HLS URL input */}
-      <div style={sectionStyle}>
-        <label style={labelStyle}>HLS Stream URL (.m3u8)</label>
-        <div style={{ display: "flex", gap: "0.5rem" }}>
-          <input
-            style={{ ...inputStyle, flex: 1 }}
-            type="url"
+      {/* ── SETUP SECTION ── */}
+      <div style={{ ...S.card, border: "1px solid #2a2a2a" }}>
+        <div style={S.sectionTitle}>Setup</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+
+          {/* Domain + Group Hint */}
+          <div style={S.row}>
+            <div style={{ flex: 2 }}>
+              <Select
+                label="MXL Domain"
+                value={domain}
+                onChange={setDomain}
+                options={domainOptions.length > 0 ? domainOptions : [{ value: "", label: "No domains found" }]}
+                disabled={running}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <Input
+                label="Group Hint"
+                value={grouphint}
+                onChange={setGrouphint}
+                disabled={running}
+              />
+            </div>
+          </div>
+
+          {/* HLS URL */}
+          <Input
+            label="HLS Stream URL"
+            value={hlsUrl}
+            onChange={setHlsUrl}
+            disabled={running}
             placeholder="https://example.com/stream/playlist.m3u8"
-            value={urlDraft}
-            onChange={(e) => setUrlDraft(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleApply()}
           />
-          <button style={btnStyle()} onClick={handleApply}>
-            Apply
-          </button>
-        </div>
-        <p style={{ color: "#555", fontSize: "0.75rem", marginTop: "0.3rem" }}>
-          Press Enter or click Apply to connect
-        </p>
-      </div>
 
-      {/* Stop button */}
-      {state === "playing" && (
-        <div style={sectionStyle}>
-          <button
-            style={{ ...btnStyle("#7c1a1a"), width: "100%" }}
-            onClick={() => post("/stop")}
-          >
-            ■ Stop Stream
-          </button>
-        </div>
-      )}
+          {/* Flow configuration table */}
+          <div>
+            <label style={S.label}>Flow Configuration</label>
+            <table style={{ width: "100%", borderCollapse: "collapse", background: "#222", borderRadius: "6px", overflow: "hidden" }}>
+              <thead>
+                <tr style={{ background: "#2a2a2a" }}>
+                  <th style={{ padding: "0.4rem 0.5rem", textAlign: "left", color: "#888", fontSize: "0.78rem", fontWeight: 600 }}>Flow</th>
+                  <th style={{ padding: "0.4rem 0.5rem", textAlign: "left", color: "#888", fontSize: "0.78rem", fontWeight: 600 }}>Description</th>
+                  <th style={{ padding: "0.4rem 0.5rem", textAlign: "left", color: "#888", fontSize: "0.78rem", fontWeight: 600 }}>Label</th>
+                </tr>
+              </thead>
+              <tbody>
+                <FlowRow flowKey="video" flowLabel="Video" />
+                <FlowRow flowKey="audio" flowLabel="Audio" />
+              </tbody>
+            </table>
+          </div>
 
-      {/* Flow info */}
-      {status?.hls_url && (
-        <div style={{ ...sectionStyle, fontSize: "0.85rem", color: "#666" }}>
-          <strong style={{ color: "#aaa" }}>Current URL:</strong>
-          <div style={{ marginTop: "0.3rem", wordBreak: "break-all" }}>
-            {status.hls_url}
+          {/* Start / Stop */}
+          <div>
+            {running ? (
+              <button style={btn("danger")} onClick={handleStop}>
+                ■ Stop Pipeline
+              </button>
+            ) : (
+              <button style={btn("success", !canStart)} onClick={handleStart} disabled={!canStart}>
+                ▶ Start Pipeline
+              </button>
+            )}
           </div>
         </div>
-      )}
+      </div>
+
+      {/* ── OPERATION SECTION ── */}
+      <div style={{ opacity: running ? 1 : 0.35, pointerEvents: running ? "auto" : "none", transition: "opacity 0.2s" }}>
+        <div style={{ ...S.card, border: "1px solid #2a2a2a" }}>
+          <div style={S.sectionTitle}>Operation</div>
+
+          {stabilising && (
+            <div style={{ background: "#3a2a00", border: "1px solid #f0a000", borderRadius: "6px", padding: "0.5rem 0.75rem", marginBottom: "0.75rem", color: "#f0a000", fontSize: "0.85rem" }}>
+              ◌ Stabilising… waiting for HLS stream to settle (10 s buffer)
+            </div>
+          )}
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+            <label style={S.label}>HLS Stream URL</label>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <input
+                style={{ ...S.input, flex: 1, ...(stabilising ? S.inputDisabled : {}) }}
+                type="text"
+                placeholder="https://example.com/stream/playlist.m3u8"
+                value={opUrl}
+                onChange={(e) => setOpUrl(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && !stabilising && handleApply()}
+                disabled={stabilising}
+              />
+              <button
+                style={btn("primary", stabilising || !opUrl.trim())}
+                onClick={handleApply}
+                disabled={stabilising || !opUrl.trim()}
+              >
+                Apply
+              </button>
+            </div>
+            <p style={{ color: "#555", fontSize: "0.75rem" }}>
+              Applying a new URL rebuilds the pipeline with a fresh 10 s stabilisation window.
+            </p>
+          </div>
+        </div>
+      </div>
+
     </div>
   );
 }

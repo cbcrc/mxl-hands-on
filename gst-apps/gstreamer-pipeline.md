@@ -228,97 +228,138 @@ flowchart TB
 
 ---
 
-## 3. HLS-to-MXL Gateway (`gst_hls.py`)
+## 3. HLS-to-MXL Gateway (`gst_hls2mxl.py`)
 
 ### `gst-launch-1.0` commands
 
-**Phase 1 – Warmup (10 s)**
+**Phase 1 — Warmup (10 s, not shown — one fakesink per decoded pad, sync=false)**
 
-```bash
-gst-launch-1.0 \
-  uridecodebin uri="<HLS_URL>" connection-speed=50000 \
-  ! fakesink sync=false
-```
+> This phase uses a throw-away pipeline. There is no meaningful `gst-launch-1.0` equivalent
+> because it creates fakesinks dynamically for every decoded pad via `pad-added`.
 
-**Phase 2 – Real MXL pipeline**
+**Phase 2 — Real pipeline (after warmup)**
+
+> **Note:** `gst-launch-1.0` cannot reproduce the dynamic `pad-added` wiring from
+> `uridecodebin`. The command below shows the static equivalent; the actual Python
+> implementation connects the pads dynamically at runtime.
 
 ```bash
 gst-launch-1.0 \
   uridecodebin uri="<HLS_URL>" connection-speed=50000 name=dec \
-  dec. ! videoconvert ! videoscale \
-       ! "video/x-raw,width=1920,height=1080" \
-       ! videorate \
-       ! "video/x-raw,framerate=60/1" \
-       ! videoconvert \
-       ! "video/x-raw,format=v210,width=1920,height=1080,framerate=60/1" \
+  dec. ! videoconvert \
+       ! "video/x-raw,format=v210" \
        ! queue \
-       ! mxlsink flow-id="<video-flow-id>" domain="/mxl-domain" sync=false \
+       ! mxlsink flow-id="<video-uuid>" domain="/mxl-domain/<domain-path>" sync=false \
   dec. ! audioconvert ! audioresample \
-       ! "audio/x-raw,format=F32LE,channels=2,rate=48000,layout=interleaved" \
+       ! "audio/x-raw,format=F32LE,rate=48000,layout=interleaved" \
        ! queue \
-       ! mxlsink flow-id="<audio-flow-id>" domain="/mxl-domain" sync=false
+       ! mxlsink flow-id="<audio-uuid>" domain="/mxl-domain/<domain-path>" sync=false
 ```
+
+> Flow UUIDs are **deterministic (UUID v5)** derived from
+> `_MXL_HLS_NS` + `"<grouphint>:video"` / `"<grouphint>:audio"` — applying a new HLS URL
+> preserves the same UUIDs as long as the group hint is unchanged.
 
 ### Explanation
 
-Ingests an HLS stream and republishes it as two MXL flows.
+Ingests any HLS stream and republishes it as one video and one audio MXL flow, accepting
+whatever resolution, frame rate, and channel count the source provides.
 
-**Two-phase startup** avoids delivering a low-quality variant to MXL during adaptive-bitrate
-stabilisation.  During the 10-second warmup, `uridecodebin` connects to the HLS manifest with
-`connection-speed=50000` (kbps) to force the highest bitrate variant, but the decoded frames go
-to `fakesink` — the MXL writers are not yet involved. After the warmup the stale MXL flow
-directories are deleted, and the real pipeline is launched.
+**`uridecodebin` over a static source chain** — a fixed `souphttpsrc ! hlsdemux ! decodebin`
+chain would need to be hard-wired to specific codecs and would fail on variant streams that
+switch codecs. `uridecodebin` probes the stream, selects the right demuxer, parser, and
+decoder, and exposes raw pads via `pad-added`. This allows the pipeline to work transparently
+with H.264, H.265, AAC, MP3, and any other codec the HLS stream delivers.
 
-The **video branch** normalises the incoming frames to 1920×1080 (via `videoscale`) and
-60 fps (via `videorate`), then locks the pixel format to v210 before writing to `mxlsink`.
-The double `videoconvert` pattern ensures `videoscale` and `videorate` always have a compatible
-intermediate format regardless of what the HLS variant delivers.
+**Two-phase startup** — the gateway uses two successive pipelines rather than a single
+pipeline with valve elements:
 
-The **audio branch** converts to F32LE stereo 48 kHz — the format `mxlsink` requires for audio.
+- **Phase 1 (warmup, 10 s):** `uridecodebin` is connected to per-pad `fakesink(sync=False)`
+  instances. Every decoded pad gets its own fakesink added dynamically via `pad-added`.
+  This allows the HLS adaptive-bitrate logic to select the highest quality variant and fully
+  buffer the stream, without involving `mxlsink` at all. After 10 seconds a GLib timer fires,
+  tears down the warmup pipeline, and starts Phase 2.
 
-On any GStreamer error the pipeline automatically tears down, cleans up the flow directories, and
-restarts the full warmup sequence after 2 seconds.
+- **Phase 2 (real pipeline):** a fresh `uridecodebin` is started with `mxlsink(sync=False)`
+  as the final sink for each branch. With `sync=False`, the sink does not block the GStreamer
+  state machine waiting for clock-synchronised preroll, so both video and audio branches reach
+  PLAYING immediately and data flows reliably.
+
+  > **Why not valves?**  A `valve(drop=True)` placed before `mxlsink` blocks the sink's
+  > preroll: `GstBaseSink` needs to receive a buffer to complete the PAUSED→PLAYING transition,
+  > and the valve prevents that.  This leaves the pipeline in ASYNC state.  After ~2 s in
+  > ASYNC, the HLS audio decoder stops producing data (its internal segment buffer drains and
+  > the demuxer throttles), so when the valve finally opens, audio data is gone.  Video appears
+  > to survive because its larger frame buffers are re-fed sooner.  The two-phase approach
+  > avoids this entirely — mxlsinks are only introduced once the stream is already stable.
+
+**Dynamic pad linking** — the video and audio branches are pre-built before the source is
+connected. When `uridecodebin` emits `pad-added`, the cap's structure name is inspected:
+`video/*` pads link to `videoconvert`, `audio/*` pads link to `audioconvert`. Only the first
+video and first audio pad are used; additional pads (e.g. subtitle tracks) are ignored. This
+is necessary because `uridecodebin` creates pads asynchronously once it has enough data to
+negotiate the stream format.
+
+**Video branch** — `videoconvert → capsfilter(v210) → queue → mxlsink(sync=False)`
+`videoconvert` converts whatever pixel format the HLS decoder produces (I420, NV12, P010,
+etc.) to the v210 packed 10-bit format that `mxlsink` requires. No resolution or frame-rate
+constraint is applied — the pipeline passes through the source's native geometry.
+
+**Audio branch** — `audioconvert → audioresample → capsfilter(F32LE, 48 kHz) → queue → mxlsink(sync=False)`
+`audioconvert` handles sample-format conversion (AAC typically decodes to F32LE non-interleaved;
+`audioconvert` converts to interleaved), `audioresample` converts the source sample rate to
+48 kHz. The capsfilter intentionally does **not** constrain the channel count — whatever
+number of channels the source provides is passed through to `mxlsink` unmodified.
+
+**Apply / re-link** — when the user applies a new HLS URL while the pipeline is running, the
+current pipeline is torn down and the two-phase startup restarts with the new URI.
+Because flow UUIDs are derived from the group hint (not the URL), they are identical before
+and after the apply, so downstream MXL consumers observe seamless flow-ID continuity.
 
 ### Diagram
 
 ```mermaid
-flowchart LR
-    subgraph phase1["Phase 1 – Warmup (10 s)"]
-        w_src["uridecodebin\nuri=HLS_URL\nconnection-speed=50000"]
-        w_fake["fakesink\nsync=false"]
-        w_src -->|"decoded pads"| w_fake
+flowchart TB
+    subgraph warmup["Phase 1 — Warmup (10 s)"]
+        direction LR
+        wsrc["uridecodebin\nuri=HLS_URL\nconnection-speed=50000"]
+        wfs1["fakesink\nsync=False\n(video pad)"]
+        wfs2["fakesink\nsync=False\n(audio pad)"]
+        wsrc -- "pad-added (video/*)" --> wfs1
+        wsrc -- "pad-added (audio/*)" --> wfs2
     end
 
-    subgraph phase2["Phase 2 – MXL Pipeline"]
-        src["uridecodebin\nuri=HLS_URL\nconnection-speed=50000"]
+    timer["GLib timer (10 s)\n→ teardown warmup\n→ start real pipeline"]
+    warmup -. "after 10 s" .-> timer
 
-        subgraph vbranch["Video branch"]
-            vconv1["videoconvert"]
-            vscale["videoscale"]
-            vrcaps["capsfilter\n1920×1080"]
-            vrate["videorate"]
-            vfcaps["capsfilter\n60 fps"]
-            vconv2["videoconvert"]
-            vfinal["capsfilter\nv210, 1920×1080, 60 fps"]
-            vqueue["queue"]
-            vsink["mxlsink\nflow-id=video\nsync=false"]
-            vconv1 --> vscale --> vrcaps --> vrate --> vfcaps --> vconv2 --> vfinal --> vqueue --> vsink
-        end
+    subgraph video_branch["Phase 2 — Video branch"]
+        direction LR
+        vconv["videoconvert"]
+        vcaps["capsfilter\nformat=v210"]
+        vqueue["queue"]
+        vsink["mxlsink\nflow-id=video-uuid\nsync=False"]
 
-        subgraph abranch["Audio branch"]
-            aconv["audioconvert"]
-            aresample["audioresample"]
-            acaps["capsfilter\nF32LE, 2 ch, 48 kHz"]
-            aqueue["queue"]
-            asink["mxlsink\nflow-id=audio\nsync=false"]
-            aconv --> aresample --> acaps --> aqueue --> asink
-        end
-
-        src -->|"video pad"| vconv1
-        src -->|"audio pad"| aconv
+        vconv --> vcaps --> vqueue --> vsink
     end
 
-    phase1 -. "after 10 s teardown\n→ rebuild" .-> phase2
+    subgraph audio_branch["Phase 2 — Audio branch"]
+        direction LR
+        aconv["audioconvert"]
+        aresample["audioresample"]
+        acaps["capsfilter\nF32LE, 48 kHz\n(native channel count)"]
+        aqueue["queue"]
+        asink["mxlsink\nflow-id=audio-uuid\nsync=False"]
+
+        aconv --> aresample --> acaps --> aqueue --> asink
+    end
+
+    src2["uridecodebin\n(fresh instance)"]
+    timer --> src2
+    src2 -- "pad-added (video/*)" --> vconv
+    src2 -- "pad-added (audio/*)" --> aconv
+
+    patch["background thread\n→ poll & patch flow_def.json"] -. "after flows appear" .-> vsink
+    patch -. "after flows appear" .-> asink
 ```
 
 ---

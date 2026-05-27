@@ -1,8 +1,11 @@
 # SPDX-FileCopyrightText: 2025 Contributors to the Media eXchange Layer project.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Multi-stage Dockerfile for the HLS-to-MXL Gateway.
-# Build context: repository root (../../ relative to this file's directory)
+# Multi-stage Dockerfile for the MXL HLS Gateway.
+# Build context: repository root.
+#
+# Stage 1 – Build React + Vite frontend
+# Stage 2 – Runtime (Ubuntu 24.04 + GStreamer + MXL libraries)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 1 – Build React + Vite frontend
@@ -11,32 +14,22 @@ FROM node:18-bullseye-slim AS frontend-builder
 
 WORKDIR /build
 
-COPY docker/exercise-5/data/hls2mxl/frontend/package.json \
-     docker/exercise-5/data/hls2mxl/frontend/package-lock.json* \
+COPY gst-apps/hls2mxl/frontend/package.json \
+     gst-apps/hls2mxl/frontend/package-lock.json* \
      ./
 
 RUN npm install --legacy-peer-deps
 
-COPY docker/exercise-5/data/hls2mxl/frontend/ ./
+COPY gst-apps/hls2mxl/frontend/ ./
 
 RUN npm run build
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Stage 2 – Extract NMOS binaries
-# ─────────────────────────────────────────────────────────────────────────────
-FROM mxl-nmos-cpp:latest AS nmos-binaries
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Stage 3 – Runtime on Ubuntu 24.04
+# Stage 2 – Runtime on Ubuntu 24.04 (GLIBC 2.39)
 # ─────────────────────────────────────────────────────────────────────────────
 FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
-
-COPY --from=nmos-binaries /home/nmos-cpp-node   /home/nmos-cpp-node
-COPY --from=nmos-binaries /usr/sbin/mdnsd        /usr/sbin/mdnsd
-COPY --from=nmos-binaries /usr/lib/libdns_sd.so.1 /usr/lib/libdns_sd.so.1
-RUN ln -sf /usr/lib/libdns_sd.so.1 /usr/lib/libdns_sd.so
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 \
@@ -50,43 +43,39 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gstreamer1.0-plugins-good \
         gstreamer1.0-plugins-bad \
         gstreamer1.0-plugins-ugly \
-        gstreamer1.0-x \
         gstreamer1.0-libav \
+        gstreamer1.0-x \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY docker/exercise-5/data/hls2mxl/backend/requirements.txt /tmp/requirements.txt
+COPY gst-apps/hls2mxl/backend/requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
 
 # ── MXL libraries ────────────────────────────────────────────────────────────
 COPY dmf-mxl/rust/target/release/libgstmxl.so /usr/lib/x86_64-linux-gnu/gstreamer-1.0/
 
-COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.1          /opt/mxl/lib/libmxl.so.1.1
-COPY dmf-mxl/build/Linux-Clang-Release/lib/internal/libmxl-common.so.1.1 \
-                                                                     /opt/mxl/lib/libmxl-common.so.1.1
+COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.1 /opt/mxl/lib/libmxl.so.1.1
 
 RUN cd /opt/mxl/lib \
  && ln -sf libmxl.so.1.1        libmxl.so.1 \
  && ln -sf libmxl.so.1          libmxl.so \
- && ln -sf libmxl-common.so.1.1 libmxl-common.so.1 \
- && ln -sf libmxl-common.so.1   libmxl-common.so \
  && ldconfig /opt/mxl/lib /usr/lib/x86_64-linux-gnu/gstreamer-1.0 \
+ # libgstmxl.so dlopen()s libmxl.so from its compile-time build path; satisfy it
  && mkdir -p /workspace/mxl/build/Linux-Clang-Release/lib \
  && ln -sf /opt/mxl/lib/libmxl.so /workspace/mxl/build/Linux-Clang-Release/lib/libmxl.so
 
 ENV LD_LIBRARY_PATH=/opt/mxl/lib
 
 # ── Application code ─────────────────────────────────────────────────────────
-COPY docker/exercise-5/data/hls2mxl/backend/ /app/backend/
-COPY --from=frontend-builder /build/dist      /app/frontend/dist
+COPY gst-apps/hls2mxl/backend/ /app/backend/
+COPY --from=frontend-builder /build/dist /app/frontend/dist
 
-COPY docker/exercise-5/data/hls2mxl/node.json    /home/node.json
-COPY docker/exercise-5/data/hls2mxl/entrypoint.sh /entrypoint.sh
+COPY gst-apps/hls2mxl/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-ENV MXL_DOMAIN=/mxl-domain \
-    NMOS_NODE_URL=http://localhost:9520
+# ── Environment ──────────────────────────────────────────────────────────────
+ENV MXL_DOMAIN=/mxl-domain
 
-EXPOSE 9520 9620 9720
+EXPOSE 9600
 
 ENTRYPOINT ["/entrypoint.sh"]
