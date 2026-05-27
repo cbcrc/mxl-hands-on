@@ -106,7 +106,10 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
    sudo mkdir -p /Volumes/mxl/domain_1
    sudo chown 1000:1000 /Volumes/mxl/domain_1
    ```
-1. If you want to use the file player application, put your clip files (.ts or .mp4) in the ./data/Clips folder.
+1. Making sure we have at least one for our clip player application (you can add more of your own, .mp4 or .ts)
+   ```sh
+   cp ~/mxl-hands-on/build-images/sizzle.ts data/Clips
+   ```
 1. Start the system with the start script.
     ```sh
         ./start.sh # For linux based machine
