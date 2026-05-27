@@ -292,7 +292,7 @@ export default function App() {
 
   const domainOptions = domains.map((d) => ({
     value: d.path,
-    label: d.label ? `${d.label} (${d.path})` : d.path,
+    label: `${d.path}  (${(d.id || "").slice(0, 8)}…)`,
   }));
 
   const fileOptions = files.length > 0
