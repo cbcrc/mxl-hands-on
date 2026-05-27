@@ -59,8 +59,6 @@ COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.1                    /opt
 RUN cd /opt/mxl/lib \
  && ln -sf libmxl.so.1.1        libmxl.so.1 \
  && ln -sf libmxl.so.1          libmxl.so \
- && ln -sf libmxl-common.so.1.1 libmxl-common.so.1 \
- && ln -sf libmxl-common.so.1   libmxl-common.so \
  && ldconfig /opt/mxl/lib /usr/lib/x86_64-linux-gnu/gstreamer-1.0 \
  # libgstmxl.so dlopen()s libmxl.so from its compile-time build path; satisfy it
  && mkdir -p /workspace/mxl/build/Linux-Clang-Release/lib \

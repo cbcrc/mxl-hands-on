@@ -180,7 +180,7 @@ EXPOSE 9600
 
 ### Step 3: React + Vite Frontend
 - Initialize with `package.json` targeting Vite 5 and React 18.
-- Dev proxy in `vite.config.js` pointing all API paths to `http://localhost:9600`.
+- Dev proxy in `vite.config.js` pointing all API paths to `http://localhost:9600`. Set the Vite dev port to the app's docker-compose host port + 100 (convention across all gst-apps: host 9699 → dev 9799).
 - Dark theme consistent with `./gst-apps/test-generator` (background `#0f0f0f`, section cards `#1c1c1c`).
 - **Header branding:** Display the CBC Radio-Canada logo (`/cbc-logo.png`) inline beside the "MXL Info GUI" h1 title in a flex row (`display: flex; align-items: center; gap: 1rem`). The logo has `height: 2.2rem`.
 - Flow list table uses group header rows (coloured, spanning all columns) to visually group flows by their group name (prefix before `:` in `flow_grouphint`).

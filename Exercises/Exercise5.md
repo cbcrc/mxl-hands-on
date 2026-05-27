@@ -27,7 +27,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
             end
 
             %% --- Stage 3: Output ---
-            MXL2SRT[MXL2SRT]
+            MXL2WebRTC[MXL2WebRTC]
 
             %% =========================================
             %% CONNECTIONS
@@ -44,7 +44,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
             InputSel --> HTML5Keyer
             
             %% Processing to Output
-            HTML5Keyer --> MXL2SRT
+            HTML5Keyer --> MXL2WebRTC
 
             %% --- Solid Audio (green) Connection (Indices 5 to 7) ---
             %% Audio Sources to Audio Mixer
@@ -52,7 +52,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
             HLS2MXL -- IN 1 --> AudioMix
 
             %% Audio Processing to/From MXL
-            AudioMix --> MXL2SRT
+            AudioMix --> MXL2WebRTC
 
         end
 
@@ -76,7 +76,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
         classDef control fill:#007bff,color:#fff,stroke:#333,stroke-width:2px;
         classDef other fill:#cce6ff,color:black,stroke:#333,stroke-width:2px
 
-        class HLS2MXL,LoopPlayer,TestGen,WebRTC2MXL,InputSel,AudioMix,HTML5Keyer,MXL2SRT,k1,kt1,k2,kt2,k3 gstreamer
+        class HLS2MXL,LoopPlayer,TestGen,WebRTC2MXL,InputSel,AudioMix,HTML5Keyer,MXL2WebRTC,k1,kt1,k2,kt2,k3 gstreamer
         class NmosRegistry,DummyNmosNode,NmosController,kt3 control
         class SPXGraphics,k4 other
 
@@ -125,12 +125,12 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
 
 
 Reference HLS stream that are 1920x1080p60
-    ```sh
-        https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8
-    ```
-    ```sh
-        https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
-    ```
+```sh
+    https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8
+```
+```sh
+    https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
+```
 
 ### Open Source Components
 

@@ -260,7 +260,7 @@ Initialize a React + Vite project inside the `frontend/` directory targeting Vit
   - Show player state (`connecting…` / `● LIVE` / error message) below the video element.
   - The `<video>` element must start with `muted` set to allow browser autoplay. Once the player reaches "playing" state, display a **Mute / Unmute** button in the player header that toggles `videoRef.current.muted` and reflects the current state.
 
-**`vite.config.js`** — proxy all API paths to `http://localhost:9600` for local development:
+**`vite.config.js`** — proxy all API paths to `http://localhost:9600` for local development (Vite dev server only — not used in the Docker image). Set the Vite dev port to the app's docker-compose host port + 100 (convention across all gst-apps: host 9601 → dev 9701).
 ```js
 proxy: {
   '/config': 'http://localhost:9600',

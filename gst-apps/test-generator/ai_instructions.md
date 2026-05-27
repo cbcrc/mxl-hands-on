@@ -116,7 +116,7 @@ This section is enabled only once the pipeline is running (greyed-out and non-in
   - **Operation section** (greyed-out and non-interactive until the pipeline is running): a Video panel (test pattern dropdown, timecode checkbox, ident text input with Apply button) and two independent Audio panels (test pattern dropdown, channel count numeric input, audio level fader with dBFS readout).
 - In `App.jsx`, set `const API = ""` so all fetch calls use relative paths (e.g. `${API}/pipeline/status`). This means the browser always calls the same origin as the page — no port number hardcoded, works regardless of the docker-compose host-port mapping.
 - FastAPI serves the React static files directly: `app.mount("/", StaticFiles(directory="/app/frontend/dist", html=True), name="static")` must be the **last** statement in `backend/main.py` so API routes take precedence. Add `aiofiles>=23.0.0` to `requirements.txt` (required by `StaticFiles`).
-- Update `vite.config.js` to proxy all API paths (`/domains`, `/patterns`, `/options`, `/pipeline`, `/video`, `/audio`) to `http://localhost:9600` for local development (Vite dev server only — not used in the Docker image).
+- Update `vite.config.js` to proxy all API paths (`/domains`, `/patterns`, `/options`, `/pipeline`, `/video`, `/audio`) to `http://localhost:9600` for local development (Vite dev server only — not used in the Docker image). Set the Vite dev port to the app's docker-compose host port + 100 (convention across all gst-apps: host 9600 → dev 9700).
 
 **Entrypoint** — single process, single port:
 ```bash
