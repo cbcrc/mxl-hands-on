@@ -3,119 +3,10 @@
 Each section below describes one of the six GStreamer-based services, gives the equivalent
 `gst-launch-1.0` command, explains what the pipeline does, and includes a Mermaid diagram.
 
----
-
-## 1. File Player (`gst_player.py`)
-
-### `gst-launch-1.0` command
-
-```bash
-gst-launch-1.0 \
-  uridecodebin uri="file:///home/file/<clip>" name=dec \
-  dec. ! queue ! videoconvert \
-       ! "video/x-raw,format=v210" \
-       ! queue \
-       ! mxlsink flow-id="<video-uuid>" domain="/mxl-domain/<domain-uuid>.mxl-domain" \
-  dec. ! queue ! audioconvert ! audioresample \
-       ! "audio/x-raw,format=F32LE,layout=interleaved,rate=48000" \
-       ! queue \
-       ! mxlsink flow-id="<audio-uuid>" domain="/mxl-domain/<domain-uuid>.mxl-domain"
-```
-
-> **Note:** Flow UUIDs are **deterministic (UUID v5)** derived from the group hint
-> (e.g. `Clip-Player:video`, `Clip-Player:audio`) — restarting with the same group hint
-> reuses the same UUIDs and overwrites the existing flow files in the domain.
-> Looping (seek-on-EOS) cannot be expressed in a `gst-launch` command and is implemented
-> in Python on the bus watch.
-
-### Explanation
-
-Reads a local media file (`.ts` or `.mp4`, any resolution/frame rate) from `/home/file` and
-republishes it as one or two MXL flows. The pipeline is user-controlled: the UI's **Setup**
-section configures domain, group hint, file, and per-flow metadata; the pipeline only starts
-when the user clicks **Start**.
-
-**Source/decode** — `uridecodebin` is used in preference to a fixed demuxer + decoder pair
-because the container and codecs are not known up-front: `.ts` files carry MPEG-TS with
-H.264 or H.265, `.mp4` files carry ISO BMFF with the same, and the same UI must accept all
-of them. `uridecodebin` inspects the file, picks the right demuxer + parser + decoder, and
-exposes ready-to-consume raw video/audio pads via the `pad-added` signal. The backend probes
-the file beforehand (`GstPbutils.Discoverer`) so it knows which branches to build, but the
-actual pad-to-branch wiring happens dynamically at runtime once the pads appear.
-
-**Dynamic pad linking** — the video and audio branches are pre-built (each ends at an
-`mxlsink`) and their head queues' sink pads are held aside. When `uridecodebin` emits
-`pad-added`, the new pad's caps are inspected: `video/*` pads are linked to the video branch
-head, `audio/*` pads to the audio branch head. Pads for which no active branch was created
-(e.g. audio pads on a video-only configuration) are ignored. This makes the pipeline
-work uniformly for video-only, audio-only, and audio+video files.
-
-**Video branch** — `queue → videoconvert → capsfilter(v210) → queue → mxlsink`
-`videoconvert` is mandatory because the decoded video can arrive in many pixel formats
-(I420, NV12, P010, …) depending on the source codec, and `mxlsink` only accepts the packed
-10-bit `v210` format. The explicit `capsfilter` locks the negotiation to `v210`; without it
-auto-negotiation may land on whatever the upstream prefers and cause a hard runtime failure.
-
-**Audio branch** — `queue → audioconvert → audioresample → capsfilter(F32LE @ 48 kHz interleaved) → queue → mxlsink`
-`audioconvert` handles sample-format conversion (the decoded audio is typically S16/S32 LE,
-not float), `audioresample` rebinds the rate to 48 kHz regardless of the source rate
-(44.1 kHz, 32 kHz, etc.), and the `capsfilter` locks the format to `F32LE` interleaved —
-the only audio format `mxlsink` accepts. Channel count is whatever the source file provides.
-
-**Looping** — playback runs continuously. A `message::eos` handler on the pipeline bus
-catches end-of-stream and immediately issues a flushing key-unit seek to position 0:
-
-```python
-pipeline.seek_simple(Gst.Format.TIME,
-                     Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, 0)
-```
-
-This restarts the file from the beginning without rebuilding the pipeline, so the MXL
-flows remain alive across loops and consumers see a single continuous stream.
-
-**Flow_def.json patching** — once the pipeline reaches PLAYING, a background thread polls
-each `{domain}/{flow-uuid}.mxl-flow/flow_def.json` (up to 15 s) and patches `grouphint`,
-`tags["urn:x-nmos:tag:grouphint/v1.0"]`, `description`, and `label` with the values entered
-in the Setup form (`<grouphint>:Video` and `<grouphint>:Audio` respectively).
-
-### Diagram
-
-```mermaid
-flowchart TB
-    src["uridecodebin\nuri=file:///home/file/&lt;clip&gt;\nname=dec"]
-
-    subgraph video_branch["Video branch (built when file has video)"]
-        direction LR
-        vqueue_in["queue"]
-        vconv["videoconvert"]
-        vcaps["capsfilter\nformat=v210"]
-        vqueue_out["queue"]
-        vsink["mxlsink\nflow-id=video-uuid"]
-
-        vqueue_in --> vconv --> vcaps --> vqueue_out --> vsink
-    end
-
-    subgraph audio_branch["Audio branch (built when file has audio)"]
-        direction LR
-        aqueue_in["queue"]
-        aconv["audioconvert"]
-        aresample["audioresample"]
-        acaps["capsfilter\nF32LE, 48 kHz, interleaved"]
-        aqueue_out["queue"]
-        asink["mxlsink\nflow-id=audio-uuid"]
-
-        aqueue_in --> aconv --> aresample --> acaps --> aqueue_out --> asink
-    end
-
-    src -- "pad-added (video/*)" --> vqueue_in
-    src -- "pad-added (audio/*)" --> aqueue_in
-
-    eos["bus: message::eos\n→ seek_simple(FLUSH|KEY_UNIT, 0)"] -. "loop" .-> src
-```
 
 ---
 
-## 2. Test Generator (`gst_generator.py`)
+## 1. Test Generator (`gst_generator.py`)
 
 ### `gst-launch-1.0` command
 
@@ -228,7 +119,218 @@ flowchart TB
 
 ---
 
-## 3. HLS-to-MXL Gateway (`gst_hls2mxl.py`)
+## 2. MXL-to-WebRTC (`gst_mxl2webrtc.py`)
+
+### `gst-launch-1.0` command
+
+```bash
+gst-launch-1.0 \
+  webrtcbin name=wb bundle-policy=3 stun-server="" \
+  mxlsrc video-flow-id="<video-flow-id>" domain="/mxl-domain" \
+       ! "video/x-raw,format=v210" \
+       ! videoconvert \
+       ! x264enc tune=4 speed-preset=2 key-int-max=30 \
+       ! h264parse \
+       ! rtph264pay pt=96 config-interval=-1 \
+       ! "application/x-rtp,media=video,encoding-name=H264,payload=96" \
+       ! queue \
+       ! wb.sink_%u \
+  mxlsrc audio-flow-id="<audio-flow-id>" domain="/mxl-domain" \
+       ! audioconvert ! audioresample \
+       ! "audio/x-raw,layout=interleaved,channels=2" \
+       ! opusenc \
+       ! rtpopuspay pt=97 \
+       ! queue \
+       ! wb.sink_%u
+```
+
+> **WHIP signalling:** the SDP offer/answer exchange with MediaMTX is handled entirely by
+> the Python code (HTTP POST to `MEDIAMTX_WHIP_URL`) and cannot be expressed in a
+> `gst-launch` command. `bundle-policy=3` is `MAX_BUNDLE`. `tune=4` is the `zerolatency`
+> bitmask for x264enc. `speed-preset=2` is `ultrafast`.
+
+### Explanation
+
+Transcodes two MXL flows (video + audio), packages them as RTP, and publishes to a
+**MediaMTX** server via **WHIP** (WebRTC HTTP Ingest Protocol). Browsers watch the stream
+from MediaMTX via **WHEP** (WebRTC HTTP Egress Protocol).
+
+The **video branch** reads the MXL video flow as v210 and converts it to a format
+`x264enc` accepts.  The encoder is tuned for minimum latency (`zerolatency`) and maximum
+speed (`ultrafast`, `speed-preset=2`), with a keyframe every 30 frames.  `h264parse`
+normalises the bitstream, and `rtph264pay` wraps it in RTP at payload type 96.
+
+The **audio branch** reads the MXL audio, converts and resamples it, downmixes to stereo
+(2 channels — the reliable maximum for Opus), encodes to Opus, and wraps the result in RTP
+via `rtpopuspay` at payload type 97. The `capsfilter(channels=2)` is placed **after**
+`audioconvert` and `audioresample` so those elements can negotiate the downmix; placing it
+directly after `mxlsrc` causes an "Internal data stream error" when the source has more
+than 2 channels.
+
+Both RTP streams are fed into **`webrtcbin`** with `bundle-policy=MAX_BUNDLE` (single
+transport for both media). No STUN server is configured — the app runs within a local
+Docker network where ICE host candidates are sufficient.
+
+**WHIP handshake** (Python-managed, not in the GStreamer pipeline):
+1. `webrtcbin` fires `on-negotiation-needed` → Python calls `create-offer`.
+2. Python sets the local description and waits up to 10 s for ICE gathering to complete.
+3. The fully-gathered SDP offer is HTTP POST'd to the MediaMTX WHIP endpoint
+   (`MEDIAMTX_WHIP_URL`, default `http://localhost:8889/mxl2webrtc/whip`).
+4. MediaMTX responds with a 201 and an SDP answer; Python calls `set-remote-description`.
+
+**MediaMTX** acts as a WebRTC relay: it ingests the stream via WHIP and re-exposes it
+for browsers via WHEP. The browser navigates to the MediaMTX WHEP URL and receives the
+H.264 + Opus stream directly.
+
+### Diagram
+
+```mermaid
+flowchart LR
+    subgraph "Video branch"
+        vsrc["mxlsrc\nvideo-flow-id"]
+        vcaps["capsfilter\nformat=v210"]
+        vconv["videoconvert"]
+        venc["x264enc\nzerolatency, ultrafast\nkeyframe every 30"]
+        vparse["h264parse"]
+        vpay["rtph264pay\npt=96"]
+        vqueue["queue"]
+        vsrc --> vcaps --> vconv --> venc --> vparse --> vpay --> vqueue
+    end
+
+    subgraph "Audio branch"
+        asrc["mxlsrc\naudio-flow-id"]
+        aconv["audioconvert"]
+        aresample["audioresample"]
+        acaps["capsfilter\ninterleaved, 2 ch"]
+        aenc["opusenc"]
+        apay["rtpopuspay\npt=97"]
+        aqueue["queue"]
+        asrc --> aconv --> aresample --> acaps --> aenc --> apay --> aqueue
+    end
+
+    wb["webrtcbin\nbundle-policy=MAX_BUNDLE\nno STUN"]
+
+    vqueue -->|"sink_%u (video)"| wb
+    aqueue -->|"sink_%u (audio)"| wb
+
+    wb -- "WHIP\nSDP offer (HTTP POST)" --> mediamtx["MediaMTX\n(WHIP ingest)"]
+    mediamtx -- "SDP answer (201)" --> wb
+    mediamtx -->|"WHEP egress"| browser["Browser\n(WebRTC consumer)"]
+```
+
+---
+
+## 3. File Player (`gst_player.py`)
+
+### `gst-launch-1.0` command
+
+```bash
+gst-launch-1.0 \
+  uridecodebin uri="file:///home/file/<clip>" name=dec \
+  dec. ! queue ! videoconvert \
+       ! "video/x-raw,format=v210" \
+       ! queue \
+       ! mxlsink flow-id="<video-uuid>" domain="/mxl-domain/<domain-uuid>.mxl-domain" \
+  dec. ! queue ! audioconvert ! audioresample \
+       ! "audio/x-raw,format=F32LE,layout=interleaved,rate=48000" \
+       ! queue \
+       ! mxlsink flow-id="<audio-uuid>" domain="/mxl-domain/<domain-uuid>.mxl-domain"
+```
+
+> **Note:** Flow UUIDs are **deterministic (UUID v5)** derived from the group hint
+> (e.g. `Clip-Player:video`, `Clip-Player:audio`) — restarting with the same group hint
+> reuses the same UUIDs and overwrites the existing flow files in the domain.
+> Looping (seek-on-EOS) cannot be expressed in a `gst-launch` command and is implemented
+> in Python on the bus watch.
+
+### Explanation
+
+Reads a local media file (`.ts` or `.mp4`, any resolution/frame rate) from `/home/file` and
+republishes it as one or two MXL flows. The pipeline is user-controlled: the UI's **Setup**
+section configures domain, group hint, file, and per-flow metadata; the pipeline only starts
+when the user clicks **Start**.
+
+**Source/decode** — `uridecodebin` is used in preference to a fixed demuxer + decoder pair
+because the container and codecs are not known up-front: `.ts` files carry MPEG-TS with
+H.264 or H.265, `.mp4` files carry ISO BMFF with the same, and the same UI must accept all
+of them. `uridecodebin` inspects the file, picks the right demuxer + parser + decoder, and
+exposes ready-to-consume raw video/audio pads via the `pad-added` signal. The backend probes
+the file beforehand (`GstPbutils.Discoverer`) so it knows which branches to build, but the
+actual pad-to-branch wiring happens dynamically at runtime once the pads appear.
+
+**Dynamic pad linking** — the video and audio branches are pre-built (each ends at an
+`mxlsink`) and their head queues' sink pads are held aside. When `uridecodebin` emits
+`pad-added`, the new pad's caps are inspected: `video/*` pads are linked to the video branch
+head, `audio/*` pads to the audio branch head. Pads for which no active branch was created
+(e.g. audio pads on a video-only configuration) are ignored. This makes the pipeline
+work uniformly for video-only, audio-only, and audio+video files.
+
+**Video branch** — `queue → videoconvert → capsfilter(v210) → queue → mxlsink`
+`videoconvert` is mandatory because the decoded video can arrive in many pixel formats
+(I420, NV12, P010, …) depending on the source codec, and `mxlsink` only accepts the packed
+10-bit `v210` format. The explicit `capsfilter` locks the negotiation to `v210`; without it
+auto-negotiation may land on whatever the upstream prefers and cause a hard runtime failure.
+
+**Audio branch** — `queue → audioconvert → audioresample → capsfilter(F32LE @ 48 kHz interleaved) → queue → mxlsink`
+`audioconvert` handles sample-format conversion (the decoded audio is typically S16/S32 LE,
+not float), `audioresample` rebinds the rate to 48 kHz regardless of the source rate
+(44.1 kHz, 32 kHz, etc.), and the `capsfilter` locks the format to `F32LE` interleaved —
+the only audio format `mxlsink` accepts. Channel count is whatever the source file provides.
+
+**Looping** — playback runs continuously. A `message::eos` handler on the pipeline bus
+catches end-of-stream and immediately issues a flushing key-unit seek to position 0:
+
+```python
+pipeline.seek_simple(Gst.Format.TIME,
+                     Gst.SeekFlags.FLUSH | Gst.SeekFlags.KEY_UNIT, 0)
+```
+
+This restarts the file from the beginning without rebuilding the pipeline, so the MXL
+flows remain alive across loops and consumers see a single continuous stream.
+
+**Flow_def.json patching** — once the pipeline reaches PLAYING, a background thread polls
+each `{domain}/{flow-uuid}.mxl-flow/flow_def.json` (up to 15 s) and patches `grouphint`,
+`tags["urn:x-nmos:tag:grouphint/v1.0"]`, `description`, and `label` with the values entered
+in the Setup form (`<grouphint>:Video` and `<grouphint>:Audio` respectively).
+
+### Diagram
+
+```mermaid
+flowchart TB
+    src["uridecodebin\nuri=file:///home/file/&lt;clip&gt;\nname=dec"]
+
+    subgraph video_branch["Video branch (built when file has video)"]
+        direction LR
+        vqueue_in["queue"]
+        vconv["videoconvert"]
+        vcaps["capsfilter\nformat=v210"]
+        vqueue_out["queue"]
+        vsink["mxlsink\nflow-id=video-uuid"]
+
+        vqueue_in --> vconv --> vcaps --> vqueue_out --> vsink
+    end
+
+    subgraph audio_branch["Audio branch (built when file has audio)"]
+        direction LR
+        aqueue_in["queue"]
+        aconv["audioconvert"]
+        aresample["audioresample"]
+        acaps["capsfilter\nF32LE, 48 kHz, interleaved"]
+        aqueue_out["queue"]
+        asink["mxlsink\nflow-id=audio-uuid"]
+
+        aqueue_in --> aconv --> aresample --> acaps --> aqueue_out --> asink
+    end
+
+    src -- "pad-added (video/*)" --> vqueue_in
+    src -- "pad-added (audio/*)" --> aqueue_in
+
+    eos["bus: message::eos\n→ seek_simple(FLUSH|KEY_UNIT, 0)"] -. "loop" .-> src
+```
+
+---
+
+## 4. HLS-to-MXL Gateway (`gst_hls2mxl.py`)
 
 ### `gst-launch-1.0` commands
 
@@ -364,7 +466,7 @@ flowchart TB
 
 ---
 
-## 4. Input Selector (`gst_selector.py`)
+## 5. Input Selector (`gst_selector.py`)
 
 ### `gst-launch-1.0` command
 
@@ -435,7 +537,7 @@ flowchart LR
 
 ---
 
-## 5. HTML5 Keyer (`gst_keyer.py`)
+## 6. HTML5 Keyer (`gst_keyer.py`)
 
 ### `gst-launch-1.0` command
 
@@ -523,103 +625,4 @@ flowchart LR
     mixer --> out_conv --> out_caps --> out_q --> out_sink
 ```
 
----
 
-## 6. MXL-to-WebRTC (`gst_mxl2webrtc.py`)
-
-### `gst-launch-1.0` command
-
-```bash
-gst-launch-1.0 \
-  webrtcbin name=wb bundle-policy=3 stun-server="" \
-  mxlsrc video-flow-id="<video-flow-id>" domain="/mxl-domain" \
-       ! "video/x-raw,format=v210" \
-       ! videoconvert \
-       ! x264enc tune=4 speed-preset=2 key-int-max=30 \
-       ! h264parse \
-       ! rtph264pay pt=96 config-interval=-1 \
-       ! "application/x-rtp,media=video,encoding-name=H264,payload=96" \
-       ! queue \
-       ! wb.sink_%u \
-  mxlsrc audio-flow-id="<audio-flow-id>" domain="/mxl-domain" \
-       ! audioconvert ! audioresample \
-       ! "audio/x-raw,layout=interleaved,channels=2" \
-       ! opusenc \
-       ! rtpopuspay pt=97 \
-       ! queue \
-       ! wb.sink_%u
-```
-
-> **WHIP signalling:** the SDP offer/answer exchange with MediaMTX is handled entirely by
-> the Python code (HTTP POST to `MEDIAMTX_WHIP_URL`) and cannot be expressed in a
-> `gst-launch` command. `bundle-policy=3` is `MAX_BUNDLE`. `tune=4` is the `zerolatency`
-> bitmask for x264enc. `speed-preset=2` is `ultrafast`.
-
-### Explanation
-
-Transcodes two MXL flows (video + audio), packages them as RTP, and publishes to a
-**MediaMTX** server via **WHIP** (WebRTC HTTP Ingest Protocol). Browsers watch the stream
-from MediaMTX via **WHEP** (WebRTC HTTP Egress Protocol).
-
-The **video branch** reads the MXL video flow as v210 and converts it to a format
-`x264enc` accepts.  The encoder is tuned for minimum latency (`zerolatency`) and maximum
-speed (`ultrafast`, `speed-preset=2`), with a keyframe every 30 frames.  `h264parse`
-normalises the bitstream, and `rtph264pay` wraps it in RTP at payload type 96.
-
-The **audio branch** reads the MXL audio, converts and resamples it, downmixes to stereo
-(2 channels — the reliable maximum for Opus), encodes to Opus, and wraps the result in RTP
-via `rtpopuspay` at payload type 97. The `capsfilter(channels=2)` is placed **after**
-`audioconvert` and `audioresample` so those elements can negotiate the downmix; placing it
-directly after `mxlsrc` causes an "Internal data stream error" when the source has more
-than 2 channels.
-
-Both RTP streams are fed into **`webrtcbin`** with `bundle-policy=MAX_BUNDLE` (single
-transport for both media). No STUN server is configured — the app runs within a local
-Docker network where ICE host candidates are sufficient.
-
-**WHIP handshake** (Python-managed, not in the GStreamer pipeline):
-1. `webrtcbin` fires `on-negotiation-needed` → Python calls `create-offer`.
-2. Python sets the local description and waits up to 10 s for ICE gathering to complete.
-3. The fully-gathered SDP offer is HTTP POST'd to the MediaMTX WHIP endpoint
-   (`MEDIAMTX_WHIP_URL`, default `http://localhost:8889/mxl2webrtc/whip`).
-4. MediaMTX responds with a 201 and an SDP answer; Python calls `set-remote-description`.
-
-**MediaMTX** acts as a WebRTC relay: it ingests the stream via WHIP and re-exposes it
-for browsers via WHEP. The browser navigates to the MediaMTX WHEP URL and receives the
-H.264 + Opus stream directly.
-
-### Diagram
-
-```mermaid
-flowchart LR
-    subgraph "Video branch"
-        vsrc["mxlsrc\nvideo-flow-id"]
-        vcaps["capsfilter\nformat=v210"]
-        vconv["videoconvert"]
-        venc["x264enc\nzerolatency, ultrafast\nkeyframe every 30"]
-        vparse["h264parse"]
-        vpay["rtph264pay\npt=96"]
-        vqueue["queue"]
-        vsrc --> vcaps --> vconv --> venc --> vparse --> vpay --> vqueue
-    end
-
-    subgraph "Audio branch"
-        asrc["mxlsrc\naudio-flow-id"]
-        aconv["audioconvert"]
-        aresample["audioresample"]
-        acaps["capsfilter\ninterleaved, 2 ch"]
-        aenc["opusenc"]
-        apay["rtpopuspay\npt=97"]
-        aqueue["queue"]
-        asrc --> aconv --> aresample --> acaps --> aenc --> apay --> aqueue
-    end
-
-    wb["webrtcbin\nbundle-policy=MAX_BUNDLE\nno STUN"]
-
-    vqueue -->|"sink_%u (video)"| wb
-    aqueue -->|"sink_%u (audio)"| wb
-
-    wb -- "WHIP\nSDP offer (HTTP POST)" --> mediamtx["MediaMTX\n(WHIP ingest)"]
-    mediamtx -- "SDP answer (201)" --> wb
-    mediamtx -->|"WHEP egress"| browser["Browser\n(WebRTC consumer)"]
-```

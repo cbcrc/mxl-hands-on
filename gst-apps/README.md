@@ -72,7 +72,7 @@ Generates one synthetic video flow and two independent audio flows and writes th
 - Toggle the timecode burn-in and change the ident overlay without stopping the pipeline.
 - Adjust the audio level (−60 … 0 dBFS in 0.5 dB steps) and wave type per audio flow.
 
-For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 2](./gstreamer-pipeline.md#2-test-generator-gst_generatorpy).
+For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 1](./gstreamer-pipeline.md#2-test-generator-gst_generatorpy).
 
 ---
 
@@ -112,7 +112,7 @@ mxlsrc → opusenc → rtpopuspay ──┘
 
 **Operation panel:** shows the active flow UUIDs, pipeline status, and the live WebRTC player with a mute/unmute toggle.
 
-For the full GStreamer pipeline breakdown see [gstreamer-pipeline.md — Section 6](./gstreamer-pipeline.md#6-mxl-to-webrtc-gst_mxl2webrtcpy).
+For the full GStreamer pipeline breakdown see [gstreamer-pipeline.md — Section 2](./gstreamer-pipeline.md#6-mxl-to-webrtc-gst_mxl2webrtcpy).
 
 ---
 
@@ -132,14 +132,20 @@ Reads a local media file (`.mp4` or `.ts`) and publishes its video and/or audio 
 - **Stream Info:** codec, resolution, and frame rate for the video stream; codec, sample rate, and channel count for the audio stream.
 - **Loop indicator:** a badge confirming that playback is looping.
 
-For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 1](./gstreamer-pipeline.md#1-file-player-gst_playerpy).
+For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 3](./gstreamer-pipeline.md#1-file-player-gst_playerpy).
 
 ---
 
 ## Building from source
 
-If you want to build the Docker images yourself (requires the MXL SDK compiled first), follow [how_to_build.md](../how_to_build.md) part 0,1 and 2.
+If you want to build the Docker images yourself you can run these commands and read more on our process [here](../how_to_build.md)
 
+```sh
+cd ~/mxl-hands-on
+./build_linux.sh
+cd gst-apps
+docker compose build
+```
 
 ---
 
