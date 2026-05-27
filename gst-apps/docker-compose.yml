@@ -82,6 +82,24 @@ services:
     environment:
       - MXL_DOMAIN=/mxl-domain
 
+  input-selector:
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: gst-apps/input-selector/Dockerfile
+    image: input-selector:latest
+    container_name: input-selector
+    hostname: input-selector
+    domainname: local
+    ports:
+      - "9604:9600"   # FastAPI serves both API and React frontend
+    volumes:
+      - type: volume
+        source: mxl-domain
+        target: /mxl-domain
+    environment:
+      - MXL_DOMAIN=/mxl-domain
+
   # MediaMTX must use host networking so WebRTC ICE candidates reflect the real
   # host IP.  All ports (8554 RTSP, 8889 WebRTC) are bound directly on the host.
   mediamtx:

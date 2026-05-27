@@ -470,69 +470,120 @@ flowchart TB
 
 ### `gst-launch-1.0` command
 
-**With connected slots (example with 3 inputs)**
+**All three slots connected to MXL flows**
 
 ```bash
 gst-launch-1.0 \
-  input-selector name=sel sync-streams=false \
-  mxlsrc video-flow-id="<flow-id-1>" domain="/mxl-domain" \
-       ! videoconvert ! queue leaky=1 max-size-buffers=3 ! sel.sink_0 \
-  mxlsrc video-flow-id="<flow-id-2>" domain="/mxl-domain" \
-       ! videoconvert ! queue leaky=1 max-size-buffers=3 ! sel.sink_1 \
-  mxlsrc video-flow-id="<flow-id-3>" domain="/mxl-domain" \
-       ! videoconvert ! queue leaky=1 max-size-buffers=3 ! sel.sink_2 \
-  sel. ! videoconvert \
-       ! "video/x-raw,format=v210" \
+  input-selector name=sel \
+  mxlsrc video-flow-id="<flow-id-1>" domain="/mxl-domain/<domain-uuid>.mxl-domain" \
+       ! "video/x-raw,format=v210" ! queue ! sel.sink_0 \
+  mxlsrc video-flow-id="<flow-id-2>" domain="/mxl-domain/<domain-uuid>.mxl-domain" \
+       ! "video/x-raw,format=v210" ! queue ! sel.sink_1 \
+  mxlsrc video-flow-id="<flow-id-3>" domain="/mxl-domain/<domain-uuid>.mxl-domain" \
+       ! "video/x-raw,format=v210" ! queue ! sel.sink_2 \
+  sel. ! "video/x-raw,format=v210" \
        ! queue \
-       ! mxlsink flow-id="<output-flow-id>" domain="/mxl-domain" sync=false
+       ! mxlsink flow-id="<output-flow-id>" domain="/mxl-domain/<domain-uuid>.mxl-domain"
 ```
 
-**When no input is connected (black output fallback)**
+**Two MXL flows + one black-fill slot (slot 3 empty)**
 
 ```bash
 gst-launch-1.0 \
+  input-selector name=sel \
+  mxlsrc video-flow-id="<flow-id-1>" domain="/mxl-domain/<domain-uuid>.mxl-domain" \
+       ! "video/x-raw,format=v210" ! queue ! sel.sink_0 \
+  mxlsrc video-flow-id="<flow-id-2>" domain="/mxl-domain/<domain-uuid>.mxl-domain" \
+       ! "video/x-raw,format=v210" ! queue ! sel.sink_1 \
   videotestsrc pattern=2 is-live=true \
-  ! videoconvert \
-  ! "video/x-raw,format=v210" \
-  ! mxlsink flow-id="<output-flow-id>" domain="/mxl-domain" sync=false
+       ! videoconvert \
+       ! "video/x-raw,format=v210,width=1920,height=1080,framerate=30000/1001,interlace-mode=progressive" \
+       ! queue ! sel.sink_2 \
+  sel. ! "video/x-raw,format=v210" \
+       ! queue \
+       ! mxlsink flow-id="<output-flow-id>" domain="/mxl-domain/<domain-uuid>.mxl-domain"
 ```
+
+> **Note:** The black-fill capsfilter must declare the **exact same** `width`,
+> `height`, `framerate`, and `interlace-mode` as the validated MXL inputs — the
+> backend reads these from each selected input's `flow_def.json` and rejects the
+> Start request if they don't match. Live switching is done at runtime by setting
+> the `active-pad` property on `input-selector`; no pipeline rebuild is needed.
 
 ### Explanation
 
-Implements a **2-step vision mixer switch**: a `select` call pre-arms the desired input,
-and a `take` call atomically switches the output — matching the traditional on-air take paradigm.
+Implements a **live 3-to-1 MXL video selector**. Up to three input slots are wired in parallel
+into a single GStreamer `input-selector` element, whose single source pad feeds one `mxlsink`.
+The pipeline keeps all three input branches in `PLAYING` at all times; switching the live output
+is done by changing `input-selector`'s `active-pad` property, which is a sub-frame, glitch-free
+operation as long as every branch produces buffers with identical caps.
 
-Up to three `mxlsrc` sources (NMOS receivers, slots 1–3) feed an `input-selector` element.
-Each branch has a small leaky queue (`leaky=1` drops the oldest frame on overflow) to decouple
-the sources from the selector without building up latency.  The selector's single output feeds a
-`videoconvert` and then `mxlsink`.
+**Format-matching invariant.** Before the pipeline is built, the backend reads each selected
+input's `{domain}/{uuid}.mxl-flow/flow_def.json` and verifies that `frame_width`,
+`frame_height`, `grain_rate`, and `interlace_mode` all match. If any selected input differs,
+the `/pipeline/start` call is rejected with HTTP 400 and the UI displays a banner showing each
+slot's detected format. This guarantee is what allows `input-selector` to switch without
+re-negotiating downstream caps mid-stream.
 
-When no slot is connected the `input-selector` is bypassed entirely and a black
-`videotestsrc` is linked directly to the output sink, keeping the MXL flow alive.
-The pipeline is rebuilt whenever a slot is connected or disconnected; the active pad selection
-is restored after each rebuild.
+**MXL input branches** — `mxlsrc → capsfilter(v210) → queue → input-selector.sink_N`
+The `mxlsrc` `video-flow-id` property identifies the input flow inside the MXL domain.
+The explicit `capsfilter(format=v210)` is mandatory: without it, auto-negotiation can land on a
+different pixel format that the selector and downstream `mxlsink` will refuse.
+
+**Black-fill slots** — `videotestsrc pattern=2 is-live=true → videoconvert → capsfilter(v210, W×H @ num/den, interlace) → queue → input-selector.sink_N`
+Slots left as "None" in the UI are filled with a synthetic black source whose caps are cloned
+from the validated common input format. `is-live=true` is required so that `videotestsrc`
+matches the timing model of the real `mxlsrc` branches; without it the live and non-live
+buffers cannot share a single selector. At least one slot must be a real MXL input — if all
+three were black-fill, the output format would be undefined and the Start request is rejected.
+
+> ⚠️ **Switching the live output to a black-fill slot is disabled in the UI.** In practice the
+> clock-domain difference between `mxlsrc` (live MXL clock) and `videotestsrc` (pipeline clock),
+> together with caps fields the format-validation invariant does not pin down (`colorimetry`,
+> `chroma-site`, `pixel-aspect-ratio`), causes `input-selector` to emit "Internal data stream
+> error" at the moment of switch. Tuning `sync-streams`, `sync-mode`, `cache-buffers`, and
+> inserting a downstream `videoconvert` did not eliminate the problem, so the simpler approach
+> taken here is to gate the switch at the UI: the Active-Input button for a black-fill slot is
+> rendered greyed-out and is not clickable. The black-fill branch remains wired into the pipeline
+> so that the slot layout and format-validation invariant stay uniform regardless of which slots
+> the user populates with real MXL flows.
+
+**Output branch** — `input-selector.src → capsfilter(v210) → queue → mxlsink(flow-id, domain)`
+The output flow UUID is **deterministic** (UUID v5 from the user-provided group hint), so
+restarting the pipeline with the same group hint reuses the same MXL flow directory.
+After the pipeline reaches PLAYING, a background thread polls for the newly written
+`flow_def.json` and patches its `grouphint`, `description`, `label`, and
+`tags["urn:x-nmos:tag:grouphint/v1.0"]` fields with the values entered in the Setup form.
 
 ### Diagram
 
 ```mermaid
 flowchart LR
-    subgraph "Slot 1"
-        s1["mxlsrc\nflow-id=slot1"] --> c1["videoconvert"] --> q1["queue\nleaky=drop-oldest\nmax=3"]
+    subgraph slot1["Input 1 (MXL)"]
+        s1["mxlsrc\nvideo-flow-id=slot1\ndomain=/mxl-domain/…"]
+        c1["capsfilter\nformat=v210"]
+        q1["queue"]
+        s1 --> c1 --> q1
     end
-    subgraph "Slot 2"
-        s2["mxlsrc\nflow-id=slot2"] --> c2["videoconvert"] --> q2["queue\nleaky=drop-oldest\nmax=3"]
+    subgraph slot2["Input 2 (MXL)"]
+        s2["mxlsrc\nvideo-flow-id=slot2"]
+        c2["capsfilter\nformat=v210"]
+        q2["queue"]
+        s2 --> c2 --> q2
     end
-    subgraph "Slot 3"
-        s3["mxlsrc\nflow-id=slot3"] --> c3["videoconvert"] --> q3["queue\nleaky=drop-oldest\nmax=3"]
+    subgraph slot3["Input 3 (black-fill example)"]
+        b3["videotestsrc\npattern=black\nis-live=true"]
+        bc3["videoconvert"]
+        bcaps3["capsfilter\nv210, W×H, num/den, interlace"]
+        q3["queue"]
+        b3 --> bc3 --> bcaps3 --> q3
     end
 
-    q1 -->|"sink_0"| sel["input-selector\nsync-streams=false"]
+    q1 -->|"sink_0"| sel["input-selector\nactive-pad=<live switch>"]
     q2 -->|"sink_1"| sel
     q3 -->|"sink_2"| sel
 
-    sel --> oconv["videoconvert"] --> ocaps["capsfilter\nformat=v210"] --> oqueue["queue"] --> osink["mxlsink\nflow-id=output\nsync=false"]
-
-    black["videotestsrc\npattern=black\n(fallback: no slots)"] -.->|"bypass selector"| oconv
+    sel --> ocaps["capsfilter\nformat=v210"] --> oqueue["queue"] --> osink["mxlsink\nflow-id=output\ndomain=/mxl-domain/…"]
 ```
 
 ---
