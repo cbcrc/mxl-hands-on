@@ -26,8 +26,29 @@ Scans `/mxl-domain` recursively for files named `domain_def.json`. Each file con
 For each file found, store:
 - The domain **UUID** (from the JSON `id` field)
 - The **directory path** containing `domain_def.json` (passed to `mxl-info -d`)
+- The **buffer depth** (see below)
 
 This function runs **once at startup** and can be manually re-triggered via API.
+
+#### Buffer depth (`options.json`)
+After reading `domain_def.json`, look for an `options.json` file in the **same directory**:
+
+```json
+{"urn:x-mxl:option:history_duration/v1.0": 500000000}
+```
+
+The value is expressed in **nanoseconds**. Convert to milliseconds for display (`ns / 1_000_000`).
+
+- If `options.json` is **absent**, the key is **missing**, or the file is **unreadable** → use the default of **200 ms**.
+- Store two fields per domain:
+  - `buffer_depth_ms` — `float`, milliseconds (e.g. `500.0` or `200.0`)
+  - `buffer_depth_is_default` — `bool`, `True` when falling back to the default
+
+Constants used in the implementation:
+```python
+_HISTORY_DURATION_KEY    = "urn:x-mxl:option:history_duration/v1.0"
+_DEFAULT_BUFFER_DEPTH_MS = 200.0
+```
 
 ### 2. `scan_domain`
 Calls `mxl-info -d <domain_directory>` and parses the output into a list of flows.
@@ -117,7 +138,7 @@ Returns `.mxl-flow` directories in the domain that `mxl-info -d` does not report
 ## Required UI Functionalities
 
 1. **Scan Domain button** — calls `POST /get-domains`. Domains are also polled every **30 seconds** via `GET /domains`.
-2. **Domain List window** — table showing UUID and directory path for each domain found.
+2. **Domain List window** — table showing UUID, directory path, and **Buffer Depth** for each domain found. The buffer depth is read from `options.json` in the domain directory (`urn:x-mxl:option:history_duration/v1.0`, expressed in nanoseconds, displayed in ms). When no `options.json` is present the value shows as `200 ms` with a dimmed `(default)` annotation.
 3. **Domain Selector** — dropdown to select a domain from the discovered list.
 4. **MXL Flow List window** — table showing `Flow UUID`, `Label`, `Description`, and `Group Hint` for all flows in the selected domain. Flows are **grouped by group name** (the prefix before `:` in `flow_grouphint`); each group is shown with a coloured header row spanning all four columns. Scales up to 20 rows; scrollable beyond that. Polls `scan_domain` every **30 seconds** when a domain is selected.
 5. **Refresh Flow List button** — manually triggers `scan_domain` for the selected domain.

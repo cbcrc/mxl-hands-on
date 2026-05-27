@@ -103,7 +103,7 @@ For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 1](./g
 A read-only monitoring tool. Wraps the `mxl-info` CLI command and presents its output as a live web dashboard.
 
 **What it shows:**
-- All MXL domains found under `/mxl-domain`.
+- All MXL domains found under `/mxl-domain`, with their **buffer depth** displayed alongside the path. The depth is read from `options.json` in each domain directory (`urn:x-mxl:option:history_duration/v1.0`, stored in nanoseconds, shown in ms). Domains without an `options.json` show `200 ms (default)`.
 - All active flows in the selected domain, grouped by group-hint name, with UUID, label, description, and role columns. Refreshes automatically every 30 seconds.
 - Orphan flows — `.mxl-flow` directories on disk that `mxl-info` no longer reports (inactive or leftover from a previous session).
 - Detailed per-flow info (version, format, grain rate, head index, latency, active state) for up to two flows simultaneously, with optional 500 ms live polling.

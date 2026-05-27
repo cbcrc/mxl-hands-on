@@ -320,15 +320,30 @@ export default function App() {
                 <tr>
                   <th style={thStyle}>Domain UUID</th>
                   <th style={thStyle}>Path</th>
+                  <th style={{ ...thStyle, whiteSpace: "nowrap" }}>Buffer Depth</th>
                 </tr>
               </thead>
               <tbody>
-                {domains.map((d) => (
-                  <tr key={d.path}>
-                    <td style={tdStyle}>{d.id}</td>
-                    <td style={tdStyle}>{d.path}</td>
-                  </tr>
-                ))}
+                {domains.map((d) => {
+                  const ms = d.buffer_depth_ms ?? 200;
+                  const depthStr = Number.isInteger(ms) ? `${ms} ms` : `${ms.toFixed(1)} ms`;
+                  return (
+                    <tr key={d.path}>
+                      <td style={tdStyle}>{d.id}</td>
+                      <td style={tdStyle}>{d.path}</td>
+                      <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
+                        <span style={{ color: d.buffer_depth_is_default ? "#666" : "#e0e0e0" }}>
+                          {depthStr}
+                        </span>
+                        {d.buffer_depth_is_default && (
+                          <span style={{ color: "#444", fontSize: "0.75rem", marginLeft: "0.4rem" }}>
+                            (default)
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

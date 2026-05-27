@@ -35,6 +35,9 @@ log = logging.getLogger(__name__)
 MXL_INFO_BIN    = "/opt/mxl/tools/mxl-info/mxl-info"
 MXL_DOMAIN_ROOT = os.environ.get("MXL_DOMAIN", "/mxl-domain")
 
+_HISTORY_DURATION_KEY   = "urn:x-mxl:option:history_duration/v1.0"
+_DEFAULT_BUFFER_DEPTH_MS = 200.0   # fallback when options.json is absent
+
 # UUID pattern used for matching in flow lines
 _UUID_RE = re.compile(
     r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
@@ -56,6 +59,28 @@ _domains: list[dict] = []   # [{id, path}]
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
+def _read_buffer_depth(domain_path: str) -> tuple[float, bool]:
+    """Return (buffer_depth_ms, is_default).
+
+    Reads ``options.json`` from the domain directory and converts the
+    ``urn:x-mxl:option:history_duration/v1.0`` value from nanoseconds to
+    milliseconds.  Falls back to the 200 ms default when the file is absent,
+    unreadable, or the key is missing.
+    """
+    path = Path(domain_path) / "options.json"
+    if not path.exists():
+        return (_DEFAULT_BUFFER_DEPTH_MS, True)
+    try:
+        data = json.loads(path.read_text())
+        ns = data.get(_HISTORY_DURATION_KEY)
+        if ns is None:
+            return (_DEFAULT_BUFFER_DEPTH_MS, True)
+        return (float(ns) / 1_000_000, False)
+    except Exception as exc:
+        log.warning("Could not parse options.json in %s: %s", domain_path, exc)
+        return (_DEFAULT_BUFFER_DEPTH_MS, True)
+
+
 def _scan_domains() -> list[dict]:
     """Walk MXL_DOMAIN_ROOT and collect every domain_def.json found."""
     found: list[dict] = []
@@ -67,7 +92,13 @@ def _scan_domains() -> list[dict]:
         try:
             data = json.loads(def_file.read_text())
             domain_id = data.get("id", "unknown")
-            found.append({"id": domain_id, "path": str(def_file.parent)})
+            depth_ms, is_default = _read_buffer_depth(str(def_file.parent))
+            found.append({
+                "id": domain_id,
+                "path": str(def_file.parent),
+                "buffer_depth_ms": depth_ms,
+                "buffer_depth_is_default": is_default,
+            })
         except Exception as exc:
             log.warning("Could not parse %s: %s", def_file, exc)
     log.info("Domain scan found %d domain(s)", len(found))
