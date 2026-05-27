@@ -18,12 +18,12 @@ mxl lib is integrated as submodule, i.e. an external repo that needs to be initi
 git submodule update --init
 ```
 Update the submodule to latest commit of main branch.
-    ```sh
-        cd ~/mxl-hands-on/dmf-mxl
-        git checkout main
-        git pull origin main
-        cd ..
-    ```
+```sh
+   cd ~/mxl-hands-on/dmf-mxl
+   git checkout main
+   git pull origin main
+   cd ..
+```
 
 Setting up the TAG variable according to the version you are building:
 ```sh
