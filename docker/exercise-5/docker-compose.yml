@@ -114,3 +114,19 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       - mediamtx
+
+  spx-server:
+    image: ghcr.io/cbcrc/spx-server:v1.0.3
+    container_name: spx-server
+    hostname: spx-server
+    domainname: local
+    ports:
+    - "5660:5660"
+    volumes:
+    - ./data/spx-server/ASSETS:/app/ASSETS
+    - ./data/spx-server/DATAROOT:/app/DATAROOT
+    - ./data/spx-server/locales:/app/locales
+    - ./data/spx-server/config.docker.json:/app/config.json
+    - ./data/spx-server/bin:/app/bin
+    - ./data/spx-server/LOG:/app/LOG
+    restart: unless-stopped

@@ -100,6 +100,29 @@ services:
     environment:
       - MXL_DOMAIN=/mxl-domain
 
+  html5-keyer:
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: gst-apps/HTML5-keyer/Dockerfile
+    image: html5-keyer:latest
+    container_name: html5-keyer
+    hostname: html5-keyer
+    domainname: local
+    ports:
+      - "9605:9600"   # FastAPI serves both API and React frontend
+    volumes:
+      - type: volume
+        source: mxl-domain
+        target: /mxl-domain
+    environment:
+      - MXL_DOMAIN=/mxl-domain
+    # CEF/Chromium launches multiple helper processes; bump shared memory so it
+    # does not crash on the default 64 MB /dev/shm.
+    shm_size: "1gb"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
   # MediaMTX must use host networking so WebRTC ICE candidates reflect the real
   # host IP.  All ports (8554 RTSP, 8889 WebRTC) are bound directly on the host.
   mediamtx:

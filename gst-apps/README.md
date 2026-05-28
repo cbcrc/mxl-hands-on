@@ -14,6 +14,7 @@ This directory contains six GStreamer-based web applications that produce, inspe
 | [File Player](#4-file-player) | `file-player:latest` | `Depending on Docker compose config` | Loops a media file (MP4/TS) and publishes its video and/or audio streams to MXL |
 | [HLS to MXL Gateway](#5-hls-to-mxl-gateway) | `hls2mxl:latest` | `Depending on Docker compose config` | Ingests a live HLS stream and republishes it as MXL video and audio flows |
 | [Input Selector](#6-input-selector) | `input-selector:latest` | `Depending on Docker compose config` | Live-switches between three MXL video inputs and publishes the active one to a single MXL video output |
+| [HTML5 Keyer](#7-html5-keyer) | `html5-keyer:latest` | `9605` | Composites an HTML5 graphics overlay (CEF/Chromium) over a live MXL video background and publishes the result as an MXL output flow |
 
 Pre-built images are published to `ghcr.io/cbcrc` — see [Exercise 5](../Exercises/Exercise5.md) to spin up the whole system without compiling anything.
 
@@ -78,6 +79,7 @@ Open the UIs in a browser once the containers are up:
 | File Player | http://localhost:9602 | http://localhost:9602/docs |
 | HLS to MXL Gateway | http://localhost:9603 | http://localhost:9603/docs |
 | Input Selector | http://localhost:9604 | http://localhost:9604/docs |
+| HTML5 Keyer | http://localhost:9605 | http://localhost:9605/docs |
 
 ---
 
@@ -222,6 +224,35 @@ All three input branches stay in `PLAYING` at all times. Switching the live outp
 - The **Output Flow** panel shows the deterministic UUID written to the domain and the active raster / frame rate / interlace mode.
 
 For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 5](./gstreamer-pipeline.md#5-input-selector-gst_selectorpy).
+
+---
+
+## 7. HTML5-Keyer
+
+**Image:** `html5-keyer:latest` (build from source — not yet published to GHCR)
+
+Composites an HTML5 graphics page rendered by an embedded Chromium/CEF browser as an alpha-keyed overlay over a live MXL video background, and publishes the composited result as a single MXL video output flow.
+
+**How it works:**
+
+```
+mxlsrc (input) → videoconvert → BGRA capsfilter → queue ─────────────────────────────────┐
+                                                                                           ├→ compositor (CPU) → identity (PTS fix) → videoconvert → v210 capsfilter → queue → mxlsink (output)
+cefsrc (URL)   → BGRA capsfilter → videorate → BGRA capsfilter → queue  ─────────────────┘
+                                                        (compositor.sink_1: sync=false, alpha toggles key)
+```
+
+**Setup panel** (before starting the pipeline):
+- Select the MXL domain and a video input flow. The output format (resolution, frame rate) is derived from the selected input — no rescaling is performed.
+- Enter the **HTML5 Graphics URL** rendered by the embedded Chromium browser and composited as the overlay.
+  > ⚠️ **URL inside Docker:** `localhost` inside the container refers to the container itself, not your machine. To reach a service running on the host (e.g. SPX Server on port 5660), use `http://host.docker.internal:5660/renderer/`. The `host.docker.internal` hostname is pre-configured in the `html5-keyer` service via `extra_hosts: host-gateway`. Your browser on the host uses `http://localhost:5660/renderer/` as normal — only the URL entered in the keyer UI needs the `host.docker.internal` form.
+- Set the output **Group Hint** (default `HTML5-Keyer`), **Description** (default `keyer-out-1`), and **Label** (default `html5-keyer-video`). The output flow UUID is **deterministic** (UUID v5 from the group hint), so restarting with the same group hint reuses the same MXL flow directory.
+
+**Operation panel** (while running):
+- **Key ON / OFF** — a large toggle button. The pipeline starts with the key **OFF** (overlay hidden, `compositor.sink_1.alpha = 0.0`). Clicking **Key OFF** switches to **Key ON** (`alpha = 1.0`), compositing the HTML5 graphic over the background. Toggling is live — no pipeline rebuild.
+- Status panel shows the input flow UUID (first 8 chars), overlay URL, output flow UUID, format (`WxH @ num/den fps`), and a **● PUBLISHING** badge.
+
+For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 6](./gstreamer-pipeline.md#6-html5-keyer-gst_keyerpy).
 
 ---
 

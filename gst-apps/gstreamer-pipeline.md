@@ -594,86 +594,134 @@ flowchart LR
 
 ```bash
 gst-launch-1.0 \
-  compositor name=mixer \
+  compositor name=mixer ignore-inactive-pads=true \
   mxlsrc video-flow-id="<input-flow-id>" domain="/mxl-domain" \
        ! videoconvert \
        ! "video/x-raw,format=BGRA" \
        ! queue leaky=2 max-size-buffers=2 max-size-time=0 max-size-bytes=0 \
        ! mixer.sink_0 \
-  cefsrc url="http://spx-server:5660/renderer/" \
+  cefsrc url="http://host.docker.internal:5660/renderer/" \
        ! "video/x-raw,format=BGRA,width=1920,height=1080,framerate=60/1" \
        ! videorate \
+       ! "video/x-raw,format=BGRA,framerate=60/1" \
        ! queue leaky=2 max-size-buffers=2 max-size-time=0 max-size-bytes=0 \
        ! mixer.sink_1 \
   mixer. ! videoconvert \
-       ! "video/x-raw,format=v210,width=1920,height=1080,framerate=60/1" \
+       ! "video/x-raw,format=v210,width=1920,height=1080,framerate=60/1,colorimetry=bt709" \
        ! queue leaky=2 max-size-buffers=2 \
        ! mxlsink flow-id="<output-flow-id>" domain="/mxl-domain" sync=false
 ```
 
 > **Key toggle:** adjust the `alpha` property on `mixer.sink_1` at runtime
-> (`0.0` = key OFF, `1.0` = key ON) without rebuilding the pipeline.
+> (`0.0` = key OFF, `1.0` = key ON) without rebuilding the pipeline. Pipeline starts with key **OFF**.
 >
 > **`sync=false` on `mixer.sink_1`:** set programmatically via the element API — not
 > expressible in a `gst-launch` capsfilter; in the Python code it is set directly on the
-> `Gst.Pad` object returned by `mixer.get_request_pad("sink_%u")`.
+> `Gst.Pad` object returned by `mixer.request_pad_simple("sink_%u")`.
+>
+> **PTS timestamp fix:** `gst-launch-1.0` cannot express the `identity signal-handoffs=true`
+> Python callback that corrects buffer timestamps after the compositor (see Explanation below).
+> The CLI command is a functional approximation — in practice the running-time-to-TAI
+> correction is required for `mxlsink` to write grains at the correct index.
+>
+> **HTML5 URL inside Docker:** `localhost` inside the container refers to the container itself.
+> Use `http://host.docker.internal:<port>/...` to reach services running on the host machine.
 
 ### Explanation
 
-Composites an HTML5 graphics overlay (rendered by a Chrome/CEF browser pointed at an SPX
-graphics server) on top of a live MXL video background using CPU-based mixing via `compositor`.
+Composites an HTML5 graphics overlay (rendered by an embedded Chrome/CEF browser pointed at an
+SPX graphics server or any HTTP page) on top of a live MXL video background using CPU-based
+mixing via `compositor`.
 
-The **background branch** reads an MXL flow (or falls back to a black `videotestsrc` when no
-receiver is connected). `videoconvert` converts v210 to BGRA so that `compositor` receives the
-same pixel format on both pads without internal conversion. The queue is leaky (drop-oldest, 2
-frames) — mandatory for a live pipeline to avoid buffering stale frames that would appear as
-repeated or frozen video.
+**Background branch** — `mxlsrc → videoconvert → capsfilter(BGRA) → queue(leaky) → compositor.sink_0`
 
-The **CEF overlay branch** connects `cefsrc` to the SPX renderer URL which delivers the HTML5
-graphic in BGRA format (alpha channel preserved for keying).  A `videorate` element guarantees
-a steady 60 fps feed to the mixer even when the browser renders at a lower rate.
+`mxlsrc` reads the selected MXL video flow. `videoconvert` converts it from v210 to BGRA so
+the compositor sees the same pixel format on both pads. The leaky queue (drop-oldest, 2 frames)
+prevents stale frames from accumulating — mandatory for a live pipeline.
 
-`compositor` (CPU-based) is used instead of `glvideomixer` (GPU) for two reasons:
-- Its sink pads support `sync=false` — `sink_1` (CEF) is set to `sync=false` so the mixer
-  composites immediately without stalling to align CEF timestamps with the mxlsrc clock domain.
+**CEF overlay branch** — `cefsrc → capsfilter(BGRA, W×H, integer fps) → videorate → capsfilter(BGRA, num/den) → queue(leaky) → compositor.sink_1`
+
+`cefsrc` renders the HTML5 page inside a Chromium subprocess and delivers BGRA frames with the
+alpha channel intact for keying. Two capsfilters bracket `videorate`: the first constrains
+`cefsrc` to an integer frame rate (required by `cefsrc`) at the correct raster; `videorate` then
+re-paces the output to the exact `num/den` grain rate of the MXL input, regardless of browser
+rendering jitter.
+
+`compositor.sink_1` has `sync=false` so the mixer composites the CEF frame immediately when it
+arrives, without stalling to align CEF timestamps with the MXL clock domain. The overlay starts
+with `alpha=0.0` (key **OFF**); setting `alpha=1.0` at runtime switches it **ON** with no
+pipeline rebuild.
+
+`compositor` has `ignore-inactive-pads=true` so it begins producing output as soon as the
+background branch is ready, without waiting for the CEF branch to deliver its first frame.
+CEF takes 1–3 seconds to start its subprocess and render the first frame; without this flag
+the pipeline stalls at negotiation.
+
+`compositor` (CPU-based) is used instead of `glvideomixer` (GPU) because:
+- CPU compositing works on any host, including those without a discrete GPU.
 - No `glupload`/`gldownload` round-trip, saving ~950 MB/s of GPU memory bandwidth.
 
-Toggling the key simply sets the `alpha` property on `sink_1` (the CEF pad) between `0.0`
-and `1.0` — no pipeline rebuild needed.
+**Output branch** — `compositor → identity(pts-fix) → videoconvert → capsfilter(v210, colorimetry=bt709) → queue(leaky) → mxlsink(sync=false)`
 
-The composited output is converted to v210 and written to `mxlsink`.
-The pipeline is only rebuilt when the MXL receiver connection changes.
+Two non-obvious fixes are applied in the output branch:
+
+1. **PTS timestamp correction (`identity` with Python `handoff` callback).**
+   `mxlsrc` provides a TAI-based clock to the pipeline. The compositor is a GStreamer aggregator
+   that normalises all input timestamps to *running time* (nanoseconds elapsed since the pipeline
+   started, beginning at 0). `mxlsink`'s grain-index formula is:
+   `mxl_pts = buffer.pts + (mxl_now − clock.time())`. Since both `mxl_now` and `clock.time()`
+   are TAI (≈ 1.748 × 10¹⁸ ns), their difference is ≈ 0. With running-time PTSes ≈ a few seconds,
+   the computed grain index ≈ 0 — placing grains at epoch 1970 and causing mxl-info-gui to report
+   latency ≈ 56 years. The fix is an `identity` element with `signal-handoffs=true`; its Python
+   `handoff` callback adds `pipeline.get_base_time()` to each buffer's PTS and DTS, converting
+   running time back to the absolute TAI domain that `mxlsink` expects.
+
+2. **Colorimetry pinning (`colorimetry=bt709` in the output capsfilter).**
+   Before the CEF branch delivers its first frame, the compositor emits a CAPS event carrying only
+   the background colorimetry (`bt709`). Once the CEF pad becomes active, it emits a second CAPS
+   event whose colorimetry field changes (CEF renders in sRGB, which the compositor reports as a
+   composite value such as `2:3:7:1`). `GstBaseSink` treats these as different caps and calls
+   `set_caps` twice on `mxlsink`. The second call attempts to create a flow writer for an already-
+   existing flow directory, gets `was_created=false`, and aborts with "another active writer".
+   Pinning `colorimetry=bt709` in the downstream capsfilter forces the compositor to produce
+   identical CAPS events on both transitions, so `mxlsink`'s `set_caps` is only called once.
+
+`mxlsink` has `sync=false` so `GstBaseSink` does not try to clock-synchronise the (now
+TAI-valued) PTS. The write thread inside `mxlsink` still sleeps until the correct TAI wall time
+before committing each grain to the MXL domain.
 
 ### Diagram
 
 ```mermaid
 flowchart LR
-    subgraph "Background branch"
-        bg["mxlsrc\n(or videotestsrc black\nif no input)"]
-        bg_conv["videoconvert\n→ BGRA"]
-        bg_icaps["capsfilter\nformat=BGRA"]
+    subgraph bg_branch["Background branch"]
+        bg["mxlsrc\nvideo-flow-id=input\ndomain=/mxl-domain"]
+        bg_conv["videoconvert\nv210 → BGRA"]
+        bg_caps["capsfilter\nformat=BGRA"]
         bg_q["queue\nleaky=drop-oldest, max=2"]
-        bg --> bg_conv --> bg_icaps --> bg_q
+        bg --> bg_conv --> bg_caps --> bg_q
     end
 
-    subgraph "CEF overlay branch"
-        cef["cefsrc\nurl=spx-server/renderer/"]
-        cef_caps["capsfilter\nBGRA, 1920×1080, 60 fps"]
+    subgraph cef_branch["CEF overlay branch"]
+        cef["cefsrc\nurl=http://host.docker.internal:…"]
+        cef_caps1["capsfilter\nBGRA, W×H, integer fps"]
         cef_rate["videorate"]
+        cef_caps2["capsfilter\nBGRA, num/den fps"]
         cef_q["queue\nleaky=drop-oldest, max=2"]
-        cef --> cef_caps --> cef_rate --> cef_q
+        cef --> cef_caps1 --> cef_rate --> cef_caps2 --> cef_q
     end
 
-    mixer["compositor\n(CPU composite)"]
-    out_conv["videoconvert"]
-    out_caps["capsfilter\nv210, 1920×1080, 60 fps"]
+    mixer["compositor\nignore-inactive-pads=true\n(CPU composite)"]
+    pts_fix["identity\nsignal-handoffs=true\n(add base_time to PTS)"]
+    out_conv["videoconvert\nBGRA → v210"]
+    out_caps["capsfilter\nv210, W×H, num/den\ncolorimetry=bt709"]
     out_q["queue\nleaky=drop-oldest, max=2"]
     out_sink["mxlsink\nflow-id=output\nsync=false"]
 
-    bg_q   -->|"sink_0"| mixer
-    cef_q  -->|"sink_1\nsync=false\nalpha = 0.0 (OFF)\nor 1.0 (ON)"| mixer
+    bg_q   -->|"sink_0\nzorder=0"| mixer
+    cef_q  -->|"sink_1\nsync=false\nzorder=1\nalpha=0.0→1.0"| mixer
 
-    mixer --> out_conv --> out_caps --> out_q --> out_sink
+    mixer --> pts_fix --> out_conv --> out_caps --> out_q --> out_sink
 ```
 
 
