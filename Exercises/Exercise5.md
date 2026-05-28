@@ -62,6 +62,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
         k1[Gstreamer</br>based app] -- MXL Video flow --> kt1[Gstreamer</br>based app]
         k2[Gstreamer</br>based app] -- MXL Audio flow --> kt2[Gstreamer</br>based app]
         k4[HTML 5 Graphic</br>engine]
+        k5[Future Apps]
     end
 
     %% Positioning the legend below the main node
@@ -78,7 +79,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
         classDef future fill:#ffcccc,color:black,stroke:#cc0000,stroke-width:2px,stroke-dasharray:5 5
 
         class HLS2MXL,LoopPlayer,TestGen,InputSel,HTML5Keyer,MXL2WebRTC,k1,kt1,k2,kt2,k3 gstreamer
-        class WebRTC2MXL,AudioMix future
+        class WebRTC2MXL,AudioMix,k5 future
         class NmosRegistry,DummyNmosNode,NmosController,kt3 control
         class SPXGraphics,k4 other
 
