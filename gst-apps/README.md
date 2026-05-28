@@ -261,7 +261,10 @@ For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 6](./g
 If you want to build the Docker images yourself you can run these commands and read more on our process [here](../how_to_build.md)
 
 ```sh
-cd ~/mxl-hands-on
+cd ~/mxl-hands-on/dmf-mxl
+git checkout main
+git pull origin main
+cd ..
 ./build_linux.sh
 cd gst-apps
 docker compose build
