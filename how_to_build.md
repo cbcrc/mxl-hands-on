@@ -136,6 +136,9 @@ Let's push the freshly built images with the fixed tag `v1.0.0-rc2..` and push t
    docker tag test-generator:latest ghcr.io/cbcrc/test-generator:$TAG
    docker tag file-player:latest ghcr.io/cbcrc/file-player:$TAG
    docker tag mxl2webrtc:latest ghcr.io/cbcrc/mxl2webrtc:$TAG
+   docker tag input-selector:latest ghcr.io/cbcrc/input-selector:$TAG
+   docker tag html5-keyer:latest ghcr.io/cbcrc/html5-keyer:$TAG
+   docker tag hls2mxl:latest ghcr.io/cbcrc/hls2mxl:$TAG
    docker push ghcr.io/cbcrc/mxl-writer:$TAG
    docker push ghcr.io/cbcrc/mxl-reader:$TAG
    docker push ghcr.io/cbcrc/mxl-clip-player:$TAG
@@ -143,6 +146,9 @@ Let's push the freshly built images with the fixed tag `v1.0.0-rc2..` and push t
    docker push ghcr.io/cbcrc/test-generator:$TAG
    docker push ghcr.io/cbcrc/file-player:$TAG
    docker push ghcr.io/cbcrc/mxl2webrtc:$TAG
+   docker push ghcr.io/cbcrc/input-selector:$TAG
+   docker push ghcr.io/cbcrc/html5-keyer:$TAG
+   docker push ghcr.io/cbcrc/hls2mxl:$TAG
 ```
 
 Let's consider this versions as the **latest stable** version of mxl that we want to deploy by default.
@@ -156,6 +162,9 @@ Let's attach the moving tag `latest` and push.
    docker tag test-generator:latest ghcr.io/cbcrc/test-generator:latest
    docker tag file-player:latest ghcr.io/cbcrc/file-player:latest
    docker tag mxl2webrtc:latest ghcr.io/cbcrc/mxl2webrtc:latest
+   docker tag input-selector:latest ghcr.io/cbcrc/input-selector:latest
+   docker tag html5-keyer:latest ghcr.io/cbcrc/html5-keyer:latest
+   docker tag hls2mxl:latest ghcr.io/cbcrc/hls2mxl:latest
    docker push ghcr.io/cbcrc/mxl-writer:latest
    docker push ghcr.io/cbcrc/mxl-reader:latest
    docker push ghcr.io/cbcrc/mxl-clip-player:latest
@@ -163,6 +172,9 @@ Let's attach the moving tag `latest` and push.
    docker push ghcr.io/cbcrc/test-generator:latest
    docker push ghcr.io/cbcrc/file-player:latest
    docker push ghcr.io/cbcrc/mxl2webrtc:latest
+   docker push ghcr.io/cbcrc/input-selector:latest
+   docker push ghcr.io/cbcrc/html5-keyer:latest
+   docker push ghcr.io/cbcrc/hls2mxl:latest
 ```
 
 ## Step 7 Test with Exercises
