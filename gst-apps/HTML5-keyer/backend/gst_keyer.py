@@ -283,13 +283,16 @@ class GstKeyer:
         pts_fix.set_property("signal-handoffs", True)
         pipeline.add(pts_fix)
 
-        def _on_pts_fix_handoff(element, buf, pad):
+        def _on_pts_fix_handoff(element, buf):
+            # GstIdentity::handoff signal has one argument: buffer.
+            # identity guarantees the buffer is already writable (GstBaseTransform
+            # calls gst_buffer_make_writable before transform_ip / handoff).
+            # Gst.Buffer has no make_writable() in Python GI; direct assignment works.
             base_time = pipeline.get_base_time()
             if not base_time or base_time == Gst.CLOCK_TIME_NONE:
                 return
             if buf.pts == Gst.CLOCK_TIME_NONE:
                 return
-            buf = buf.make_writable()
             buf.pts += base_time
             if buf.dts != Gst.CLOCK_TIME_NONE:
                 buf.dts += base_time
