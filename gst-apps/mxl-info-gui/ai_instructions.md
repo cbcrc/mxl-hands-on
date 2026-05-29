@@ -116,14 +116,19 @@ Calls `mxl-info -d <domain_directory> -f <flow_uuid>` and parses the output.
 - For all other non-empty lines, split on the first `:` to extract key/value pairs, stripping whitespace
 - Return as `{"flow_uuid": "<uuid>", "fields": {"Version": "1", ...}}`
 
-### 4. `get_orphan_flows`
-Returns `.mxl-flow` directories in the domain that `mxl-info -d` does not report. These are flows whose on-disk directory exists but whose flow definition cannot be read by the MXL library (inactive, corrupt, or leftover from a previous session).
+### 4. `classify_domain_flows`
+Classifies a domain's flows into an **active** list and an **inactive/stale** list. This is the single source of truth for both the live flow table and the Inactive/Stale Flows table — the per-flow activity check runs once per scan, not twice.
+
+A flow being reported by `mxl-info -d` is **not** sufficient to call it active: `mxl-info -d` can list a flow whose underlying buffer is no longer being written. Activity must be confirmed per flow via `mxl-info -d <domain> -f <flow_uuid>`, reading the trailing `Active: true/false` line.
 
 **Algorithm:**
-1. Call `mxl-info -d <domain>` and collect the set of known UUIDs
-2. Iterate the domain directory for entries matching `<uuid>.mxl-flow/`
-3. For each entry whose UUID is **not** in the known set, attempt to read `<uuid>.mxl-flow/flow_def.json` to extract `label`, `description`, and the grouphint tag `urn:x-nmos:tag:grouphint/v1.0`
-4. Return a list with fields: `flow_uuid`, `flow_label`, `flow_grouphint`, `description`, `directory`
+1. Call `mxl-info -d <domain>` and parse the reported flows (see `scan_domain`); collect their UUIDs.
+2. For each reported flow, run `mxl-info -d <domain> -f <flow_uuid>` and read the `Active` field:
+   - `Active: true` → **active** list (enriched with `description` from `flow_def.json`).
+   - otherwise → inactive list, tagged `status: "inactive"`, with `directory` added.
+   - Any failure to confirm activity (non-zero exit, timeout, missing `Active` line) is treated as **not active**: if a flow can't be confirmed active it doesn't belong in the live list.
+3. Iterate the domain directory for `<uuid>.mxl-flow/` entries whose UUID is **not** reported by `mxl-info -d`; read `flow_def.json` for `label`, `description`, and the grouphint tag `urn:x-nmos:tag:grouphint/v1.0`; append to the inactive list tagged `status: "stale"`.
+4. Return `{"active": [...], "inactive": [...]}`. Active flow fields: `flow_uuid`, `flow_label`, `flow_grouphint`, `description`. Inactive flow fields add `directory` and `status` (`"inactive"` or `"stale"`).
 
 ## API Endpoints
 
@@ -131,24 +136,23 @@ Returns `.mxl-flow` directories in the domain that `mxl-info -d` does not report
 |--------|------|-------------|
 | `POST` | `/get-domains` | Trigger a fresh domain scan; returns updated domain list |
 | `GET`  | `/domains` | Return the cached domain list |
-| `GET`  | `/scan-domain?domain_path=<path>` | Run `mxl-info -d` and return flow list |
+| `GET`  | `/domain-flows?domain_path=<path>` | Classify flows into `{active, inactive}` (active confirmed via per-flow `Active` check; inactive list = `inactive` + `stale` statuses) |
 | `GET`  | `/flow-info?domain_path=<path>&flow_uuid=<uuid>` | Run `mxl-info -d -f` and return flow fields |
-| `GET`  | `/orphan-flows?domain_path=<path>` | Return `.mxl-flow` dirs not reported by `mxl-info -d` |
 
 ## Required UI Functionalities
 
 1. **Scan Domain button** — calls `POST /get-domains`. Domains are also polled every **30 seconds** via `GET /domains`.
 2. **Domain List window** — table showing UUID, directory path, and **Buffer Depth** for each domain found. The buffer depth is read from `options.json` in the domain directory (`urn:x-mxl:option:history_duration/v1.0`, expressed in nanoseconds, displayed in ms). When no `options.json` is present the value shows as `200 ms` with a dimmed `(default)` annotation.
 3. **Domain Selector** — dropdown to select a domain from the discovered list.
-4. **MXL Flow List window** — table showing `Flow UUID`, `Label`, `Description`, and `Group Hint` for all flows in the selected domain. Flows are **grouped by group name** (the prefix before `:` in `flow_grouphint`); each group is shown with a coloured header row spanning all four columns. Scales up to 20 rows; scrollable beyond that. Polls `scan_domain` every **30 seconds** when a domain is selected.
-5. **Refresh Flow List button** — manually triggers `scan_domain` for the selected domain.
-6. **Orphan Flows section** — shown below the flow list when a domain is selected. Displays a table of flow directories that exist on disk but are not reported by `mxl-info -d` (inactive/leftover flows). Columns: Flow UUID, Label, Group Hint, Directory. Polled every 30 seconds alongside the active flow list.
-7. **Flow 1 Selector** — dropdown populated from the flow list. Each option displays the flow label, group hint, and the first 8 characters of the UUID in the format `<Label> — <GroupHint> (<UUID prefix>…)`.
+4. **MXL Flow List window** — table showing `Flow UUID`, `Label`, `Description`, and `Group Hint` for the **active** flows in the selected domain (those confirmed `Active: true`). Flows are **grouped by group name** (the prefix before `:` in `flow_grouphint`); each group is shown with a coloured header row spanning all four columns. Scales up to 20 rows; scrollable beyond that. Polls `/domain-flows` every **30 seconds** when a domain is selected.
+5. **Refresh Flow List button** — manually triggers `/domain-flows` for the selected domain (refreshes both the active and inactive tables).
+6. **Inactive / Stale Flows section** — shown below the flow list when a domain is selected. Displays the `inactive` list from `/domain-flows`. Columns: Status, Flow UUID, Label, Group Hint, Directory. The **Status** column distinguishes `inactive` (reported by `mxl-info -d` but `Active: false`) from `stale` (on-disk `.mxl-flow` directory not reported at all). Populated from the same `/domain-flows` call as the active list, so it refreshes on the same 30 s poll.
+7. **Flow 1 Selector** — dropdown populated from the active flow list. Each option displays the flow label, group hint, and the first 8 characters of the UUID in the format `<Label> — <GroupHint> (<UUID prefix>…)`.
 8. **Flow 1 Info Display** — shows parsed output of `get_flow_info` for the selected flow. A **"Live update (0.5 s)" checkbox** sits next to the window title. When checked, `get_flow_info` is polled every 500 ms. **Off by default.** Selecting a new domain resets the checkbox to off. A single fetch is always performed immediately when a flow is selected.
 9. **Flow 2 Selector** — independent dropdown, same format as Flow 1.
 10. **Flow 2 Info Display** — same behaviour as Flow 1 Info Display with its own independent checkbox.
 
-> ⚠️ The frontend must always guard API responses with `Array.isArray(d) ? d : []` before calling `.map()` on flow lists, to avoid a blank-page crash if the backend returns an error object.
+> ⚠️ The frontend must always guard API responses before calling `.map()` on flow lists, to avoid a blank-page crash if the backend returns an error object. For `/domain-flows`, guard each list independently: `Array.isArray(d?.active) ? d.active : []` and `Array.isArray(d?.inactive) ? d.inactive : []`.
 
 ## Step-by-Step Implementation Guide
 

@@ -7,9 +7,8 @@ Endpoints
 ---------
 POST /get-domains          – scan /mxl-domain for domain_def.json files
 GET  /domains              – return cached domain list
-GET  /scan-domain          – list MXL flows in a domain  ?domain_path=<path>
+GET  /domain-flows         – classify flows into active + inactive/stale  ?domain_path=<path>
 GET  /flow-info            – get detailed flow info       ?domain_path=<path>&flow_uuid=<uuid>
-GET  /orphan-flows         – list .mxl-flow dirs not reported by mxl-info ?domain_path=<path>
 """
 
 from __future__ import annotations
@@ -213,6 +212,101 @@ def _scan_domain_path(domain_path: str) -> list[dict]:
     return flows
 
 
+def _is_flow_active(domain_path: str, flow_uuid: str) -> bool:
+    """Return True only when ``mxl-info -d <domain> -f <uuid>`` reports ``Active: true``.
+
+    Any failure to confirm activity — a non-zero exit, a timeout, or a missing
+    ``Active`` line — is treated as **not active** (i.e. stale): if the flow
+    cannot be confirmed active it does not belong in the live flow list.
+    """
+    try:
+        result = subprocess.run(
+            [MXL_INFO_BIN, "-d", domain_path, "-f", flow_uuid],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as exc:
+        log.warning("Active check failed for %s: %s", flow_uuid, exc)
+        return False
+
+    info = _parse_flow_info_output(result.stdout, flow_uuid)
+    return info["fields"].get("Active", "").strip().lower() == "true"
+
+
+def _classify_domain_flows(domain_path: str) -> dict:
+    """Classify a domain's flows into ``active`` and ``inactive`` lists.
+
+    Single source of truth for the flow lists:
+
+    * Run ``mxl-info -d`` and partition each reported flow by its ``Active``
+      status (``mxl-info -d -f <uuid>``).  Active flows go to ``active``;
+      reported-but-inactive flows go to ``inactive`` tagged ``status="inactive"``.
+    * Sweep the domain directory for ``<uuid>.mxl-flow`` directories that
+      ``mxl-info -d`` does **not** report at all and append them to ``inactive``
+      tagged ``status="stale"`` (leftover / unreadable on-disk flows).
+    """
+    domain = Path(domain_path)
+    if not domain.is_dir():
+        raise HTTPException(status_code=404, detail="Domain path not found")
+
+    reported_flows = _scan_domain_path(domain_path)
+    reported_uuids = {f["flow_uuid"].lower() for f in reported_flows}
+
+    active: list[dict] = []
+    inactive: list[dict] = []
+
+    for flow in reported_flows:
+        if _is_flow_active(domain_path, flow["flow_uuid"]):
+            active.append(flow)
+        else:
+            inactive.append({
+                **flow,
+                "directory": str(domain / f"{flow['flow_uuid']}.mxl-flow"),
+                "status":    "inactive",
+            })
+
+    # On-disk .mxl-flow directories that mxl-info -d never reported
+    for entry in sorted(domain.iterdir()):
+        if not (entry.is_dir() and entry.suffix == ".mxl-flow"):
+            continue
+        uuid_str = entry.stem
+        if not _UUID_RE.fullmatch(uuid_str):
+            continue
+        if uuid_str.lower() in reported_uuids:
+            continue
+
+        label       = ""
+        grouphint   = ""
+        description = ""
+        flow_def_path = entry / "flow_def.json"
+        if flow_def_path.exists():
+            try:
+                flow_def    = json.loads(flow_def_path.read_text())
+                label       = flow_def.get("label", "")
+                description = flow_def.get("description", "")
+                gh_array    = flow_def.get("tags", {}).get("urn:x-nmos:tag:grouphint/v1.0", [])
+                if gh_array:
+                    grouphint = gh_array[0]
+            except Exception as exc:
+                log.warning("Could not parse flow_def.json for %s: %s", uuid_str, exc)
+
+        inactive.append({
+            "flow_uuid":      uuid_str,
+            "flow_label":     label,
+            "flow_grouphint": grouphint,
+            "description":    description,
+            "directory":      str(entry),
+            "status":         "stale",
+        })
+
+    log.info(
+        "Domain %s: %d active, %d inactive/stale flow(s)",
+        domain_path, len(active), len(inactive),
+    )
+    return {"active": active, "inactive": inactive}
+
+
 # ── Startup ────────────────────────────────────────────────────────────────────
 
 @app.on_event("startup")
@@ -237,12 +331,19 @@ async def api_domains() -> list[dict]:
     return _domains
 
 
-@app.get("/scan-domain")
-async def api_scan_domain(
+@app.get("/domain-flows")
+async def api_domain_flows(
     domain_path: str = Query(..., description="Absolute path to the MXL domain directory"),
-) -> list[dict]:
-    """Run mxl-info -d <domain_path> and return the list of MXL flows."""
-    return _scan_domain_path(domain_path)
+) -> dict:
+    """Classify the domain's flows into active and inactive/stale lists.
+
+    Returns ``{"active": [...], "inactive": [...]}``.  Active flows are those
+    that ``mxl-info`` reports *and* confirms as ``Active: true``.  The inactive
+    list combines reported-but-inactive flows (``status="inactive"``) with on-disk
+    ``.mxl-flow`` directories that ``mxl-info -d`` does not report at all
+    (``status="stale"``).
+    """
+    return _classify_domain_flows(domain_path)
 
 
 @app.get("/flow-info")
@@ -269,63 +370,6 @@ async def api_flow_info(
         log.warning("mxl-info flow-info stderr: %s", result.stderr.strip())
 
     return _parse_flow_info_output(result.stdout, flow_uuid)
-
-
-@app.get("/orphan-flows")
-async def api_orphan_flows(
-    domain_path: str = Query(..., description="Absolute path to the MXL domain directory"),
-) -> list[dict]:
-    """Return .mxl-flow directories in domain_path that mxl-info -d does not report.
-
-    These are flows whose on-disk directories exist but whose flow definition
-    cannot be read by the MXL library (e.g. inactive, corrupt, or leftover
-    from a previous session).
-    """
-    domain = Path(domain_path)
-    if not domain.is_dir():
-        raise HTTPException(status_code=404, detail="Domain path not found")
-
-    # Collect UUIDs known to mxl-info
-    known_flows = _scan_domain_path(domain_path)
-    known_uuids = {f["flow_uuid"].lower() for f in known_flows}
-
-    orphans: list[dict] = []
-    for entry in sorted(domain.iterdir()):
-        if not (entry.is_dir() and entry.suffix == ".mxl-flow"):
-            continue
-        uuid_str = entry.stem
-        if not _UUID_RE.fullmatch(uuid_str):
-            continue
-        if uuid_str.lower() in known_uuids:
-            continue
-
-        # Attempt to read flow_def.json for basic metadata
-        label       = ""
-        grouphint   = ""
-        description = ""
-        flow_def_path = entry / "flow_def.json"
-        if flow_def_path.exists():
-            try:
-                flow_def = json.loads(flow_def_path.read_text())
-                label       = flow_def.get("label", "")
-                description = flow_def.get("description", "")
-                tags        = flow_def.get("tags", {})
-                gh_array    = tags.get("urn:x-nmos:tag:grouphint/v1.0", [])
-                if gh_array:
-                    grouphint = gh_array[0]
-            except Exception as exc:
-                log.warning("Could not parse flow_def.json for %s: %s", uuid_str, exc)
-
-        orphans.append({
-            "flow_uuid":      uuid_str,
-            "flow_label":     label,
-            "flow_grouphint": grouphint,
-            "description":    description,
-            "directory":      str(entry),
-        })
-
-    log.info("Orphan flow scan in %s found %d orphan(s)", domain_path, len(orphans))
-    return orphans
 
 
 # ── Static frontend (must be last — catches everything not matched above) ──────

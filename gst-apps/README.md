@@ -110,8 +110,8 @@ A read-only monitoring tool. Wraps the `mxl-info` CLI command and presents its o
 
 **What it shows:**
 - All MXL domains found under `/mxl-domain`, with their **buffer depth** displayed alongside the path. The depth is read from `options.json` in each domain directory (`urn:x-mxl:option:history_duration/v1.0`, stored in nanoseconds, shown in ms). Domains without an `options.json` show `200 ms (default)`.
-- All active flows in the selected domain, grouped by group-hint name, with UUID, label, description, and role columns. Refreshes automatically every 30 seconds.
-- Orphan flows — `.mxl-flow` directories on disk that `mxl-info` no longer reports (inactive or leftover from a previous session).
+- All active flows in the selected domain (those `mxl-info` confirms as `Active: true`), grouped by group-hint name, with UUID, label, description, and role columns. Refreshes automatically every 30 seconds.
+- Inactive / stale flows — a separate table with a status tag per row: **inactive** = reported by `mxl-info` but currently `Active: false`; **stale** = a `.mxl-flow` directory on disk that `mxl-info` does not report at all (leftover or unreadable from a previous session).
 - Detailed per-flow info (version, format, grain rate, head index, latency, active state) for up to two flows simultaneously, with optional 500 ms live polling.
 
 ---

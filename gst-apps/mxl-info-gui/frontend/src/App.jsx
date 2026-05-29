@@ -71,6 +71,20 @@ const groupHeaderTdStyle = {
   borderTop: "1px solid #2e2e2e",
 };
 
+// "inactive" = reported by mxl-info but Active:false; "stale" = on-disk dir never reported
+const statusChipStyle = (status) => ({
+  display: "inline-block",
+  padding: "0.1rem 0.5rem",
+  borderRadius: "999px",
+  fontSize: "0.72rem",
+  fontWeight: 700,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  whiteSpace: "nowrap",
+  color: status === "stale" ? "#e0a458" : "#d57b7b",
+  background: status === "stale" ? "#3a2e1a" : "#3a1f1f",
+});
+
 const monoBlock = {
   background: "#111",
   borderRadius: "6px",
@@ -202,7 +216,7 @@ export default function App() {
   const [domains, setDomains]               = useState([]);
   const [selectedDomain, setSelectedDomain] = useState("");
   const [flows, setFlows]                   = useState([]);
-  const [orphanFlows, setOrphanFlows]       = useState([]);
+  const [inactiveFlows, setInactiveFlows]   = useState([]);
   const [scanMsg, setScanMsg]               = useState("");
 
   // ── Domain helpers ──────────────────────────────────────────────────────────
@@ -238,45 +252,30 @@ export default function App() {
 
   // ── Flow helpers ────────────────────────────────────────────────────────────
 
-  const fetchFlows = useCallback(async () => {
+  // Single call classifies flows into active + inactive/stale lists
+  const fetchDomainFlows = useCallback(async () => {
     if (!selectedDomain) return;
     try {
       const r = await fetch(
-        `${API}/scan-domain?domain_path=${encodeURIComponent(selectedDomain)}`
+        `${API}/domain-flows?domain_path=${encodeURIComponent(selectedDomain)}`
       );
       const d = await r.json();
-      setFlows(Array.isArray(d) ? d : []);
+      setFlows(Array.isArray(d?.active) ? d.active : []);
+      setInactiveFlows(Array.isArray(d?.inactive) ? d.inactive : []);
     } catch {
-      // ignore
+      // ignore transient errors
     }
   }, [selectedDomain]);
 
-  const fetchOrphanFlows = useCallback(async () => {
-    if (!selectedDomain) return;
-    try {
-      const r = await fetch(
-        `${API}/orphan-flows?domain_path=${encodeURIComponent(selectedDomain)}`
-      );
-      const d = await r.json();
-      setOrphanFlows(Array.isArray(d) ? d : []);
-    } catch {
-      setOrphanFlows([]);
-    }
-  }, [selectedDomain]);
-
-  // Fetch flows + orphans when domain changes; poll every 30 s
+  // Fetch flows when domain changes; poll every 30 s
   useEffect(() => {
     setFlows([]);
-    setOrphanFlows([]);
+    setInactiveFlows([]);
     if (!selectedDomain) return;
-    fetchFlows();
-    fetchOrphanFlows();
-    const id = setInterval(() => {
-      fetchFlows();
-      fetchOrphanFlows();
-    }, 30_000);
+    fetchDomainFlows();
+    const id = setInterval(fetchDomainFlows, 30_000);
     return () => clearInterval(id);
-  }, [selectedDomain, fetchFlows, fetchOrphanFlows]);
+  }, [selectedDomain, fetchDomainFlows]);
 
   // ── Grouped flow view ───────────────────────────────────────────────────────
 
@@ -370,7 +369,7 @@ export default function App() {
           <h2 style={{ fontSize: "1.1rem", fontWeight: 600 }}>MXL Flows</h2>
           <button
             style={{ ...btnStyle, opacity: selectedDomain ? 1 : 0.4 }}
-            onClick={fetchFlows}
+            onClick={fetchDomainFlows}
             disabled={!selectedDomain}
           >
             Refresh Flows
@@ -428,32 +427,35 @@ export default function App() {
         )}
       </div>
 
-      {/* ── Orphan Flows ───────────────────────────────────────────────────── */}
+      {/* ── Inactive / Stale Flows ─────────────────────────────────────────── */}
       {selectedDomain && (
         <div style={sectionStyle}>
           <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "0.5rem" }}>
-            <h2 style={{ fontSize: "1.1rem", fontWeight: 600 }}>Orphan Flows</h2>
+            <h2 style={{ fontSize: "1.1rem", fontWeight: 600 }}>Inactive / Stale Flows</h2>
             <button
               style={{ ...btnStyle, opacity: 1 }}
-              onClick={fetchOrphanFlows}
+              onClick={fetchDomainFlows}
             >
               Refresh
             </button>
             <span style={{ color: "#888", fontSize: "0.8rem" }}>
-              {orphanFlows.length} orphan(s)
+              {inactiveFlows.length} flow(s)
             </span>
           </div>
           <p style={{ color: "#555", fontSize: "0.78rem", marginBottom: "0.75rem" }}>
-            On-disk <code>.mxl-flow</code> directories not reported by{" "}
-            <code>mxl-info -d</code> — inactive, leftover, or unreadable flows.
+            <strong style={{ color: "#888" }}>inactive</strong>: reported by{" "}
+            <code>mxl-info -d</code> but <code>Active: false</code>.{" "}
+            <strong style={{ color: "#888" }}>stale</strong>: on-disk{" "}
+            <code>.mxl-flow</code> directory not reported at all — leftover or unreadable.
           </p>
-          {orphanFlows.length === 0 ? (
-            <p style={{ color: "#555", fontSize: "0.85rem" }}>No orphan flows found.</p>
+          {inactiveFlows.length === 0 ? (
+            <p style={{ color: "#555", fontSize: "0.85rem" }}>No inactive or stale flows found.</p>
           ) : (
             <div style={{ overflowX: "auto" }}>
               <table style={tableStyle}>
                 <thead>
                   <tr>
+                    <th style={thStyle}>Status</th>
                     <th style={thStyle}>Flow UUID</th>
                     <th style={thStyle}>Label</th>
                     <th style={thStyle}>Group Hint</th>
@@ -461,8 +463,11 @@ export default function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {orphanFlows.map((f) => (
+                  {inactiveFlows.map((f) => (
                     <tr key={f.flow_uuid}>
+                      <td style={{ ...tdStyle, fontFamily: "inherit" }}>
+                        <span style={statusChipStyle(f.status)}>{f.status || "—"}</span>
+                      </td>
                       <td style={tdStyle}>{f.flow_uuid}</td>
                       <td style={{ ...tdStyle, fontFamily: "inherit" }}>
                         {f.flow_label || <span style={{ color: "#444" }}>—</span>}
