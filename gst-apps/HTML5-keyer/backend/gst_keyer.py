@@ -47,11 +47,6 @@ log = logging.getLogger(__name__)
 # would orphan all previously written flow directories on every domain.
 _MXL_KEYER_NS = uuid.UUID("e7f4a23c-9b85-5d1a-8c2e-1f3a6b5d4e7c")
 
-# How many frame durations the compositor may wait for a late input buffer
-# before producing an output frame.  Higher absorbs more input jitter (fewer
-# repeated/skipped frames) at the cost of output latency.  Tune as needed.
-_COMPOSITOR_LATENCY_FRAMES = 2
-
 
 # ── Flow format helpers ───────────────────────────────────────────────────────
 
@@ -258,28 +253,21 @@ class GstKeyer:
             raise RuntimeError(
                 "Could not create compositor — is gstreamer1.0-plugins-base installed?"
             )
-        # CEF takes 1-3 s to spin up its subprocess and render the first frame.
-        # During that window the cef sink pad has no caps yet, which would
-        # otherwise block the aggregator from negotiating bg → compositor →
-        # mxlsink and surface as `not-negotiated` on bg_src.  ignore-inactive-
-        # pads lets the aggregator proceed with whichever pads are ready and
-        # join the cef branch in once it starts producing.
-        try:
-            compositor.set_property("ignore-inactive-pads", True)
-        except Exception as exc:
-            log.warning("compositor.ignore-inactive-pads not available: %s", exc)
-        # Give the aggregator a wait window for late input buffers.  With
-        # latency=0 (the default) the compositor never waits — on any input
-        # jitter it composites whatever frame is currently held, producing the
-        # stroboscopic past/future flashing.  This matters especially because
-        # out_sink is async=false (see below), which collapses the latency the
-        # pipeline would otherwise negotiate.  Two frame durations is a starting
-        # point; tune via _COMPOSITOR_LATENCY_FRAMES.
-        frame_dur_ns = Gst.SECOND * den // num
-        try:
-            compositor.set_property("latency", _COMPOSITOR_LATENCY_FRAMES * frame_dur_ns)
-        except Exception as exc:
-            log.warning("compositor.latency not available: %s", exc)
+        # IMPORTANT: do NOT set ignore-inactive-pads here.  CEF (sink_1) takes
+        # 1-3 s to spin up Chromium and deliver its first frame.  With
+        # ignore-inactive-pads=true the compositor's source task fires an
+        # aggregate at PLAYING while base_time is still 0 (so the deadline is
+        # already "in the past"), races ahead of the CEF pad before its
+        # serialized caps/allocation-query have been consumed, and the aggregate
+        # thread then deadlocks on those un-consumed events — the compositor
+        # produces no output for the whole session and mxl-info-gui reports the
+        # output flow at the epoch (~56 years).  It is intermittent because it
+        # depends on exactly how far along CEF is when that first aggregate fires.
+        # With the property left at its default (False) the compositor instead
+        # WAITS for CEF's first buffer, and while waiting it consumes CEF's
+        # caps/query — so there is no deadlock.  (The earlier "not-negotiated"
+        # justification for this flag was the malformed interlace-mode caps that
+        # mxlsrc used to emit; that bug is fixed in the plugin, commit 04399b5.)
         pipeline.add(compositor)
 
         # ── Output branch: compositor.src → pts_fix → videoconvert → caps(v210) → queue → mxlsink ──
@@ -328,17 +316,6 @@ class GstKeyer:
         out_sink.set_property("flow-id", self._output_flow_uuid)
         out_sink.set_property("domain", self._domain_path)
         out_sink.set_property("sync", False)
-        # async=false skips the PAUSED preroll.  An async sink renders its first
-        # buffer during preroll, before the pipeline reaches PLAYING and before
-        # base_time is set — so the pts_fix handoff cannot add base_time and that
-        # buffer reaches mxlsink with a raw running-time PTS.  mxlsink latches its
-        # mxl_pts_offset on that first buffer once for the whole pipeline life
-        # (render_video.rs get_or_insert), baking in a ~epoch offset.  This only
-        # bites when a grain is already available at startup (i.e. the MXL source
-        # was started well before the keyer); back-to-back starts dodge it by
-        # luck.  Skipping preroll guarantees the first buffer mxlsink latches on
-        # arrives in PLAYING with base_time set, so the latch is always correct.
-        out_sink.set_property("async", False)
 
         for el in (out_conv, out_caps, out_queue, out_sink):
             pipeline.add(el)
