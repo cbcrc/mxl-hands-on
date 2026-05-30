@@ -594,7 +594,7 @@ flowchart LR
 
 ```bash
 gst-launch-1.0 \
-  compositor name=mixer ignore-inactive-pads=true \
+  compositor name=mixer ignore-inactive-pads=true latency=33333333 \
   mxlsrc video-flow-id="<input-flow-id>" domain="/mxl-domain" \
        ! videoconvert \
        ! "video/x-raw,format=BGRA" \
@@ -609,7 +609,7 @@ gst-launch-1.0 \
   mixer. ! videoconvert \
        ! "video/x-raw,format=v210,width=1920,height=1080,framerate=60/1,colorimetry=bt709" \
        ! queue leaky=2 max-size-buffers=2 \
-       ! mxlsink flow-id="<output-flow-id>" domain="/mxl-domain" sync=false
+       ! mxlsink flow-id="<output-flow-id>" domain="/mxl-domain" sync=false async=false
 ```
 
 > **Key toggle:** adjust the `alpha` property on `mixer.sink_1` at runtime
@@ -618,6 +618,15 @@ gst-launch-1.0 \
 > **`sync=false` on `mixer.sink_1`:** set programmatically via the element API — not
 > expressible in a `gst-launch` capsfilter; in the Python code it is set directly on the
 > `Gst.Pad` object returned by `mixer.request_pad_simple("sink_%u")`.
+>
+> **`async=false` on `mxlsink`:** required so the sink skips PAUSED preroll and latches its
+> one-shot timestamp offset on a PLAYING (PTS-corrected) buffer — see Explanation below.
+>
+> **`latency=33333333` on `compositor`:** the value shown is `2 × frame_duration` at 60 fps
+> (2 × 1 000 000 000 ÷ 60 ≈ 33.3 ms). In the Python code it is computed from the input grain
+> rate as `_COMPOSITOR_LATENCY_FRAMES × (Gst.SECOND × den ÷ num)` so it scales with the
+> negotiated frame rate. It restores the wait window the compositor needs once `async=false`
+> collapses the negotiated latency (see Explanation below).
 >
 > **PTS timestamp fix:** `gst-launch-1.0` cannot express the `identity signal-handoffs=true`
 > Python callback that corrects buffer timestamps after the compositor (see Explanation below).
@@ -657,13 +666,24 @@ background branch is ready, without waiting for the CEF branch to deliver its fi
 CEF takes 1–3 seconds to start its subprocess and render the first frame; without this flag
 the pipeline stalls at negotiation.
 
+`compositor` is also given a `latency` wait window of a couple of frame durations (computed
+as `_COMPOSITOR_LATENCY_FRAMES × frame_duration`, where `frame_duration = Gst.SECOND × den ÷ num`;
+`_COMPOSITOR_LATENCY_FRAMES` defaults to 2). At the default `latency=0` the compositor never
+waits for a slightly-late input buffer — on any input jitter it composites whatever frame is
+currently held, producing stroboscopic past/future frame flashing on the background. This is
+provoked by `async=false` on `mxlsink` (see the output branch below), which collapses the
+latency the pipeline would otherwise negotiate. The wait window restores the compositor's
+tolerance for late inputs. The artifact is specific to this `compositor` + leaky-queue setup;
+`mxlsrc` is used unchanged in mxl2webrtc and input-selector without it. If flashing persists,
+raise `_COMPOSITOR_LATENCY_FRAMES`; the input leaky-queue depth is the next lever.
+
 `compositor` (CPU-based) is used instead of `glvideomixer` (GPU) because:
 - CPU compositing works on any host, including those without a discrete GPU.
 - No `glupload`/`gldownload` round-trip, saving ~950 MB/s of GPU memory bandwidth.
 
-**Output branch** — `compositor → identity(pts-fix) → videoconvert → capsfilter(v210, colorimetry=bt709) → queue(leaky) → mxlsink(sync=false)`
+**Output branch** — `compositor → identity(pts-fix) → videoconvert → capsfilter(v210, colorimetry=bt709) → queue(leaky) → mxlsink(sync=false, async=false)`
 
-Two non-obvious fixes are applied in the output branch:
+Three non-obvious fixes are applied in the output branch:
 
 1. **PTS timestamp correction (`identity` with Python `handoff` callback).**
    `mxlsrc` provides a TAI-based clock to the pipeline. The compositor is a GStreamer aggregator
@@ -674,7 +694,9 @@ Two non-obvious fixes are applied in the output branch:
    the computed grain index ≈ 0 — placing grains at epoch 1970 and causing mxl-info-gui to report
    latency ≈ 56 years. The fix is an `identity` element with `signal-handoffs=true`; its Python
    `handoff` callback adds `pipeline.get_base_time()` to each buffer's PTS and DTS, converting
-   running time back to the absolute TAI domain that `mxlsink` expects.
+   running time back to the absolute TAI domain that `mxlsink` expects. The callback can only do
+   this once the pipeline is PLAYING — it returns early while `base_time` is unset — which is why
+   `mxlsink` must skip preroll (fix 3 below).
 
 2. **Colorimetry pinning (`colorimetry=bt709` in the output capsfilter).**
    Before the CEF branch delivers its first frame, the compositor emits a CAPS event carrying only
@@ -685,6 +707,19 @@ Two non-obvious fixes are applied in the output branch:
    existing flow directory, gets `was_created=false`, and aborts with "another active writer".
    Pinning `colorimetry=bt709` in the downstream capsfilter forces the compositor to produce
    identical CAPS events on both transitions, so `mxlsink`'s `set_caps` is only called once.
+
+3. **Skip preroll (`async=false` on `mxlsink`).**
+   `mxlsink` latches its `mxl_pts_offset` (`mxl_now − clock.time()`) exactly once, from the very
+   first buffer it ever renders (`render_video.rs` `get_or_insert`), and reuses it for the whole
+   pipeline lifetime. As an **async** sink, `GstBaseSink` renders that first buffer during the
+   PAUSED preroll — before the pipeline reaches PLAYING and before `base_time` is set. The PTS-fix
+   handoff (fix 1) returns early in that state, so the preroll buffer reaches `mxlsink` with a raw
+   running-time PTS and the offset is latched ≈ epoch for good. This only reproduces when a grain
+   is already waiting at startup — i.e. the MXL source was started well before the keyer; starting
+   source and keyer back-to-back dodges it by luck, which is what made the bug intermittent
+   (~56–67 years of latency). Setting `async=false` makes `mxlsink` skip preroll, so the first
+   buffer it latches always arrives in PLAYING with `base_time` set and already corrected by the
+   `identity` handoff. This is the complement to fix 1, not a replacement — both are required.
 
 `mxlsink` has `sync=false` so `GstBaseSink` does not try to clock-synchronise the (now
 TAI-valued) PTS. The write thread inside `mxlsink` still sleeps until the correct TAI wall time
@@ -711,12 +746,12 @@ flowchart LR
         cef --> cef_caps1 --> cef_rate --> cef_caps2 --> cef_q
     end
 
-    mixer["compositor\nignore-inactive-pads=true\n(CPU composite)"]
+    mixer["compositor\nignore-inactive-pads=true\nlatency=2 frames\n(CPU composite)"]
     pts_fix["identity\nsignal-handoffs=true\n(add base_time to PTS)"]
     out_conv["videoconvert\nBGRA → v210"]
     out_caps["capsfilter\nv210, W×H, num/den\ncolorimetry=bt709"]
     out_q["queue\nleaky=drop-oldest, max=2"]
-    out_sink["mxlsink\nflow-id=output\nsync=false"]
+    out_sink["mxlsink\nflow-id=output\nsync=false, async=false"]
 
     bg_q   -->|"sink_0\nzorder=0"| mixer
     cef_q  -->|"sink_1\nsync=false\nzorder=1\nalpha=0.0→1.0"| mixer
