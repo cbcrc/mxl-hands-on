@@ -1,40 +1,63 @@
-## Preparation - Installing WSL and Docker
 
-### Synopsis
+# Preparation - Installing WSL and Docker
+
+## Synopsis
 
 In order to run these exercises, you need a Linux base system running with Docker. Theses preparation steps will help you to install WSL (Windows Subsystem for Linux). If you already have access to a Linux system, you can skip to the second part to install Docker.
 
-### Installing WSL on Windows 11
+⚡ PowerShell Commands
+
+```
+These commands work in PowerShell
+```
+
+🐧 Ubuntu/Linux Commands
+```
+These commands work in WSL
+```
+## Installing WSL on Windows 11
 
 ### Steps
 
 1. Open an Admin Command Prompt or Powershell window.
 
 1. Check if WSL is installed
+
+   ⚡ PowerShell
    ```sh
    wsl --version
    ```
 1. If it is installed update it, if not, install it.
+
+   ⚡ PowerShell
    ```sh
    wsl --update
    ```
    ```sh
    wsl --install
 1. List all the available linux distribution to be use with WSL
+
+   ⚡ PowerShell
    ```sh
    wsl --list --online
    ```
 1. Reboot your PC
 1. Alternatively to Alma Linux, CBC also support Ubuntu Linux as well.
+
+   ⚡ PowerShell
    ```sh
    wsl.exe --install Ubuntu-24.04
    ```
 1. After the distribution install, it should prompt for a default UNIX username and password. **Use the user username. This will make sure command in the exercises are working properly**.
 1. You will now be logged in your newly created user. We will exit back to the powershell command line.
+
+   🐧 Ubuntu/Linux
    ```sh
    exit
    ```
 1. Verify the installed WSL linux distribution
+
+   ⚡ PowerShell
    ```sh
    wsl.exe --list --all
    ```
@@ -43,21 +66,28 @@ In order to run these exercises, you need a Linux base system running with Docke
    <img src="./Ubuntu.jpg" width="480">
 
 1. Update your linux WSL instance
-   ```sh
+
+   🐧 Ubuntu/Linux
+   ```ps
    sudo apt update && sudo apt upgrade
    ```
 
-### Installing Docker and Git in your WSL linux instance
+## Installing Docker and Git in your WSL linux instance
 
 ### Steps
 
 1. Add Docker's official GPG key
+ 
+    🐧 Ubuntu/Linux
    ```sh
    sudo install -m 0755 -d /etc/apt/keyrings
    sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
    sudo chmod a+r /etc/apt/keyrings/docker.asc
    ```
+
 1. Add the repository to Apt sources
+
+   🐧 Ubuntu/Linux
    ```sh
    echo \
    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
@@ -66,15 +96,21 @@ In order to run these exercises, you need a Linux base system running with Docke
    sudo apt-get update
    ```
 1. Install the latest version of Docker
+
+   🐧 Ubuntu/Linux
    ```sh
    sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin jq
    ```
 1. Add your user to the docker group so that you can run docker command without using `sudo`
+
+   🐧 Ubuntu/Linux
    ```sh
    sudo usermod -aG docker $USER
    newgrp docker
    ```
 1. Verify the installation
+
+   🐧 Ubuntu/Linux
    ```sh
    docker run hello-world
    ```
@@ -84,19 +120,27 @@ In order to run these exercises, you need a Linux base system running with Docke
 ### Steps
 
 1. Creating a folder for MXL media sharing.
+
+   🐧 Ubuntu/Linux
    ```sh
    sudo mkdir -p /Volumes/mxl
    sudo chown 1000:1000 /Volumes/mxl
    ```
 1. Creating a mount point in */etc/fstab* to mount */Volumes/mxl* to *tmpfs*
+
+   🐧 Ubuntu/Linux
    ```sh
    echo 'tmpfs /Volumes/mxl tmpfs defaults,noatime,size=512M,uid=1000,gid=1000,mode=0755 0 0' | sudo tee -a /etc/fstab
    ```
 1. Close your linux terminal windows. Using a Windows PowerShell shutdown you linux instance.
+   
+   ⚡ PowerShell
    ```sh
    wsl --shutdown
    ```
 1. Restart your linux instance using the arrow down menu of the terminal window and verify that the */mxl* folder is mounted to *tmpfs*
+
+   🐧 Ubuntu/Linux
    ```sh
    df -h /Volumes/mxl
    ```
