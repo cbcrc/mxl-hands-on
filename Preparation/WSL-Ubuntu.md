@@ -68,7 +68,7 @@ These commands work in WSL
 1. Update your linux WSL instance
 
    🐧 Ubuntu/Linux
-   ```ps
+   ```sh
    sudo apt update && sudo apt upgrade
    ```
 
