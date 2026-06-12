@@ -1,7 +1,7 @@
 
-# Preparation - Installing WSL and Docker
+## Preparation - Installing WSL and Docker
 
-## Synopsis
+### Synopsis
 
 In order to run these exercises, you need a Linux base system running with Docker. Theses preparation steps will help you to install WSL (Windows Subsystem for Linux). If you already have access to a Linux system, you can skip to the second part to install Docker.
 
@@ -72,7 +72,7 @@ These commands work in WSL
    sudo apt update && sudo apt upgrade
    ```
 
-## Installing Docker and Git in your WSL linux instance
+### Installing Docker and Git in your WSL linux instance
 
 ### Steps
 
