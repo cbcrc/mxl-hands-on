@@ -17,7 +17,8 @@ DEFAULT_COMPILER="Linux-Clang-Release"
 
 SCRIPT_DIR="$(dirname $(readlink -f $0))"
 ROOT_DIR="${SCRIPT_DIR}/../dmf-mxl"
-MXL_TAG=$(cd ${ROOT_DIR}; git describe --tags; cd ..) # Get mxl lib version for image tags
+SUB_HASH=$(git -C "${ROOT_DIR}" rev-parse --short HEAD) # Get the current commit of dmf-mxl in short form
+MXL_TAG="mxl-${SUB_HASH}"
 
 # Verify build directory exists
 if [ ! -d "${ROOT_DIR}/build" ]; then

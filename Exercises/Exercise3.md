@@ -34,12 +34,10 @@ This exercise also showcases the gstreamer clip player plugin (added in [PR #22]
             end
 
             subgraph docker_reader_2 [docker]
-               subgraph Linux_VNC [Linux with VNC]
-                  direction LR
-                  gstreamer_reader_2[Gstreamer Reader]
-                  mxl_sdk_reader_2[MXL SDK]
-                  mxl_sdk_reader_2 --> gstreamer_reader_2
-               end           
+               direction LR
+               gstreamer_reader_2[WebRTC Player]
+               mxl_sdk_reader_2[MXL SDK]
+               mxl_sdk_reader_2 --> gstreamer_reader_2
             end
 
             tmpfs([tmpfs<br>/Volumes/mxl/domain_1])
@@ -64,7 +62,6 @@ This exercise also showcases the gstreamer clip player plugin (added in [PR #22]
          style mxl_sdk_writer_2 fill:#007bff,color:white,stroke:#333,stroke-width:2px
          style mxl_sdk_reader_1 fill:#007bff,color:white,stroke:#333,stroke-width:2px
          style mxl_sdk_reader_2 fill:#007bff,color:white,stroke:#333,stroke-width:2px
-         style Linux_VNC fill:#f0f8ff,stroke:#333,stroke-width:2px,color:black
          style tmpfs fill:#ffe0b3,color:black,stroke:#333,stroke-width:2px
 ```
 
@@ -76,7 +73,13 @@ This exercise also showcases the gstreamer clip player plugin (added in [PR #22]
    cd ~/mxl-hands-on/docker/exercise-3
    ```
 
-1. Look at the docker-compose.yaml file and notice the addition of the VNC-Viewer container. This container is there to give you access to a desktop in order to be able to see video at the end of the exercise. Clever observer will have notice that we do not bind the mount in this exercise. This is aligned with the recommendation in the MXL repository. As a result of this the file will not show in your host file system.
+1. Identify the mxl domain with a domain_def.json in to allow the webRTC player application to discover mxl flows in the domain.
+
+   ```sh
+   cp ./data/domain_def.json /Volumes/mxl/domain_1
+   ```
+
+1. Look at the docker-compose.yaml file and notice the addition of the mxl2webrtc and mediamtx containers. These containers are there to give you access to a web application that will convert mxl flow into webrtc and display them in your browser.
 
    ```sh
    cat docker-compose.yaml
@@ -88,43 +91,13 @@ This exercise also showcases the gstreamer clip player plugin (added in [PR #22]
    docker compose up -d
    ```
 
-1. On your PC, go to VNC web browser [127.0.0.1:36901](http://127.0.0.1:36901/vnc.html).
-    - Click on Connect
-    - password: headless
-1. To install all the Gstreamer dependencies on your linux desktop, go to `Terminal Emulator` in the **Task Bar**.
+1. Use the WebRTC player application to look at the newly created mxl flows. You can reach the webRTC player in your browser with the following information:
 
-   ```sh
-   cd /root
-   sudo ./install.sh
-   # password: headless
-   ```
+| App | URL | API Swagger Page |
+|-----|-----|-----|
+| MXL to WebRTC | http://localhost:9601 | http://localhost:9601/docs |
 
-1. Look at the available MXL flows as seen by the VNC container
-
-   ```sh
-   ls /domain
-   ```
-
-1. Store the first flow ID in a local variable and use it to start the Gstreamer sink app and actually see some video strait out of memory!!! The sudo -u '#1000' part is to run the sink as user id 1000. It allow the reader to touch the access file in the flow folder to update the last read time of the flow.
-
-   ```sh
-   FLOW1_ID=5fbec3b1-1b0f-417d-9059-8b94a47197ed
-   sudo -u '#1000' ./mxl-gst-sink -d /domain -v $FLOW1_ID # use one of the flow ID from the ls /domain command
-   ```
-
-1. Close the Gstreamer window and CTRL break the LXTerminal.  
-1. Look at the other flow ID in the the domain.  
-
-   ```sh
-   ls /domain
-   ```
-
-With what you learned so far, can you look at the video of the other MXL stream? Can you spot the difference and identify where it is coming from?  
-
-> [!TIP]
-> Hint: Carefully look at the docker-compose.yaml file
-
-Can you change the text ident of flow 2 for you first name and look at it again to prove that it changed?
+With what you learned so far, can you look at all mxl flows? 
 
 When you are done experimenting, do not forget to shutdown your containers.
    ```sh
@@ -134,13 +107,6 @@ When you are done experimenting, do not forget to shutdown your containers.
 ### Extra information for Exercise 3
 
 Exercise 3 is transitioning from theoretical understanding and command-line inspection to direct visual confirmation of MXL's functionality. It also introduces the concept of dynamically influencing media flows, a key aspect of real-time broadcast and production environments.
-
-#### Understanding the VNC Client and Graphical Interface
-
-The addition of the `VNC-Viewer` Docker container serves several critical purposes:
-
-- **Visualizing MXL Flows:** While `mxl-info` provides valuable metadata, seeing the actual video stream confirms that the MXL writer is correctly generating video grains and that the `mxl-gst-sink` (a GStreamer-based MXL reader application) is successfully consuming and rendering them. This provides immediate, tangible feedback on the entire MXL SDK.
-- **Emulating a Media Function:** The VNC container, with its GStreamer installation, effectively acts as a "media function" – a common component in broadcast systems that processes or displays media. It demonstrates how a separate application can interface with the MXL domain to access and utilize media streams.
 
 #### Exploring `mxl-gst-testsrc` and `mxl-gst-sink`  
 

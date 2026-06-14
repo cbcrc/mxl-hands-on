@@ -13,7 +13,7 @@ volumes:
       o: "bind,nosuid,strictatime"
 services:
   writer-media-function:
-    image: ghcr.io/cbcrc/mxl-writer:latest
+    image: ghcr.io/cbcrc/mxl-writer:mxl-d262152
     platform: linux/amd64
     user: 1000:1000
     restart: unless-stopped
@@ -22,7 +22,7 @@ services:
         source: mxl-domain
         target: /domain
   writer-media-function-2:
-    image: ghcr.io/cbcrc/mxl-writer:latest
+    image: ghcr.io/cbcrc/mxl-writer:mxl-d262152
     platform: linux/amd64
     user: 1000:1000
     restart: unless-stopped
@@ -33,7 +33,7 @@ services:
       - ./data/v210_flow_2.json:/app/v210_flow_2.json  # Example: Upload specific file into container
     command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-v", "/app/v210_flow_2.json", "-t", "NEW Flow 2"]
   reader-media-function:
-    image: ghcr.io/cbcrc/mxl-reader:latest
+    image: ghcr.io/cbcrc/mxl-reader:mxl-d262152
     platform: linux/amd64
     user: 1000:1000
     restart: unless-stopped

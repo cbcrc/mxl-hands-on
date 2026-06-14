@@ -2,24 +2,25 @@ volumes:
   mxl-domain:
     driver: local
     driver_opts:
-      device: none
-      type: tmpfs
-      o: nosuid,strictatime,uid=1000,gid=1000,mode=0755
+      type: none
+      device: /Volumes/mxl/domain_1
+      o: "bind,nosuid,strictatime"
 services:
   writer-media-function:
-    image: ghcr.io/cbcrc/mxl-writer:latest
+    image: ghcr.io/cbcrc/mxl-writer:mxl-d262152
     platform: linux/amd64
-    user: 1000:1000
+    # user: 1000:1000
     restart: unless-stopped
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
         source: mxl-domain
         target: /domain
     command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-v", "/app/v210_flow.json", "-t", "Original Flow"]
+  
   clip-player-function:
-    image: ghcr.io/cbcrc/mxl-clip-player:latest
+    image: ghcr.io/cbcrc/mxl-clip-player:mxl-d262152
     platform: linux/amd64
-    user: 1000:1000
+    # user: 1000:1000
     restart: unless-stopped
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
@@ -27,10 +28,11 @@ services:
         target: /domain
       - ../../build-images/sizzle.ts:/app/sizzle.ts
     command: ["/app/mxl-gst-looping-filesrc", "-d", "/domain", "-i", "/app/sizzle.ts"]
+  
   reader-media-function:
-    image: ghcr.io/cbcrc/mxl-reader:latest
+    image: ghcr.io/cbcrc/mxl-reader:mxl-d262152
     platform: linux/amd64
-    user: 1000:1000
+    # user: 1000:1000
     restart: unless-stopped
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
@@ -39,15 +41,28 @@ services:
         read_only: true
     stdin_open: true
     tty: true
-  vnc-viewer:
-    image: accetto/ubuntu-vnc-xfce-g3:24.04 # VNC viewer to connect to the writer-media-function
+  
+  mediamtx:
     platform: linux/amd64
-    restart: unless-stopped
+    image: bluenviron/mediamtx:latest
+    container_name: mediamtx
+    hostname: mediamtx
+    network_mode: host
+
+  webrtc-player:
+    platform: linux/amd64
+    image: ghcr.io/cbcrc/mxl2webrtc:latest
+    ports:
+      - "9601:9600"
     volumes:
-      - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
+      - type: volume
         source: mxl-domain
         target: /domain
-      - ./data:/root
-    ports:
-      - "36901:6901"  # Maps port 6901 of the container to port 36901 on the host
-    working_dir: /root  # Sets the working directory inside the container to /root
+    environment:
+      - MXL_DOMAIN=/domain
+      - MEDIAMTX_WHIP_URL=http://host.docker.internal:8889/mxl2webrtc/whip
+      - MEDIAMTX_WEBRTC_URL=http://localhost:8889
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - mediamtx

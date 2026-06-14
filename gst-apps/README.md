@@ -16,7 +16,7 @@ This directory contains six GStreamer-based web applications that produce, inspe
 | [Input Selector](#6-input-selector) | `input-selector:latest` | `Depending on Docker compose config` | Live-switches between three MXL video inputs and publishes the active one to a single MXL video output |
 | [HTML5 Keyer](#7-html5-keyer) | `html5-keyer:latest` | `9605` | Composites an HTML5 graphics overlay (CEF/Chromium) over a live MXL video background and publishes the result as an MXL output flow |
 
-Pre-built images are published to `ghcr.io/cbcrc` — see [Exercise 5](../Exercises/Exercise5.md) to spin up the whole system without compiling anything.
+Pre-built images are published to `ghcr.io/cbcrc` — see [Exercise 4](../Exercises/Exercise4.md) to spin up the whole system without compiling anything.
 
 ---
 
@@ -53,13 +53,13 @@ cp .env.template .env
 
 On linux
 ```sh
-cd ~/mxl-hands-on/docker/exercise-5
+cd ~/mxl-hands-on/docker/exercise-4
 ./start.sh
 ```
 
 On Mac
 ```sh
-cd ~/mxl-hands-on/docker/exercise-5
+cd ~/mxl-hands-on/docker/exercise-4
 ./start-mac.sh
 ```
 

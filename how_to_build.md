@@ -29,7 +29,8 @@ Setting up the TAG variable according to the version you are building:
 ```sh
    MAIN_HASH=$(git rev-parse --short HEAD) && \
    SUB_HASH=$(git -C dmf-mxl rev-parse --short HEAD) && \
-   TAG="hands-on-${MAIN_HASH}-mxl-${SUB_HASH}"
+   TAG_TOOLS="mxl-${SUB_HASH}" && \
+   TAG_APP="hands-on-${MAIN_HASH}-mxl-${SUB_HASH}"
 ```
 
 This means hands-on repo is tied to a specific version of the mxl library.
@@ -60,48 +61,7 @@ This scripts will:
    docker compose build
 ```
 
-## Step 3: Creating `portable mxl app`
-
-```sh
-   # Creating amd64 portable app
-   # Must be run on an x86_64-amd64 machine
-   ./create_portables_x86_64.sh
-
-   # Creating arm based portable app
-   # Must be run on an arm based mac machine
-   ./create_portable_arm.sh
-```
-
-## Step 4: Upload portable apps in the release of the repository
-
-This will upload the tar.gz portable apps to the release using a proper tag.
-
-Log into github in you terminal and follow the prompt:
-```sh
-   gh auth login
-```
-
-If you upload to a new release:
-```sh
-   gh release create $TAG \
-   ./Portable-mxl-app/mxl-loop-player/x86_64/portable-mxl-loop-player-x86_64.tar.gz \
-   ./Portable-mxl-app/mxl-reader/x86_64/portable-mxl-reader-x86_64.tar.gz \
-   ./Portable-mxl-app/mxl-writer/x86_64/portable-mxl-writer-x86_64.tar.gz \
-   --title $TAG \
-   --notes "MXL portable apps for linux under x86_64" \
-   --draft
-```
-
-If you are happy with the release you can use the web UI on GitHub to publish them.
-
-Cleaning up tar.gz files
-```sh
-   rm ./Portable-mxl-app/mxl-loop-player/x86_64/portable-mxl-loop-player-x86_64.tar.gz \
-   ./Portable-mxl-app/mxl-reader/x86_64/portable-mxl-reader-x86_64.tar.gz \
-   ./Portable-mxl-app/mxl-writer/x86_64/portable-mxl-writer-x86_64.tar.gz \
-```
-
-## Step 5: Build Docker Images. ONLY WORK UNDER LINUX
+## Step 3: Build Docker Images. ONLY WORK UNDER LINUX
 
 After the project is built, create the Docker images:
 
@@ -122,42 +82,42 @@ the nomenclature of the generated tag is:
 Exemple:
 ```mxl-reader:v1.0.0-rc1-24-g8d280db-Clang```
 
-## Step 6: Upload to image repository
+## Step 4: Upload to image repository
 
-Let's push the freshly built images with the fixed tag `v1.0.0-rc2..` and push to Github Container Registry.
+Let's push the freshly built images with the $TAG_TOOLS tag `v1.0.0-rc2..` and push to Github Container Registry.
 
 ```sh
    docker login ghcr.io -u <YOUR_GITHUB_USERNAME>
    # enter your personnal Github token (permission scope: Workflows, Write+Delete Package   
-   docker tag mxl-writer:$TAG ghcr.io/cbcrc/mxl-writer:$TAG
-   docker tag mxl-reader:$TAG ghcr.io/cbcrc/mxl-reader:$TAG
-   docker tag mxl-clip-player:$TAG ghcr.io/cbcrc/mxl-clip-player:$TAG
-   docker tag mxl-info-gui:latest ghcr.io/cbcrc/mxl-info-gui:$TAG
-   docker tag test-generator:latest ghcr.io/cbcrc/test-generator:$TAG
-   docker tag file-player:latest ghcr.io/cbcrc/file-player:$TAG
-   docker tag mxl2webrtc:latest ghcr.io/cbcrc/mxl2webrtc:$TAG
-   docker tag input-selector:latest ghcr.io/cbcrc/input-selector:$TAG
-   docker tag html5-keyer:latest ghcr.io/cbcrc/html5-keyer:$TAG
-   docker tag hls2mxl:latest ghcr.io/cbcrc/hls2mxl:$TAG
-   docker push ghcr.io/cbcrc/mxl-writer:$TAG
-   docker push ghcr.io/cbcrc/mxl-reader:$TAG
-   docker push ghcr.io/cbcrc/mxl-clip-player:$TAG
-   docker push ghcr.io/cbcrc/mxl-info-gui:$TAG
-   docker push ghcr.io/cbcrc/test-generator:$TAG
-   docker push ghcr.io/cbcrc/file-player:$TAG
-   docker push ghcr.io/cbcrc/mxl2webrtc:$TAG
-   docker push ghcr.io/cbcrc/input-selector:$TAG
-   docker push ghcr.io/cbcrc/html5-keyer:$TAG
-   docker push ghcr.io/cbcrc/hls2mxl:$TAG
+   docker tag mxl-writer:"${TAG_TOOLS}-linux-clang-release" ghcr.io/cbcrc/mxl-writer:$TAG_TOOLS
+   docker tag mxl-reader:"${TAG_TOOLS}-linux-clang-release" ghcr.io/cbcrc/mxl-reader:$TAG_TOOLS
+   docker tag mxl-clip-player:"${TAG_TOOLS}-linux-clang-release" ghcr.io/cbcrc/mxl-clip-player:$TAG_TOOLS
+   docker tag mxl-info-gui:latest ghcr.io/cbcrc/mxl-info-gui:$TAG_APP
+   docker tag test-generator:latest ghcr.io/cbcrc/test-generator:$TAG_APP
+   docker tag file-player:latest ghcr.io/cbcrc/file-player:$TAG_APP
+   docker tag mxl2webrtc:latest ghcr.io/cbcrc/mxl2webrtc:$TAG_APP
+   docker tag input-selector:latest ghcr.io/cbcrc/input-selector:$TAG_APP
+   docker tag html5-keyer:latest ghcr.io/cbcrc/html5-keyer:$TAG_APP
+   docker tag hls2mxl:latest ghcr.io/cbcrc/hls2mxl:$TAG_APP
+   docker push ghcr.io/cbcrc/mxl-writer:$TAG_TOOLS
+   docker push ghcr.io/cbcrc/mxl-reader:$TAG_TOOLS
+   docker push ghcr.io/cbcrc/mxl-clip-player:$TAG_TOOLS
+   docker push ghcr.io/cbcrc/mxl-info-gui:$TAG_APP
+   docker push ghcr.io/cbcrc/test-generator:$TAG_APP
+   docker push ghcr.io/cbcrc/file-player:$TAG_APP
+   docker push ghcr.io/cbcrc/mxl2webrtc:$TAG_APP
+   docker push ghcr.io/cbcrc/input-selector:$TAG_APP
+   docker push ghcr.io/cbcrc/html5-keyer:$TAG_APP
+   docker push ghcr.io/cbcrc/hls2mxl:$TAG_APP
 ```
 
 Let's consider this versions as the **latest stable** version of mxl that we want to deploy by default.
 Let's attach the moving tag `latest` and push.
 
 ```sh
-   docker tag mxl-writer:$TAG ghcr.io/cbcrc/mxl-writer:latest
-   docker tag mxl-reader:$TAG ghcr.io/cbcrc/mxl-reader:latest
-   docker tag mxl-clip-player:$TAG ghcr.io/cbcrc/mxl-clip-player:latest
+   docker tag mxl-writer:"${TAG_TOOLS}-linux-clang-release" ghcr.io/cbcrc/mxl-writer:latest
+   docker tag mxl-reader:"${TAG_TOOLS}-linux-clang-release" ghcr.io/cbcrc/mxl-reader:latest
+   docker tag mxl-clip-player:"${TAG_TOOLS}-linux-clang-release" ghcr.io/cbcrc/mxl-clip-player:latest
    docker tag mxl-info-gui:latest ghcr.io/cbcrc/mxl-info-gui:latest
    docker tag test-generator:latest ghcr.io/cbcrc/test-generator:latest
    docker tag file-player:latest ghcr.io/cbcrc/file-player:latest
@@ -177,7 +137,7 @@ Let's attach the moving tag `latest` and push.
    docker push ghcr.io/cbcrc/hls2mxl:latest
 ```
 
-## Step 7 Test with Exercises
+## Step 5 Test with Exercises
 
 After building the Docker images, follow the exercises in the repository to test and explore MXL functionality:
 
@@ -225,8 +185,6 @@ rm -rf dmf-mxl/install_*
 rm -rf dmf-mxl/vcpkg_cache
 rm -rf dmf-mxl/rust/.cargo-docker
 rm -rf dmf-mxl/rust/target
-rm -rf ~/portable-mxl-reader
-rm ~/portable-mxl-reader.tar.gz
 ```
 
 These commands will free up a significant amount of disk space, but you'll need to rebuild from scratch if you want to make changes later. You can also use the Git exclusion file to keep these directories ignored:
