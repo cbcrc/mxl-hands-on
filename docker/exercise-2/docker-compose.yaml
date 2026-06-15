@@ -5,9 +5,15 @@ volumes:
       type: none
       device: /Volumes/mxl/domain_1
       o: "bind,nosuid,strictatime"
+  mxl-domain-2:
+    driver: local
+    driver_opts:
+      type: none
+      device: /Volumes/mxl/domain_2
+      o: "bind,nosuid,strictatime"
 services:
   writer-media-function:
-    image: ghcr.io/cbcrc/mxl-writer:mxl-d262152
+    image: ghcr.io/cbcrc/mxl-writer:mxl-ff0ece6
     platform: linux/amd64
     user: 1000:1000
     restart: unless-stopped
@@ -16,7 +22,7 @@ services:
         source: mxl-domain
         target: /domain
   writer-media-function-2:
-    image: ghcr.io/cbcrc/mxl-writer:mxl-d262152
+    image: ghcr.io/cbcrc/mxl-writer:mxl-ff0ece6
     platform: linux/amd64
     user: 1000:1000
     restart: unless-stopped
@@ -25,9 +31,9 @@ services:
         source: mxl-domain
         target: /domain
       - ./data/v210_flow_2.json:/app/v210_flow_2.json  # Example: Upload specific file into container
-    command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-v", "/app/v210_flow_2.json", "-t", "NEW Flow 2"]
+    command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-g", "demo-app-writer-2", "-v", "/app/v210_flow_2.json", "-t", "NEW Flow 2"]
   reader-media-function:
-    image: ghcr.io/cbcrc/mxl-reader:mxl-d262152
+    image: ghcr.io/cbcrc/mxl-reader:mxl-ff0ece6
     platform: linux/amd64
     user: 1000:1000
     restart: unless-stopped

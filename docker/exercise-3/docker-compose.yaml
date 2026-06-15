@@ -7,20 +7,20 @@ volumes:
       o: "bind,nosuid,strictatime"
 services:
   writer-media-function:
-    image: ghcr.io/cbcrc/mxl-writer:mxl-d262152
+    image: ghcr.io/cbcrc/mxl-writer:mxl-ff0ece6
     platform: linux/amd64
-    # user: 1000:1000
+    user: 1000:1000
     restart: unless-stopped
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
         source: mxl-domain
         target: /domain
-    command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-v", "/app/v210_flow.json", "-t", "Original Flow"]
+    command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-g", "demo-app-writer", "-v", "/app/v210_flow.json", "-t", "Original Flow"]
   
   clip-player-function:
-    image: ghcr.io/cbcrc/mxl-clip-player:mxl-d262152
+    image: ghcr.io/cbcrc/mxl-clip-player:mxl-ff0ece6
     platform: linux/amd64
-    # user: 1000:1000
+    user: 1000:1000
     restart: unless-stopped
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
@@ -30,9 +30,9 @@ services:
     command: ["/app/mxl-gst-looping-filesrc", "-d", "/domain", "-i", "/app/sizzle.ts"]
   
   reader-media-function:
-    image: ghcr.io/cbcrc/mxl-reader:mxl-d262152
+    image: ghcr.io/cbcrc/mxl-reader:mxl-ff0ece6
     platform: linux/amd64
-    # user: 1000:1000
+    user: 1000:1000
     restart: unless-stopped
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.

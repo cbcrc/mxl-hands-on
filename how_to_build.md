@@ -78,9 +78,9 @@ This will:
 - Tag the images appropriately
 
 the nomenclature of the generated tag is:
-```<service>:<mxl_recent_tag>-<num_of_commit_since_tag>-<actual_commit_hash>-<compiler>```
+```<service>:<actual_commit_hash>-<compiler>```
 Exemple:
-```mxl-reader:v1.0.0-rc1-24-g8d280db-Clang```
+```mxl-reader:mxl-8d280db-linux-Clang-release```
 
 ## Step 4: Upload to image repository
 
