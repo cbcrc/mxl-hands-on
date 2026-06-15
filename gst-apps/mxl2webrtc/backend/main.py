@@ -78,7 +78,12 @@ def _scan_domains() -> list[dict]:
     for def_file in sorted(root.rglob("domain_def.json")):
         try:
             data = json.loads(def_file.read_text())
-            found.append({"id": data.get("id", "unknown"), "path": str(def_file.parent)})
+            found.append({
+                "id":          data.get("id", "unknown"),
+                "label":       data.get("label", ""),
+                "description": data.get("description", ""),
+                "path":        str(def_file.parent),
+            })
         except Exception as exc:
             log.warning("Could not parse %s: %s", def_file, exc)
     log.info("Domain scan found %d domain(s)", len(found))
@@ -88,10 +93,16 @@ def _scan_domains() -> list[dict]:
 def _parse_scan_output(stdout: str) -> list[dict]:
     flows: list[dict] = []
     current_group = ""
+    # mxl-info -d now prints a leading "Domain Definition:" block (id / label /
+    # description) before the flow listing.  Skip its indented lines so they are
+    # never mistaken for flows.
+    in_domain_def = False
     for line in stdout.splitlines():
         if not line.strip():
             continue
         if line[0] in ("\t", " "):
+            if in_domain_def:
+                continue
             m = re.match(
                 r'^\s+(.+?)\s*:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*-\s*(.+)$',
                 line,
@@ -106,6 +117,10 @@ def _parse_scan_output(stdout: str) -> list[dict]:
                 grouphint = f"{current_group}:{role}" if current_group and role else current_group or role
                 flows.append({"flow_uuid": uuid, "flow_label": label, "flow_grouphint": grouphint})
         else:
+            if line.strip().startswith("Domain Definition"):
+                in_domain_def = True
+                continue
+            in_domain_def = False
             if line.strip().startswith("Invalid group name"):
                 current_group = ""
             else:

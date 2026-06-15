@@ -280,6 +280,7 @@ export default function App() {
   // ── Grouped flow view ───────────────────────────────────────────────────────
 
   const groupedFlows = groupByGroupName(flows);
+  const selectedDomainObj = domains.find((d) => d.path === selectedDomain) || null;
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -317,6 +318,7 @@ export default function App() {
             <table style={tableStyle}>
               <thead>
                 <tr>
+                  <th style={thStyle}>Label</th>
                   <th style={thStyle}>Domain UUID</th>
                   <th style={thStyle}>Path</th>
                   <th style={{ ...thStyle, whiteSpace: "nowrap" }}>Buffer Depth</th>
@@ -328,6 +330,7 @@ export default function App() {
                   const depthStr = Number.isInteger(ms) ? `${ms} ms` : `${ms.toFixed(1)} ms`;
                   return (
                     <tr key={d.path}>
+                      <td style={{ ...tdStyle, fontFamily: "inherit" }}>{d.label || "—"}</td>
                       <td style={tdStyle}>{d.id}</td>
                       <td style={tdStyle}>{d.path}</td>
                       <td style={{ ...tdStyle, whiteSpace: "nowrap" }}>
@@ -357,10 +360,45 @@ export default function App() {
           <option value="">-- Select Domain --</option>
           {domains.map((d) => (
             <option key={d.path} value={d.path}>
-              {d.id} — {d.path}
+              {d.label || d.path}
             </option>
           ))}
         </select>
+
+        {/* Selected-domain details */}
+        {selectedDomainObj && (
+          <div style={monoBlock}>
+            <div style={{ color: "#aaa", marginBottom: "0.4rem" }}>Domain Definition</div>
+            <div>
+              <span style={{ color: "#888" }}>Label: </span>
+              <span style={{ color: "#e0e0e0" }}>{selectedDomainObj.label || "—"}</span>
+            </div>
+            <div>
+              <span style={{ color: "#888" }}>ID: </span>
+              <span style={{ color: "#e0e0e0" }}>{selectedDomainObj.id}</span>
+            </div>
+            <div>
+              <span style={{ color: "#888" }}>Description: </span>
+              <span style={{ color: "#e0e0e0" }}>{selectedDomainObj.description || "—"}</span>
+            </div>
+            <div>
+              <span style={{ color: "#888" }}>Path: </span>
+              <span style={{ color: "#e0e0e0" }}>{selectedDomainObj.path}</span>
+            </div>
+            <div>
+              <span style={{ color: "#888" }}>Buffer Depth: </span>
+              <span style={{ color: "#e0e0e0" }}>
+                {(() => {
+                  const ms = selectedDomainObj.buffer_depth_ms ?? 200;
+                  const depthStr = Number.isInteger(ms) ? `${ms} ms` : `${ms.toFixed(1)} ms`;
+                  return selectedDomainObj.buffer_depth_is_default
+                    ? `${depthStr} (default)`
+                    : depthStr;
+                })()}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── MXL Flow List (grouped by group name) ──────────────────────────── */}

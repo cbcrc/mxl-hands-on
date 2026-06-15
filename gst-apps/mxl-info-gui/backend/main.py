@@ -94,6 +94,8 @@ def _scan_domains() -> list[dict]:
             depth_ms, is_default = _read_buffer_depth(str(def_file.parent))
             found.append({
                 "id": domain_id,
+                "label": data.get("label", ""),
+                "description": data.get("description", ""),
                 "path": str(def_file.parent),
                 "buffer_depth_ms": depth_ms,
                 "buffer_depth_is_default": is_default,
@@ -118,10 +120,16 @@ def _parse_scan_output(stdout: str) -> list[dict]:
     """
     flows: list[dict] = []
     current_group = ""
+    # mxl-info -d now prints a leading "Domain Definition:" block (id / label /
+    # description) before the flow listing.  Skip its indented lines so they are
+    # never mistaken for flows.
+    in_domain_def = False
     for line in stdout.splitlines():
         if not line.strip():
             continue
         if line[0] in ("\t", " "):
+            if in_domain_def:
+                continue
             # Flow line: "\t<role> : <uuid> - <label>"
             # role may be "MISSING ROLE" or a format string like "Video"
             m = re.match(
@@ -147,6 +155,11 @@ def _parse_scan_output(stdout: str) -> list[dict]:
                 })
         else:
             # Group header line: "<GroupName>: mxl://..."
+            # The leading "Domain Definition:" block is not a flow group.
+            if line.strip().startswith("Domain Definition"):
+                in_domain_def = True
+                continue
+            in_domain_def = False
             # Detect the special "invalid/empty group" marker
             if line.strip().startswith("Invalid group name"):
                 current_group = ""

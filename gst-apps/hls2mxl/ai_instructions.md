@@ -33,7 +33,7 @@ The UI is divided into two distinct sections: **Setup** and **Operation**.
 
 This section is used to configure the MXL flows and the initial HLS source before starting the GStreamer pipeline. The pipeline does **not** start until the user clicks the **Start** button. All controls in this section are disabled while the pipeline is running.
 
-1. **MXL Domain Selector:** Scan `/mxl-domain` recursively for `domain_def.json` files. Read the `id` field for the domain UUID and use the containing directory path as the domain path (passed to `mxlsink`'s `domain` property). Provide a dropdown to select the target MXL domain.
+1. **MXL Domain Selector:** Scan `/mxl-domain` recursively for `domain_def.json` files. Read the `id` field for the domain UUID, the `label` and `description` fields, and use the containing directory path as the domain path (passed to `mxlsink`'s `domain` property). Provide a dropdown to select the target MXL domain — **each option displays the domain `label`** (falling back to the directory path when the label is absent) instead of the raw UUID.
 2. **Group Hint:** A text input shared across all flows. Default value: `HLS2MXL`.
 3. **HLS URL:** A text input for the initial HLS stream URL to connect to on start.
 4. **Flow Configuration Table:** Two rows — one for the Video flow and one for the Audio flow — each always active (no checkbox). Channel count is not configurable; it is detected automatically from the incoming HLS stream. Each row has:
@@ -92,7 +92,7 @@ This section is enabled only once the pipeline is running (greyed-out and non-in
   - Video: `uridecodebin → [pad-added link] → videoconvert → capsfilter(video/x-raw,format=v210) → queue → mxlsink(sync=False)`
   - Audio: `uridecodebin → [pad-added link] → audioconvert → audioresample → capsfilter(audio/x-raw,format=F32LE,rate=48000,layout=interleaved) → queue → mxlsink(sync=False)` — the channel count is not fixed in the capsfilter; `audioconvert` passes through whatever channel count the HLS stream provides.
 - **Setup endpoints:**
-  - `GET /domains` — scan `/mxl-domain` recursively for `domain_def.json` files; return `path` (containing directory), `id` (UUID from JSON `id` field), and `label` per domain.
+  - `GET /domains` — scan `/mxl-domain` recursively for `domain_def.json` files; return `path` (containing directory), `id` (UUID from JSON `id` field), `label`, and `description` per domain. The frontend dropdown displays the `label` (fallback to path) instead of the UUID.
   - `POST /pipeline/start` — accepts `domain` (path), `grouphint`, `hls_url`, and per-flow config. Both `video` and `audio` objects have only `description` and `label` (no `active` flag, no `channels` — both flows are always started and channel count is auto-detected from the stream). On each call: (1) derive deterministic flow UUIDs via UUID v5 from `_MXL_HLS_NS` and `"<grouphint>:video"` / `"<grouphint>:audio"`, (2) build and start the **warmup pipeline** (Phase 1), (3) return immediately with `stabilising=True`, (4) after 10 s the GLib timer fires Phase 2: starts the real pipeline, sets `stabilising=False`, then polls until `{domain-path}/{flow_uuid}.mxl-flow/flow_def.json` exists for each flow, then patches `grouphint`, `tags["urn:x-nmos:tag:grouphint/v1.0"]`, `description`, and `label`.
   - `POST /pipeline/stop` — stops and tears down the GStreamer pipeline; resets `stabilising` to `False`.
   - `GET /pipeline/status` — returns the full runtime state: `running` (bool), `stabilising` (bool), `flow_uuids` (dict), and `hls_url` (str).

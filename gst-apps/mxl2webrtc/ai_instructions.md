@@ -33,7 +33,7 @@ The UI is divided into two distinct sections: **Setup** and **Operation**.
 
 This section is used to configure and select the MXL input flows before starting the GStreamer pipeline. The pipeline does **not** start until the user clicks the **Start** button. All controls in this section are disabled while the pipeline is running.
 
-1. **MXL Domain Selector:** Scan `/mxl-domain` recursively for `domain_def.json` files. Read the `id` field for the domain UUID and use the containing directory path as the domain path. Provide a dropdown to select the target MXL domain. Changing the domain resets both flow selectors.
+1. **MXL Domain Selector:** Scan `/mxl-domain` recursively for `domain_def.json` files. Read the `id` field for the domain UUID, the `label` and `description` fields, and use the containing directory path as the domain path. Provide a dropdown to select the target MXL domain — **each option displays the domain `label`** (falling back to the directory path when the label is absent) instead of the raw UUID. Changing the domain resets both flow selectors.
 2. **Video Flow Selector:** A dropdown populated from the flow list for the selected domain. Each option displays the first 8 characters of the UUID, description, label, and group hint. Includes a **"None"** option at the top — selecting "None" means no video input (audio-only mode). **Only show flows that have "video" (case-insensitive) after `:` in their `flow_grouphint`.**
 3. **Audio Flow Selector:** A dropdown populated from the same domain flow list, following the same display format. Includes a **"None"** option at the top — selecting "None" means no audio input (video-only mode). **Only show flows that have "audio" (case-insensitive) after `:` in their `flow_grouphint`.**
 4. **Refresh Flow List button** — manually triggers `scan_domain` for the selected domain.
@@ -174,9 +174,9 @@ MEDIAMTX_WEBRTC  = os.environ.get("MEDIAMTX_WEBRTC_URL", "http://localhost:8889"
 ```
 
 **Domain and flow scanning** — reuse the same logic as `mxl-info-gui`:
-- `scan_domains()`: scan `/mxl-domain` recursively for `domain_def.json`; store UUID and directory path. Called once at startup.
+- `scan_domains()`: scan `/mxl-domain` recursively for `domain_def.json`; store `id` (UUID), `label`, `description`, and directory path. Called once at startup.
 - `scan_domain_path(domain_path)`: call `mxl-info -d <domain_path>` via `subprocess.run`, parse the output using a UUID-anchored regex, return a list of flows with `flow_uuid`, `flow_label`, `flow_grouphint`, and `description` (read from `<uuid>.mxl-flow/flow_def.json`).
-- Parsing rules are identical to `mxl-info-gui` — see that app's instructions for the full regex and edge-case handling (empty group name, missing role, URL line disambiguation).
+- Parsing rules are identical to `mxl-info-gui` — see that app's instructions for the full regex and edge-case handling (empty group name, missing role, URL line disambiguation). **Note:** `mxl-info -d` now emits a leading `Domain Definition:` block (echoing the domain `id`/`label`/`description`) before the flow listing; the parser must detect that header and skip its indented lines so they are not mistaken for flows.
 
 **GStreamer pipeline class (`GstReceiver`) in `backend/gst_mxl2webrtc.py`:**
 
@@ -214,7 +214,7 @@ The pipeline is built programmatically (not via `parse_launch`) using `webrtcbin
 |--------|------|-------------|
 | `GET`  | `/config` | Return `{"mediamtx_webrtc_url": MEDIAMTX_WEBRTC}` for frontend use |
 | `POST` | `/get-domains` | Trigger a fresh domain scan; return updated domain list |
-| `GET`  | `/domains` | Return the cached domain list |
+| `GET`  | `/domains` | Return the cached domain list (each entry: `id`, `label`, `description`, `path`) |
 | `GET`  | `/scan-domain?domain_path=<path>` | Run `mxl-info -d` and return parsed flow list |
 | `POST` | `/pipeline/start` | Accept `domain_path`, `video_flow_uuid` (nullable), `audio_flow_uuid` (nullable); build and start pipeline |
 | `POST` | `/pipeline/stop` | Stop and tear down the pipeline |
@@ -236,7 +236,7 @@ Initialize a React + Vite project inside the `frontend/` directory targeting Vit
 **Dark theme** consistent with `./gst-apps/test-generator` (background `#0f0f0f`, section cards `#1c1c1c`).
 
 **Setup section** (always visible, disabled while pipeline is running):
-- MXL domain dropdown (populated from `GET /domains`; refresh button calls `POST /get-domains`).
+- MXL domain dropdown (populated from `GET /domains`; refresh button calls `POST /get-domains`). Each option displays the domain `label` (fallback to path) rather than the UUID.
 - Video flow dropdown (populated from `GET /scan-domain?domain_path=...` when domain changes). First option is **"None — video disabled"**. Only include flows where the part after `:` in `flow_grouphint` contains "video" (case-insensitive).
 - Audio flow dropdown (same source as video). First option is **"None — audio disabled"**. Only include flows where the part after `:` in `flow_grouphint` contains "audio" (case-insensitive).
 - Start/Stop button — disabled when both flow selectors are "None". Label changes to "Stop" while running.

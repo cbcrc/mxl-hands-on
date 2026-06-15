@@ -345,7 +345,7 @@ export default function App() {
                 <option value="">— select a domain —</option>
                 {domains.map((d) => (
                   <option key={d.path} value={d.path}>
-                    {d.path}  ({(d.id || "").slice(0, 8)}…)
+                    {d.label || d.path}
                   </option>
                 ))}
               </select>

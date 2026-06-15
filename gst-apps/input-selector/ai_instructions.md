@@ -40,7 +40,7 @@ The UI is divided into two distinct sections: **Setup** and **Operation**.
 
 This section is used to configure the three MXL input flows and the single MXL output flow before starting the GStreamer pipeline. The pipeline does **not** start until the user clicks the **Start** button. All controls in this section are disabled while the pipeline is running.
 
-1. **MXL Domain Selector:** Scan `/mxl-domain` recursively for `domain_def.json` files. Read the `id` field for the domain UUID and use the containing directory path as the domain path (passed to both `mxlsrc` and `mxlsink`'s `domain` property). Provide a dropdown to select the target MXL domain. Changing the domain resets all three input selectors. Inputs and the output use the same domain.
+1. **MXL Domain Selector:** Scan `/mxl-domain` recursively for `domain_def.json` files. Read the `id` field for the domain UUID, the `label` and `description` fields, and use the containing directory path as the domain path (passed to both `mxlsrc` and `mxlsink`'s `domain` property). Provide a dropdown to select the target MXL domain — **each option displays the domain `label`** (falling back to the directory path when the label is absent) instead of the raw UUID. Changing the domain resets all three input selectors. Inputs and the output use the same domain.
 2. **Input Flow Selectors (Input 1 / Input 2 / Input 3):** Three independent dropdowns populated from the flow list for the selected domain. Each option displays the first 8 characters of the UUID, description, label, and group hint. Each dropdown includes a **"None"** option at the top — selecting "None" means that slot will be replaced by a generated black video source in the pipeline. **Only show flows that have "video" (case-insensitive) after `:` in their `flow_grouphint`** (same filtering rule as `mxl2webrtc`). The same flow may be selected in multiple input slots; the UI does not prevent this.
 3. **Refresh Flow List button** — manually triggers a flow re-scan for the selected domain.
 4. **Group Hint:** A text input for the output flow group hint. Default value: `Input-Selector`.
@@ -175,9 +175,9 @@ MXL_DOMAIN_ROOT  = os.environ.get("MXL_DOMAIN", "/mxl-domain")
 ```
 
 **Domain and flow scanning** — reuse the same logic as `mxl-info-gui` and `mxl2webrtc`:
-- `scan_domains()`: scan `/mxl-domain` recursively for `domain_def.json`; store UUID and directory path. Called once at startup.
+- `scan_domains()`: scan `/mxl-domain` recursively for `domain_def.json`; store `id` (UUID), `label`, `description`, and directory path. Called once at startup.
 - `scan_domain_path(domain_path)`: call `mxl-info -d <domain_path>` via `subprocess.run`, parse the output using a UUID-anchored regex, return a list of flows with `flow_uuid`, `flow_label`, `flow_grouphint`, and `description` (read from `<uuid>.mxl-flow/flow_def.json`).
-- Parsing rules are identical to `mxl-info-gui` — see that app's instructions for the full regex and edge-case handling.
+- Parsing rules are identical to `mxl-info-gui` — see that app's instructions for the full regex and edge-case handling. **Note:** `mxl-info -d` now emits a leading `Domain Definition:` block (echoing the domain `id`/`label`/`description`) before the flow listing; the parser must detect that header and skip its indented lines so they are not mistaken for flows.
 
 **Flow format reader:**
 - `read_flow_format(domain_path, flow_uuid)`: load `{domain_path}/{flow_uuid}.mxl-flow/flow_def.json` and return a dict containing `frame_width`, `frame_height`, `grain_rate` (the full dict with `numerator` and `denominator`), and `interlace_mode`. Raise `FileNotFoundError` if the flow does not exist, and `KeyError` if any required field is missing.
@@ -212,7 +212,7 @@ The pipeline is built programmatically (not via `parse_launch`) and uses the GSt
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/get-domains` | Trigger a fresh domain scan; return updated domain list |
-| `GET`  | `/domains` | Return the cached domain list |
+| `GET`  | `/domains` | Return the cached domain list (each entry: `id`, `label`, `description`, `path`) |
 | `GET`  | `/scan-domain?domain_path=<path>` | Run `mxl-info -d` and return parsed flow list |
 | `POST` | `/pipeline/start` | Accept `domain_path`, `input_flow_uuids` (list of 3, each UUID-string or null), `grouphint`, `description`, `label`. Validates input formats first; on mismatch returns **HTTP 400** with `{"detail": "Input formats do not match", "errors": [...], "per_slot": [...]}`. On success, builds and starts the pipeline and returns `{"running": true, "output_flow_uuid": "...", "format": {...}}`. |
 | `POST` | `/pipeline/stop` | Stop and tear down the pipeline |
@@ -245,7 +245,7 @@ Initialize a React + Vite project inside the `frontend/` directory targeting Vit
 **Dark theme** consistent with `./gst-apps/test-generator`, `./gst-apps/file-player`, and `./gst-apps/mxl2webrtc` (background `#0f0f0f`, section cards `#1c1c1c`).
 
 **Setup section** (always visible, disabled while pipeline is running):
-- MXL domain dropdown (populated from `GET /domains`; refresh button calls `POST /get-domains`).
+- MXL domain dropdown (populated from `GET /domains`; refresh button calls `POST /get-domains`). Each option displays the domain `label` (fallback to path) rather than the UUID.
 - A 3-row Input Configuration Table with rows labelled **Input 1**, **Input 2**, **Input 3**. Each row contains a single column: an input flow dropdown populated from `GET /scan-domain?domain_path=...` when the domain changes. First option of each dropdown is **"None — black fill"**. Only include flows where the part after `:` in `flow_grouphint` contains "video" (case-insensitive). Selecting the same flow in multiple rows is allowed.
 - Group hint text input (default `Input-Selector`).
 - Output flow row with Description (default `selector-out-1`) and Label (default `input-selector-video`) text inputs.

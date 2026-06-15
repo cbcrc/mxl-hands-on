@@ -70,10 +70,12 @@ def get_domains():
                     data = json.load(f)
                 domain_id = data.get("id", data.get("uuid", ""))
                 label = data.get("label", os.path.basename(root))
+                description = data.get("description", "")
             except Exception:
                 domain_id = ""
                 label = os.path.basename(root)
-            results.append({"path": root, "id": domain_id, "label": label})
+                description = ""
+            results.append({"path": root, "id": domain_id, "label": label, "description": description})
     return {"domains": results}
 
 

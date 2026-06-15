@@ -43,7 +43,7 @@ The UI is divided into two distinct sections: **Setup** and **Operation**.
 
 This section is used to configure the MXL input flow, the HTML5 graphics URL, and the MXL output flow before starting the GStreamer pipeline. The pipeline does **not** start until the user clicks the **Start** button. All controls in this section are disabled while the pipeline is running.
 
-1. **MXL Domain Selector:** Scan `/mxl-domain` recursively for `domain_def.json` files. Read the `id` field for the domain UUID and use the containing directory path as the domain path (passed to both `mxlsrc` and `mxlsink`'s `domain` property). Provide a dropdown to select the target MXL domain. Changing the domain resets the input flow selector. Input and output use the same domain.
+1. **MXL Domain Selector:** Scan `/mxl-domain` recursively for `domain_def.json` files. Read the `id` field for the domain UUID, the `label` and `description` fields, and use the containing directory path as the domain path (passed to both `mxlsrc` and `mxlsink`'s `domain` property). Provide a dropdown to select the target MXL domain — **each option displays the domain `label`** (falling back to the directory path when the label is absent) instead of the raw UUID. Changing the domain resets the input flow selector. Input and output use the same domain.
 2. **MXL Input Flow Selector (Background):** A single dropdown populated from the flow list for the selected domain. Each option displays the first 8 characters of the UUID, description, label, and group hint. **Only show flows that have "video" (case-insensitive) after `:` in their `flow_grouphint`** (same filtering rule as `input-selector` and `mxl2webrtc`). The dropdown does **not** include a "None" option — a real MXL background is mandatory because the output format is derived from it.
 3. **Refresh Flow List button** — manually triggers a flow re-scan for the selected domain.
 4. **HTML5 Graphics URL:** A text input that accepts the full URL of the HTML5 graphics source to be keyed (e.g. `http://spx-server:5660/renderer/`). The URL is passed to `cefsrc` as its `url` property. Default value: empty. The field accepts any string that begins with `http://` or `https://`; URLs that do not match are flagged with a red border and the Start button is disabled. The URL is fixed for the lifetime of the pipeline — to change it, the user must Stop and Start. A small grey caption underneath reads "Pages must allow embedding (no `X-Frame-Options: deny`) and should render with a transparent background so the alpha channel keys correctly".
@@ -235,9 +235,9 @@ MXL_DOMAIN_ROOT  = os.environ.get("MXL_DOMAIN", "/mxl-domain")
 ```
 
 **Domain and flow scanning** — reuse the same logic as `mxl-info-gui`, `mxl2webrtc`, and `input-selector`:
-- `scan_domains()`: scan `/mxl-domain` recursively for `domain_def.json`; store UUID and directory path. Called once at startup.
+- `scan_domains()`: scan `/mxl-domain` recursively for `domain_def.json`; store `id` (UUID), `label`, `description`, and directory path. Called once at startup.
 - `scan_domain_path(domain_path)`: call `mxl-info -d <domain_path>` via `subprocess.run`, parse the output using a UUID-anchored regex, return a list of flows with `flow_uuid`, `flow_label`, `flow_grouphint`, and `description` (read from `<uuid>.mxl-flow/flow_def.json`).
-- Parsing rules are identical to `mxl-info-gui` — see that app's instructions for the full regex and edge-case handling.
+- Parsing rules are identical to `mxl-info-gui` — see that app's instructions for the full regex and edge-case handling. **Note:** `mxl-info -d` now emits a leading `Domain Definition:` block (echoing the domain `id`/`label`/`description`) before the flow listing; the parser must detect that header and skip its indented lines so they are not mistaken for flows.
 
 **Flow format reader:**
 - `read_flow_format(domain_path, flow_uuid)`: load `{domain_path}/{flow_uuid}.mxl-flow/flow_def.json` and return a dict containing `frame_width`, `frame_height`, `grain_rate` (the full dict with `numerator` and `denominator`), and `interlace_mode`. Raise `FileNotFoundError` if the flow does not exist, and `KeyError` if any required field is missing.
@@ -279,7 +279,7 @@ The pipeline is built programmatically (not via `parse_launch`) and uses the GSt
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/get-domains` | Trigger a fresh domain scan; return updated domain list |
-| `GET`  | `/domains` | Return the cached domain list |
+| `GET`  | `/domains` | Return the cached domain list (each entry: `id`, `label`, `description`, `path`) |
 | `GET`  | `/scan-domain?domain_path=<path>` | Run `mxl-info -d` and return parsed flow list |
 | `POST` | `/pipeline/start` | Accept `domain_path`, `input_flow_uuid`, `html5_url`, `grouphint`, `description`, `label`. Reads the input format first; on a missing/malformed `flow_def.json` returns **HTTP 400** with `{"detail": "Input flow format could not be read", "errors": [...]}`. On success, builds and starts the GStreamer pipeline and returns `{"running": true, "output_flow_uuid": "...", "format": {...}, "key_on": true}`. |
 | `POST` | `/pipeline/stop` | Stop and tear down the pipeline |
@@ -310,7 +310,7 @@ Initialize a React + Vite project inside the `frontend/` directory targeting Vit
 **Dark theme** consistent with `./gst-apps/test-generator`, `./gst-apps/file-player`, `./gst-apps/mxl2webrtc`, and `./gst-apps/input-selector` (background `#0f0f0f`, section cards `#1c1c1c`).
 
 **Setup section** (always visible, disabled while pipeline is running):
-- MXL domain dropdown (populated from `GET /domains`; refresh button calls `POST /get-domains`).
+- MXL domain dropdown (populated from `GET /domains`; refresh button calls `POST /get-domains`). Each option displays the domain `label` (fallback to path) rather than the UUID.
 - A single Input Flow dropdown labelled **MXL Background Input**, populated from `GET /scan-domain?domain_path=...` when the domain changes. Only include flows where the part after `:` in `flow_grouphint` contains "video" (case-insensitive). No "None" option.
 - **HTML5 Graphics URL** text input with placeholder `http://spx-server:5660/renderer/`. Validate that the value begins with `http://` or `https://`; if not, draw a red border and disable Start. Below the field, a small grey caption: `Pages must allow embedding (no X-Frame-Options: deny) and should render with a transparent background so the alpha channel keys correctly`.
 - Group hint text input (default `HTML5-Keyer`).

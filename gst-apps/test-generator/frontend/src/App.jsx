@@ -338,7 +338,7 @@ export default function App() {
 
   const domainOptions = domains.map((d) => ({
     value: d.path,
-    label: `${d.path}  (${(d.id || "").slice(0, 8)}…)`,
+    label: d.label || d.path,
   }));
 
   // ── Flow table row ────────────────────────────────────────────────────────

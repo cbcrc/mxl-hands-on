@@ -27,7 +27,7 @@ The UI is divided into two distinct sections: **Setup** and **Operation**.
 
 This section is used to configure the MXL flows before starting the GStreamer pipeline. The pipeline does **not** start until the user clicks the **Start** button. All controls in this section are disabled while the pipeline is running.
 
-1. **MXL Domain Selector:** Scan `/mxl-domain` recursively for `domain_def.json` files. Read the `id` field for the domain UUID and use the containing directory path as the domain path (passed to `mxlsink`'s `domain` property). Provide a dropdown to select the target MXL domain.
+1. **MXL Domain Selector:** Scan `/mxl-domain` recursively for `domain_def.json` files. Read the `id` field for the domain UUID, the `label` and `description` fields, and use the containing directory path as the domain path (passed to `mxlsink`'s `domain` property). Provide a dropdown to select the target MXL domain — **each option displays the domain `label`** (falling back to the directory path when the label is absent) instead of the raw UUID.
 2. **Resolution Selector:** A dropdown to select the output video raster: `1280x720`, `1920x1080`, or `3840x2160`. Default: `1920x1080`.
 3. **Frame Rate Selector:** A dropdown to select the output frame rate: `24`, `25`, `29.97`, `30`, `50`, `59.94`, or `60` fps. Default: `30`.
 4. **Group Hint:** A text input shared across all three flows. Default value: `Test-Generator`.
@@ -86,7 +86,7 @@ This section is enabled only once the pipeline is running (greyed-out and non-in
 - Create a FastAPI application on port 9600. No NMOS bridge or startup event is needed.
 - Implement a `GstGenerator` class using `gi.repository.Gst`. The pipeline is **not** started at init — only when `start(config)` is called explicitly.
 - **Setup endpoints:**
-  - `GET /domains` — scan `/mxl-domain` recursively for `domain_def.json` files; return `path` (containing directory), `id` (UUID from JSON `id` field), and `label` per domain.
+  - `GET /domains` — scan `/mxl-domain` recursively for `domain_def.json` files; return `path` (containing directory), `id` (UUID from JSON `id` field), `label`, and `description` per domain. The frontend dropdown displays the `label` (fallback to path) instead of the UUID.
   - `GET /patterns` — return lists of available video and audio test pattern names.
   - `GET /options` — return lists of available resolutions and frame rates.
   - `POST /pipeline/start` — accepts `domain` (path), `grouphint`, `resolution`, `framerate`, and per-flow config. `video` has `active`, `description`, `label`. `audio1` and `audio2` additionally have `channels` (int, 1–64, default 2). On each call: (1) set audio channel counts from config, (2) generate a fresh `uuid4` for every active flow, (3) build and start the GStreamer pipeline, (4) return once the pipeline reaches PLAYING state, (5) in a background thread, poll until `{domain-path}/{flow_uuid}.mxl-flow/flow_def.json` exists for each active flow, then patch `grouphint` (as `"<grouphint>:Video"` for the video flow and `"<grouphint>:Audio"` for audio flows), `tags["urn:x-nmos:tag:grouphint/v1.0"]` (same value, as a one-element array, if the `tags` key is present), `description`, and `label`.

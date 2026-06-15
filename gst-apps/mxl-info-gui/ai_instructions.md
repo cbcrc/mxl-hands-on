@@ -19,12 +19,18 @@ This single-port design means the browser always uses the **same origin** for bo
 ## Backend Functionalities
 
 ### 1. `get_domains`
-Scans `/mxl-domain` recursively for files named `domain_def.json`. Each file contains the domain UUID:
+Scans `/mxl-domain` recursively for files named `domain_def.json`. Each file now contains a domain UUID plus a human-readable `label` and `description`:
 ```json
-{"id": "51ef9b5c-98c1-4f98-9def-1d61ee9a4fdb"}
+{
+  "id": "51ef9b5c-98c1-4f98-9def-1d61ee9a4fdb",
+  "label": "exercise-3",
+  "description": "mxl-domain-hands-on-exercise-3"
+}
 ```
 For each file found, store:
 - The domain **UUID** (from the JSON `id` field)
+- The domain **label** (from the JSON `label` field, `""` if absent)
+- The domain **description** (from the JSON `description` field, `""` if absent)
 - The **directory path** containing `domain_def.json` (passed to `mxl-info -d`)
 - The **buffer depth** (see below)
 
@@ -64,11 +70,20 @@ Calls `mxl-info -d <domain_directory>` and parses the output into a list of flow
 ```
 
 **Edge cases (from source code `main.cpp`):**
+- `mxl-info -d` now prints a leading **`Domain Definition:`** block before the flow listing, echoing the domain `id`, `label`, and `description` from `domain_def.json`:
+  ```
+  Domain Definition:
+      id: 51ef9b5c-98c1-4f98-9def-1d61ee9a4fdb
+      label: exercise-3
+      description: mxl-domain-hands-on-exercise-3
+  ```
+  The parser detects the `Domain Definition` header and **skips its indented lines** so they are never mistaken for flows (they would not match the UUID-anchored flow regex anyway, but skipping them explicitly keeps `current_group` clean). This block does **not** affect flow discovery.
 - When `groupName` is empty (no grouphint group), the header reads: `Invalid group name (empty string): mxl://...`
 - When `roleInGroup` is empty, the role column shows `MISSING ROLE`
 - Groups are sorted alphabetically by group name
 
 **Parsing rules:**
+- Skip the leading `Domain Definition:` header and its indented `id` / `label` / `description` lines (see Edge cases) — they are not flows
 - Lines starting with whitespace are flow lines: `\t<RoleInGroup> : <UUID> - <Label>`
 - Lines without leading whitespace are group headers; extract the group name as text before the first `:`
 - Detect `Invalid group name (empty string)` header and treat the current group as `""` (empty)
@@ -142,8 +157,8 @@ A flow being reported by `mxl-info -d` is **not** sufficient to call it active: 
 ## Required UI Functionalities
 
 1. **Scan Domain button** — calls `POST /get-domains`. Domains are also polled every **30 seconds** via `GET /domains`.
-2. **Domain List window** — table showing UUID, directory path, and **Buffer Depth** for each domain found. The buffer depth is read from `options.json` in the domain directory (`urn:x-mxl:option:history_duration/v1.0`, expressed in nanoseconds, displayed in ms). When no `options.json` is present the value shows as `200 ms` with a dimmed `(default)` annotation.
-3. **Domain Selector** — dropdown to select a domain from the discovered list.
+2. **Domain List window** — table showing **Label**, UUID, directory path, and **Buffer Depth** for each domain found. The buffer depth is read from `options.json` in the domain directory (`urn:x-mxl:option:history_duration/v1.0`, expressed in nanoseconds, displayed in ms). When no `options.json` is present the value shows as `200 ms` with a dimmed `(default)` annotation.
+3. **Domain Selector** — dropdown to select a domain from the discovered list. Each option shows the domain **`label`** (falling back to the directory path when the label is absent) instead of the raw domain UUID. **When a domain is selected, a "Domain Definition" details panel is shown directly below the selector** displaying all information for that domain: Label, ID, Description, Path, and Buffer Depth.
 4. **MXL Flow List window** — table showing `Flow UUID`, `Label`, `Description`, and `Group Hint` for the **active** flows in the selected domain (those confirmed `Active: true`). Flows are **grouped by group name** (the prefix before `:` in `flow_grouphint`); each group is shown with a coloured header row spanning all four columns. Scales up to 20 rows; scrollable beyond that. Polls `/domain-flows` every **30 seconds** when a domain is selected.
 5. **Refresh Flow List button** — manually triggers `/domain-flows` for the selected domain (refreshes both the active and inactive tables).
 6. **Inactive / Stale Flows section** — shown below the flow list when a domain is selected. Displays the `inactive` list from `/domain-flows`. Columns: Status, Flow UUID, Label, Group Hint, Directory. The **Status** column distinguishes `inactive` (reported by `mxl-info -d` but `Active: false`) from `stale` (on-disk `.mxl-flow` directory not reported at all). Populated from the same `/domain-flows` call as the active list, so it refreshes on the same 30 s poll.

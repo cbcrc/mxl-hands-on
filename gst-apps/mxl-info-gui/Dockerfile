@@ -47,10 +47,10 @@ COPY gst-apps/mxl-info-gui/backend/requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
 
 # ── MXL libraries ────────────────────────────────────────────────────────────
-COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.1          /opt/mxl/lib/libmxl.so.1.1
+COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.2          /opt/mxl/lib/libmxl.so.1.2
 
 RUN cd /opt/mxl/lib \
- && ln -sf libmxl.so.1.1        libmxl.so.1 \
+ && ln -sf libmxl.so.1.2        libmxl.so.1 \
  && ln -sf libmxl.so.1          libmxl.so \
  && ldconfig /opt/mxl/lib
 

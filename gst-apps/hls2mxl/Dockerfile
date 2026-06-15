@@ -54,10 +54,10 @@ RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
 # ── MXL libraries ────────────────────────────────────────────────────────────
 COPY dmf-mxl/rust/target/release/libgstmxl.so /usr/lib/x86_64-linux-gnu/gstreamer-1.0/
 
-COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.1 /opt/mxl/lib/libmxl.so.1.1
+COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.2 /opt/mxl/lib/libmxl.so.1.2
 
 RUN cd /opt/mxl/lib \
- && ln -sf libmxl.so.1.1        libmxl.so.1 \
+ && ln -sf libmxl.so.1.2        libmxl.so.1 \
  && ln -sf libmxl.so.1          libmxl.so \
  && ldconfig /opt/mxl/lib /usr/lib/x86_64-linux-gnu/gstreamer-1.0 \
  # libgstmxl.so dlopen()s libmxl.so from its compile-time build path; satisfy it
