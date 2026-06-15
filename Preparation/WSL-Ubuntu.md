@@ -5,10 +5,10 @@
 
 In order to run these exercises, you need a Linux base system running with Docker. Theses preparation steps will help you to install WSL (Windows Subsystem for Linux). If you already have access to a Linux system, you can skip to the second part to install Docker.
 
-⚡ PowerShell Commands
+⚡ Windows Terminal Commands
 
 ```
-These commands work in PowerShell
+These commands work in Windows Terminal
 ```
 
 🐧 Ubuntu/Linux Commands
@@ -18,18 +18,19 @@ These commands work in WSL
 ## Installing WSL on Windows 11
 
 ### Steps
+1. Make sure you are using Windows Terminal. To lunch Window+R and type wt.
 
 1. Open an Admin Command Prompt or Powershell window.
 
 1. Check if WSL is installed
 
-   ⚡ PowerShell
+   ⚡ Windows Terminal
    ```sh
    wsl --version
    ```
 1. If it is installed update it, if not, install it.
 
-   ⚡ PowerShell
+   ⚡ Windows Terminal
    ```sh
    wsl --update
    ```
@@ -37,14 +38,14 @@ These commands work in WSL
    wsl --install
 1. List all the available linux distribution to be use with WSL
 
-   ⚡ PowerShell
+   ⚡ Windows Terminal
    ```sh
    wsl --list --online
    ```
 1. Reboot your PC
 1. Alternatively to Alma Linux, CBC also support Ubuntu Linux as well.
 
-   ⚡ PowerShell
+   ⚡ Windows Terminal
    ```sh
    wsl.exe --install Ubuntu-24.04
    ```
@@ -57,7 +58,7 @@ These commands work in WSL
    ```
 1. Verify the installed WSL linux distribution
 
-   ⚡ PowerShell
+   ⚡ Windows Terminal
    ```sh
    wsl.exe --list --all
    ```
@@ -134,7 +135,7 @@ These commands work in WSL
    ```
 1. Close your linux terminal windows. Using a Windows PowerShell shutdown you linux instance.
    
-   ⚡ PowerShell
+   ⚡ Windows Terminal
    ```sh
    wsl --shutdown
    ```
