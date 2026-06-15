@@ -88,7 +88,15 @@ ENV LD_LIBRARY_PATH=/opt/mxl/lib
 ENV MXL_DOMAIN=/mxl-domain
 ENV MEDIAMTX_WHIP_URL=http://host.docker.internal:8889/mxl2webrtc/whip
 ENV MEDIAMTX_WEBRTC_URL=http://localhost:8889
+# Direct-mode WebRTC ICE: pin webrtcbin's ICE UDP ports to a published range (one per
+# viewer); the host candidate address is rewritten per request to the host the browser
+# connected to, so the same bridged config serves local and remote viewers.
+ENV WEBRTC_ICE_PORT_MIN=""
+ENV WEBRTC_ICE_PORT_MAX=""
 
 EXPOSE 9600
+# Direct-mode ICE UDP range (must match WEBRTC_ICE_PORT_MIN/MAX when bridged;
+# 8189 is reserved by the host-networked mediamtx service)
+EXPOSE 8200-8210/udp
 
 ENTRYPOINT ["/entrypoint.sh"]

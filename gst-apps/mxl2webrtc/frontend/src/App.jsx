@@ -100,9 +100,23 @@ const isAudioFlow = (f) => flowRole(f).includes("audio");
 
 // ── WHEP player hook ──────────────────────────────────────────────────────────
 
-function useWhepPlayer(pipelinePlaying, mediamtxUrl) {
+function waitIceGathering(pc, timeoutMs = 5000) {
+  return new Promise((resolve) => {
+    if (pc.iceGatheringState === "complete") { resolve(); return; }
+    const t = setTimeout(resolve, timeoutMs);
+    pc.onicegatheringstatechange = () => {
+      if (pc.iceGatheringState === "complete") { clearTimeout(t); resolve(); }
+    };
+  });
+}
+
+// serverOffers=true (Direct mode): the server (webrtcbin) offers and the browser
+// answers — POST /whep returns the offer, POST <Location> carries our answer.
+// serverOffers=false (MediaMTX mode): standard WHEP, the browser offers.
+function useWhepPlayer(pipelinePlaying, whepUrl, serverOffers) {
   const videoRef = useRef(null);
   const pcRef    = useRef(null);
+  const resourceRef = useRef(null);   // WHEP resource URL (from the Location header) for DELETE
   const [playerState, setPlayerState] = useState("idle");
   const [playerError, setPlayerError] = useState(null);
   const [muted, setMuted] = useState(true);
@@ -115,6 +129,11 @@ function useWhepPlayer(pipelinePlaying, mediamtxUrl) {
   }, []);
 
   const cleanup = useCallback(() => {
+    // Best-effort WHEP teardown so the server drops our viewer/webrtcbin.
+    if (resourceRef.current) {
+      try { fetch(resourceRef.current, { method: "DELETE", keepalive: true }).catch(() => {}); } catch {}
+      resourceRef.current = null;
+    }
     if (pcRef.current) {
       pcRef.current.ontrack = null;
       pcRef.current.onconnectionstatechange = null;
@@ -125,7 +144,7 @@ function useWhepPlayer(pipelinePlaying, mediamtxUrl) {
   }, []);
 
   useEffect(() => {
-    if (!pipelinePlaying || !mediamtxUrl) {
+    if (!pipelinePlaying || !whepUrl) {
       cleanup();
       setPlayerState("idle");
       setPlayerError(null);
@@ -136,17 +155,12 @@ function useWhepPlayer(pipelinePlaying, mediamtxUrl) {
     setPlayerState("connecting");
     setPlayerError(null);
 
-    const whepUrl = `${mediamtxUrl}/mxl2webrtc/whep`;
-
     const connect = async () => {
       for (let i = 0; i < 12; i++) {
         if (cancelled) return;
         try {
           const pc = new RTCPeerConnection({ iceServers: [] });
           pcRef.current = pc;
-
-          pc.addTransceiver("video", { direction: "recvonly" });
-          pc.addTransceiver("audio", { direction: "recvonly" });
 
           pc.ontrack = (e) => {
             if (cancelled) return;
@@ -163,17 +177,44 @@ function useWhepPlayer(pipelinePlaying, mediamtxUrl) {
             }
           };
 
+          if (serverOffers) {
+            // Direct mode: the server offers, we answer.
+            const offerResp = await fetch(whepUrl, { method: "POST" });
+            if (!offerResp.ok) {
+              pc.close(); pcRef.current = null;
+              if (i < 11) { await new Promise(r => setTimeout(r, 2000)); continue; }
+              setPlayerState("error"); setPlayerError(`WHEP error ${offerResp.status}`); return;
+            }
+            const loc = offerResp.headers.get("Location");
+            if (loc) { try { resourceRef.current = new URL(loc, whepUrl).href; } catch { resourceRef.current = loc; } }
+
+            const offerSdp = await offerResp.text();
+            await pc.setRemoteDescription({ type: "offer", sdp: offerSdp });
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await waitIceGathering(pc);
+            if (cancelled) { pc.close(); return; }
+
+            const ansResp = await fetch(resourceRef.current || whepUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/sdp" },
+              body: pc.localDescription.sdp,
+            });
+            if (!ansResp.ok) {
+              pc.close(); pcRef.current = null;
+              if (i < 11) { await new Promise(r => setTimeout(r, 2000)); continue; }
+              setPlayerState("error"); setPlayerError(`WHEP answer error ${ansResp.status}`); return;
+            }
+            return; // success
+          }
+
+          // MediaMTX mode: standard WHEP, the browser offers.
+          pc.addTransceiver("video", { direction: "recvonly" });
+          pc.addTransceiver("audio", { direction: "recvonly" });
+
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
-
-          // Wait for ICE gathering before sending the offer (avoids trickle ICE)
-          await new Promise((resolve) => {
-            if (pc.iceGatheringState === "complete") { resolve(); return; }
-            const t = setTimeout(resolve, 5000);
-            pc.onicegatheringstatechange = () => {
-              if (pc.iceGatheringState === "complete") { clearTimeout(t); resolve(); }
-            };
-          });
+          await waitIceGathering(pc);
 
           if (cancelled) { pc.close(); return; }
 
@@ -186,12 +227,16 @@ function useWhepPlayer(pipelinePlaying, mediamtxUrl) {
           if (!resp.ok) {
             pc.close();
             pcRef.current = null;
-            // 404 means MediaMTX has no publisher yet — retry
+            // MediaMTX may have no publisher yet (404) — retry.
             if (i < 11) { await new Promise(r => setTimeout(r, 2000)); continue; }
             setPlayerState("error");
             setPlayerError(`WHEP error ${resp.status}`);
             return;
           }
+
+          // Remember the WHEP resource so we can DELETE it on teardown.
+          const loc = resp.headers.get("Location");
+          if (loc) { try { resourceRef.current = new URL(loc, whepUrl).href; } catch { resourceRef.current = loc; } }
 
           const answerSdp = await resp.text();
           await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
@@ -206,7 +251,7 @@ function useWhepPlayer(pipelinePlaying, mediamtxUrl) {
       }
     };
 
-    // Give GStreamer a moment to announce to MediaMTX before the first WHEP attempt
+    // Give the pipeline a moment to come up before the first WHEP attempt
     const t = setTimeout(connect, 1500);
     return () => {
       cancelled = true;
@@ -214,7 +259,7 @@ function useWhepPlayer(pipelinePlaying, mediamtxUrl) {
       cleanup();
       setPlayerState("idle");
     };
-  }, [pipelinePlaying, mediamtxUrl, cleanup]);
+  }, [pipelinePlaying, whepUrl, serverOffers, cleanup]);
 
   return { videoRef, playerState, playerError, muted, toggleMute };
 }
@@ -229,10 +274,19 @@ export default function App() {
   const [flowsLoading, setFlowsLoading]     = useState(false);
   const [videoFlowUuid, setVideoFlowUuid]   = useState("none");
   const [audioFlowUuid, setAudioFlowUuid]   = useState("none");
+  const [encoder, setEncoder]               = useState({ tune: 4, speed_preset: 2, bitrate: 10000, key_int_max: 30, intra_refresh: false });
   const [status, setStatus]                 = useState(null);
   const [starting, setStarting]             = useState(false);
+  const [useMediamtx, setUseMediamtx]       = useState(true);
 
   const running = status?.running === true;
+
+  // Intra-refresh is driven by the delivery mode (not user-facing): the Direct path
+  // can carry it (the real low-latency stutter fix); the MediaMTX relay cannot.
+  const handleModeChange = (mediamtx) => {
+    setUseMediamtx(mediamtx);
+    setEncoder(e => ({ ...e, intra_refresh: !mediamtx }));
+  };
 
   // Fetch config + cached domains on mount
   useEffect(() => {
@@ -249,6 +303,10 @@ export default function App() {
     fetch(`${API}/domains`)
       .then(r => r.json())
       .then(d => { if (Array.isArray(d)) setDomains(d); })
+      .catch(() => {});
+    fetch(`${API}/encoder-defaults`)
+      .then(r => r.json())
+      .then(d => { if (d && typeof d === "object") setEncoder(e => ({ ...e, ...d })); })
       .catch(() => {});
   }, []);
 
@@ -287,6 +345,8 @@ export default function App() {
 
   const refreshFlows = () => { if (selectedDomain) loadFlows(selectedDomain); };
 
+  const setEnc = (key, value) => setEncoder(e => ({ ...e, [key]: value }));
+
   const handleStart = async () => {
     setStarting(true);
     try {
@@ -297,6 +357,8 @@ export default function App() {
           domain_path:     selectedDomain,
           video_flow_uuid: videoFlowUuid !== "none" ? videoFlowUuid : null,
           audio_flow_uuid: audioFlowUuid !== "none" ? audioFlowUuid : null,
+          encoder:         videoFlowUuid !== "none" ? encoder : null,
+          use_mediamtx:    useMediamtx,
         }),
       });
       setStatus(await r.json());
@@ -315,7 +377,16 @@ export default function App() {
   const audioFlows = flows.filter(isAudioFlow);
   const canStart   = !running && !starting && !!selectedDomain && (videoFlowUuid !== "none" || audioFlowUuid !== "none");
 
-  const { videoRef, playerState, playerError, muted, toggleMute } = useWhepPlayer(running, mediamtxUrl);
+  // In Direct mode the browser plays straight from this app's own WHEP server
+  // (same origin); in MediaMTX mode it plays from the MediaMTX WHEP endpoint.
+  const directMode = status?.use_mediamtx === false;
+  const whepUrl = !running
+    ? null
+    : directMode
+      ? `${window.location.origin}/whep`
+      : (mediamtxUrl ? `${mediamtxUrl}/mxl2webrtc/whep` : null);
+
+  const { videoRef, playerState, playerError, muted, toggleMute } = useWhepPlayer(running, whepUrl, directMode);
 
   return (
     <div>
@@ -335,6 +406,24 @@ export default function App() {
         <div style={S.sectionTitle}>1 — Setup</div>
 
         <div style={disabledOverlay(running)}>
+          {/* Delivery mode */}
+          <div style={{ marginBottom: "0.75rem" }}>
+            <label style={{ ...S.label, display: "flex", alignItems: "center", gap: "0.5rem", cursor: running ? "default" : "pointer" }}>
+              <input
+                type="checkbox"
+                checked={useMediamtx}
+                onChange={e => handleModeChange(e.target.checked)}
+                disabled={running}
+              />
+              Use MediaMTX relay
+            </label>
+            <p style={{ color: "#666", fontSize: "0.72rem", margin: "0.3rem 0 0" }}>
+              {useMediamtx
+                ? "Relay via MediaMTX — most compatible; cannot use intra-refresh."
+                : "Direct WHEP from this app — lowest latency, enables intra-refresh, multi-viewer. Needs the UDP/ICE Docker setup (see ai_instructions.md)."}
+            </p>
+          </div>
+
           {/* Domain row */}
           <div style={{ ...S.row, marginBottom: "0.75rem" }}>
             <div style={S.col}>
@@ -408,6 +497,68 @@ export default function App() {
               </button>
             </div>
           </div>
+
+          {/* H.264 encoder settings — only relevant when a video flow is selected */}
+          {videoFlowUuid !== "none" && (
+            <div style={{ marginTop: "0.25rem" }}>
+              <div style={{ ...S.label, color: "#888", marginBottom: "0.5rem" }}>
+                H.264 Encoder (x264enc)
+              </div>
+              <div style={S.row}>
+                <div style={S.col}>
+                  <label style={S.label}>Tune</label>
+                  <select
+                    style={S.select}
+                    value={encoder.tune}
+                    onChange={e => setEnc("tune", Number(e.target.value))}
+                    disabled={running}
+                  >
+                    <option value={4}>Zero-latency (4)</option>
+                    <option value={6}>Zero-latency + Fast-decode (6)</option>
+                    <option value={2}>Fast-decode (2)</option>
+                    <option value={0}>None (0)</option>
+                  </select>
+                </div>
+                <div style={S.col}>
+                  <label style={S.label}>Speed preset</label>
+                  <select
+                    style={S.select}
+                    value={encoder.speed_preset}
+                    onChange={e => setEnc("speed_preset", Number(e.target.value))}
+                    disabled={running}
+                  >
+                    <option value={1}>Ultrafast (1)</option>
+                    <option value={2}>Superfast (2)</option>
+                    <option value={3}>Veryfast (3)</option>
+                    <option value={4}>Faster (4)</option>
+                    <option value={5}>Fast (5)</option>
+                  </select>
+                </div>
+                <div style={S.col}>
+                  <label style={S.label}>Bitrate (kbit/s)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    style={S.select}
+                    value={encoder.bitrate}
+                    onChange={e => setEnc("bitrate", Number(e.target.value))}
+                    disabled={running}
+                  />
+                </div>
+                <div style={S.col}>
+                  <label style={S.label}>Key-int max (frames)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    style={S.select}
+                    value={encoder.key_int_max}
+                    onChange={e => setEnc("key_int_max", Number(e.target.value))}
+                    disabled={running}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Start / Stop button — outside disabled overlay so it always works */}
@@ -503,7 +654,7 @@ export default function App() {
               {!running
                 ? "Start the pipeline to view the stream"
                 : playerState === "connecting"
-                ? "Connecting to MediaMTX…"
+                ? (directMode ? "Connecting…" : "Connecting to MediaMTX…")
                 : playerState === "error"
                 ? `Player error: ${playerError}`
                 : "Waiting for stream…"}
@@ -512,7 +663,9 @@ export default function App() {
         </div>
 
         <p style={{ color: "#444", fontSize: "0.72rem", marginTop: "0.4rem" }}>
-          Receiving via WHEP · {mediamtxUrl ?? "…"}/mxl2webrtc/whep
+          {directMode
+            ? `Receiving via WHEP (Direct) · ${whepUrl ?? "…"}`
+            : `Receiving via WHEP (MediaMTX) · ${mediamtxUrl ?? "…"}/mxl2webrtc/whep`}
         </p>
       </div>
 

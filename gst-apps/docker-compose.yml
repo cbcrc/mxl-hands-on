@@ -132,6 +132,18 @@ services:
     hostname: mediamtx
     network_mode: host
 
+  # ── mxl2webrtc ────────────────────────────────────────────────────────────
+  # Two WebRTC delivery modes, chosen at runtime from the UI ("Use MediaMTX relay"):
+  #   • MediaMTX relay  – publishes via WHIP to the (host-networked) mediamtx service.
+  #                       Encodes once and fans out to many viewers. Works everywhere.
+  #   • Direct WHEP     – the app is its own WebRTC server (lowest latency, intra-refresh),
+  #                       best for a few viewers (it encodes once per viewer).
+  #
+  # This single bridged config covers every use:
+  #   - MediaMTX mode needs nothing here — the browser talks to the mediamtx service.
+  #   - Direct mode publishes the ICE UDP range 1:1 (WEBRTC_ICE_PORT_MIN..MAX); the host
+  #     candidate address is rewritten per request to the host the browser connected to,
+  #     so it works for both local AND remote viewers, on any platform — no override needed.
   mxl2webrtc:
     platform: linux/amd64
     build:
@@ -142,7 +154,8 @@ services:
     hostname: mxl2webrtc
     domainname: local
     ports:
-      - "9601:9600"   # FastAPI serves both API and React frontend; change host port freely
+      - "9601:9600"                  # FastAPI serves both API and React frontend
+      - "8200-8210:8200-8210/udp"    # Direct-mode WebRTC ICE (one UDP port per viewer; 8189 is taken by mediamtx)
     volumes:
       - type: volume
         source: mxl-domain
@@ -153,6 +166,9 @@ services:
       # extra_hosts is set; mediamtx binds directly on the host via network_mode: host
       - MEDIAMTX_WHIP_URL=http://host.docker.internal:8889/mxl2webrtc/whip
       - MEDIAMTX_WEBRTC_URL=http://localhost:8889
+      # Direct-mode ICE: pin the UDP ports to the published range above (one per viewer).
+      - WEBRTC_ICE_PORT_MIN=8200
+      - WEBRTC_ICE_PORT_MAX=8210
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

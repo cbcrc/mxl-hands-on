@@ -144,20 +144,20 @@ gst-launch-1.0 \
        ! wb.sink_%u
 ```
 
-> **WHIP signalling:** the SDP offer/answer exchange with MediaMTX is handled entirely by
-> the Python code (HTTP POST to `MEDIAMTX_WHIP_URL`) and cannot be expressed in a
-> `gst-launch` command. `bundle-policy=3` is `MAX_BUNDLE`. `tune=4` is the `zerolatency`
-> bitmask for x264enc. `speed-preset=2` is `ultrafast`.
+> **Signalling:** the SDP offer/answer exchange is handled entirely by the Python code and
+> cannot be expressed in a `gst-launch` command (see "Delivery modes" below).
+> `bundle-policy=3` is `MAX_BUNDLE`. `tune=4` is the `zerolatency` bitmask for x264enc.
+> `speed-preset=2` is `superfast`. In **Direct** mode the encoder is also given
+> `intra-refresh=true` (no big periodic IDR keyframes — smoother low latency).
 
 ### Explanation
 
-Transcodes two MXL flows (video + audio), packages them as RTP, and publishes to a
-**MediaMTX** server via **WHIP** (WebRTC HTTP Ingest Protocol). Browsers watch the stream
-from MediaMTX via **WHEP** (WebRTC HTTP Egress Protocol).
+Transcodes two MXL flows (video + audio) and packages them as RTP for WebRTC. The same
+encode chain feeds one of **two delivery modes**, selected at start time (`use_mediamtx`).
 
 The **video branch** reads the MXL video flow as v210 and converts it to a format
-`x264enc` accepts.  The encoder is tuned for minimum latency (`zerolatency`) and maximum
-speed (`ultrafast`, `speed-preset=2`), with a keyframe every 30 frames.  `h264parse`
+`x264enc` accepts.  The encoder is tuned for minimum latency (`zerolatency`) and high
+speed (`superfast`, `speed-preset=2`), with a keyframe every 30 frames.  `h264parse`
 normalises the bitstream, and `rtph264pay` wraps it in RTP at payload type 96.
 
 The **audio branch** reads the MXL audio, converts and resamples it, downmixes to stereo
@@ -168,19 +168,42 @@ directly after `mxlsrc` causes an "Internal data stream error" when the source h
 than 2 channels.
 
 Both RTP streams are fed into **`webrtcbin`** with `bundle-policy=MAX_BUNDLE` (single
-transport for both media). No STUN server is configured — the app runs within a local
-Docker network where ICE host candidates are sufficient.
+transport for both media). No STUN server is configured — host ICE candidates are
+sufficient. In **Direct** mode the host candidate's address is rewritten to the host the
+browser connected to (the `POST /whep` `Host` header), so one bridged compose serves both
+local and remote viewers; in **MediaMTX** mode the host-networked `mediamtx` service
+handles browser reachability.
 
-**WHIP handshake** (Python-managed, not in the GStreamer pipeline):
+#### Mode A — MediaMTX relay (`use_mediamtx=true`, default)
+
+A single pipeline pushes to a **MediaMTX** server via **WHIP** (WebRTC HTTP Ingest); the
+browser plays from MediaMTX via **WHEP** (WebRTC HTTP Egress). The handshake is
+Python-managed:
 1. `webrtcbin` fires `on-negotiation-needed` → Python calls `create-offer`.
 2. Python sets the local description and waits up to 10 s for ICE gathering to complete.
-3. The fully-gathered SDP offer is HTTP POST'd to the MediaMTX WHIP endpoint
+3. The gathered SDP offer is HTTP POST'd to the MediaMTX WHIP endpoint
    (`MEDIAMTX_WHIP_URL`, default `http://localhost:8889/mxl2webrtc/whip`).
 4. MediaMTX responds with a 201 and an SDP answer; Python calls `set-remote-description`.
 
-**MediaMTX** acts as a WebRTC relay: it ingests the stream via WHIP and re-exposes it
-for browsers via WHEP. The browser navigates to the MediaMTX WHEP URL and receives the
-H.264 + Opus stream directly.
+Most compatible (works on Docker Desktop), but MediaMTX forwards RTP without requesting
+keyframes, so it **cannot carry intra-refresh** — hence intra-refresh is off in this mode.
+
+#### Mode B — Direct WHEP (`use_mediamtx=false`)
+
+No MediaMTX: the FastAPI app is its own signalling + media server, and **each viewer gets
+its own complete `mxlsrc → encode → webrtcbin` pipeline** (built NULL→PLAYING as a unit,
+the same lifecycle as Mode A — adding a `webrtcbin` to an already-running pipeline does not
+initialise its ICE agent correctly). Signalling is **server-offers**:
+1. `POST /whep` builds the pipeline; `webrtcbin` creates the **offer** (via
+   `on-negotiation-needed`, so the offer carries the negotiated H.264/Opus media). The app
+   returns it with a `Location: /whep/{id}`.
+2. The browser sets it as its remote, creates an **answer**, and `POST`s it to the Location;
+   the app applies it with `set-remote-description`. `DELETE /whep/{id}` tears the viewer down.
+
+`webrtcbin` as the **offerer** reliably negotiates H.264; as a sendonly *answerer* it
+mis-negotiates (`a=inactive` / wrong codec), which is why the browser answers here. This
+path keeps the browser↔webrtcbin PLI loop intact, so **intra-refresh works**, latency is
+lowest (no relay hop), and multiple simultaneous viewers are supported.
 
 ### Diagram
 
@@ -190,7 +213,7 @@ flowchart LR
         vsrc["mxlsrc\nvideo-flow-id"]
         vcaps["capsfilter\nformat=v210"]
         vconv["videoconvert"]
-        venc["x264enc\nzerolatency, ultrafast\nkeyframe every 30"]
+        venc["x264enc\nzerolatency, superfast\nkeyframe every 30\n(+intra-refresh in Direct)"]
         vparse["h264parse"]
         vpay["rtph264pay\npt=96"]
         vqueue["queue"]
@@ -213,9 +236,11 @@ flowchart LR
     vqueue -->|"sink_%u (video)"| wb
     aqueue -->|"sink_%u (audio)"| wb
 
-    wb -- "WHIP\nSDP offer (HTTP POST)" --> mediamtx["MediaMTX\n(WHIP ingest)"]
+    wb -- "Mode A: WHIP\nofferer (HTTP POST)" --> mediamtx["MediaMTX\n(WHIP ingest)"]
     mediamtx -- "SDP answer (201)" --> wb
     mediamtx -->|"WHEP egress"| browser["Browser\n(WebRTC consumer)"]
+
+    wb -. "Mode B: Direct WHEP\nserver offers, browser answers\n(/whep, per-viewer pipeline)" .-> browser
 ```
 
 ---

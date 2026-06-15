@@ -12,6 +12,26 @@ The application runs as a **single service on one port** inside Docker:
 
 This single-port design means the browser always uses the **same origin** for both the UI and the API, so no port number is hardcoded in the frontend JavaScript. The docker-compose host-port mapping (e.g. `9601:9600`) can be changed freely without rebuilding the image.
 
+## Delivery modes (MediaMTX relay vs Direct WHEP)
+
+The pipeline supports two WebRTC delivery modes, chosen per start via `use_mediamtx` (UI checkbox "Use MediaMTX relay"). The `GstReceiver.start(...)` signature is `start(domain_path, video_flow_uuid, audio_flow_uuid, enc_settings=None, use_mediamtx=True)`.
+
+**MediaMTX relay (`use_mediamtx=True`, default):** `mxlsrc → encode → webrtcbin` pushes via WHIP to the `mediamtx` service (the original design). Most compatible across environments, but **cannot carry intra-refresh** (see the intra-refresh note). The browser plays from `<mediamtx_webrtc_url>/mxl2webrtc/whep`.
+
+**Direct WHEP (`use_mediamtx=False`):** the FastAPI app is its own signalling + media server — no MediaMTX. `start()` does **not** build a media pipeline; it just arms the mode and stores the flow/encoder config. Signalling is **server-offers** (a 2-step exchange, since we control both ends): `POST /whep` builds a **complete, independent per-viewer pipeline** `mxlsrc → encode → webrtcbin` (reusing `_add_video_branch`/`_add_audio_branch`), brings it NULL→PLAYING as a unit, has **webrtcbin create the OFFER** (wait for PLAYING so the ICE agent exists → pin ICE ports → create-offer → set-local-description → wait for ICE gathering → rewrite candidates), and returns it `201` + `Location: /whep/{id}`. The browser sets that as its remote, creates an **answer**, and `POST`s it to the Location; the backend applies it via `set-remote-description`. `DELETE /whep/{id}` sets that viewer's pipeline to NULL.
+
+⚠ **Two non-obvious design choices (both learned from failures):**
+- **Server offers, browser answers** — *not* standard WHEP (browser-offers). A `webrtcbin` acting as a sendonly **answerer** mis-negotiates: it returns `a=inactive` and the wrong codec (e.g. VP8), so no media flows. As the **offerer** webrtcbin reliably negotiates H264 (the same role as MediaMTX mode), and browsers are robust answerers.
+- **A full pipeline per viewer, not a shared `tee`** — adding a `webrtcbin` to an already-PLAYING pipeline does not initialise its ICE agent reliably (it asserts `GST_IS_WEBRTC_ICE`); a fresh pipeline NULL→PLAYING as a unit avoids it. Multiple `mxlsrc` reading the same flow is fine (MXL is multi-reader); cost is one decode+encode per viewer.
+
+The signalling calls run in a FastAPI **threadpool** (`run_in_threadpool`) so the blocking GStreamer work never freezes the event loop. Benefits: lowest latency, **intra-refresh works**, multiple simultaneous viewers.
+
+**Direct-mode ICE reachability** (so the browser can reach each `webrtcbin`'s UDP candidate) — **one bridged config works for both local and remote viewers, on any platform**, with no per-environment override:
+- `WEBRTC_ICE_PORT_MIN` / `WEBRTC_ICE_PORT_MAX` (env, read in `gst_mxl2webrtc.py`) — pin webrtcbin's ICE UDP ports to a range (set on the `webrtcbin`/`ice-agent` `min-rtp-port`/`max-rtp-port`). With `max-bundle` + rtcp-mux each viewer uses **one** UDP port, so the range width = the max concurrent viewers. Publish the same range 1:1 in Docker (`8200-8210/udp`; 8189 is avoided because the host-networked `mediamtx` service binds it).
+- **Per-request host-candidate rewrite** — `create_session_offer(public_host)` takes the host the browser connected to (`POST /whep` `Host` header, minus the port) and `_rewrite_candidates` substitutes it into the offer's `typ host` ICE candidates (and the `c=` line). So the candidate is `localhost` for a local viewer (incl. Docker Desktop) or the host's LAN IP for a remote viewer — automatically, no `WEBRTC_PUBLIC_IP` and no host networking.
+
+**Deployment:** a single `docker-compose.yml` (bridged) covers every case — `docker compose up -d mediamtx mxl2webrtc`, then open `http://<host>:9601` from the host or any machine that can reach it. MediaMTX mode needs no `mxl2webrtc` networking (the browser talks to the host-networked `mediamtx` service). Direct mode re-encodes per viewer, so for **many** viewers use MediaMTX relay mode.
+
 ## Environment & File Specifications
 - **MXL src documentation:** `./dmf-mxl/rust/gst-mxl-rs/readme.md` — authoritative reference for `mxlsrc` properties.
 - **mxlsrc properties:** Use `video-flow-id` for video sources and `audio-flow-id` for audio sources (not `flow-id`). Set exactly one flow-id property per `mxlsrc` instance. `domain` is always required.
@@ -33,11 +53,18 @@ The UI is divided into two distinct sections: **Setup** and **Operation**.
 
 This section is used to configure and select the MXL input flows before starting the GStreamer pipeline. The pipeline does **not** start until the user clicks the **Start** button. All controls in this section are disabled while the pipeline is running.
 
+0. **Use MediaMTX relay (delivery-mode checkbox):** Selects how the stream reaches the browser (see "Delivery modes" below). Checked = relay via MediaMTX (most compatible). Unchecked = **Direct WHEP** served by this app (lowest latency, enables intra-refresh, supports multiple viewers). Intra-refresh is **not** user-facing — it is driven automatically by this checkbox (on in Direct mode, off in MediaMTX mode), so it can never be enabled in a mode that can't carry it. Sent as `use_mediamtx` in the start payload.
 1. **MXL Domain Selector:** Scan `/mxl-domain` recursively for `domain_def.json` files. Read the `id` field for the domain UUID, the `label` and `description` fields, and use the containing directory path as the domain path. Provide a dropdown to select the target MXL domain — **each option displays the domain `label`** (falling back to the directory path when the label is absent) instead of the raw UUID. Changing the domain resets both flow selectors.
 2. **Video Flow Selector:** A dropdown populated from the flow list for the selected domain. Each option displays the first 8 characters of the UUID, description, label, and group hint. Includes a **"None"** option at the top — selecting "None" means no video input (audio-only mode). **Only show flows that have "video" (case-insensitive) after `:` in their `flow_grouphint`.**
 3. **Audio Flow Selector:** A dropdown populated from the same domain flow list, following the same display format. Includes a **"None"** option at the top — selecting "None" means no audio input (video-only mode). **Only show flows that have "audio" (case-insensitive) after `:` in their `flow_grouphint`.**
 4. **Refresh Flow List button** — manually triggers `scan_domain` for the selected domain.
-5. **Start / Stop button** — starts the GStreamer pipeline with the selected flows. At least one flow (video or audio) must be selected for the Start button to be enabled. Changes to a **Stop** button while the pipeline is running.
+5. **H.264 Encoder Settings:** Shown only when a video flow is selected (the settings apply to the `x264enc` video branch). Pre-populated from `GET /encoder-defaults` and sent with the pipeline start request. Disabled while the pipeline is running. Exposes four `x264enc` properties:
+   - **Tune** (`tune`): dropdown over the `x264enc` `GstX264EncTune` flag bits — `Zero-latency (4)` (default) / `Zero-latency + Fast-decode (6)` / `Fast-decode (2)` / `None (0)`. The values are flag bits (`stillimage=1`, `fastdecode=2`, `zerolatency=4`) and may be OR-combined; `6` is `zerolatency | fastdecode`.
+   - **Speed preset** (`speed-preset`): dropdown — `Ultrafast (1)` / `Superfast (2)` (default) / `Veryfast (3)` / `Faster (4)` / `Fast (5)`. The full `x264enc` enum runs `0`–`10` (slower = better compression, more CPU); only the real-time-safe fast end is exposed so software encoding keeps up with the live source.
+   - **Bitrate** (`bitrate`): numeric input, in kbit/sec (default `10000`).
+   - **Key-int max** (`key-int-max`): numeric input, max frames between keyframes (default `30`).
+   - **Intra-refresh** (`intra-refresh`): **not a UI control** — set automatically from the delivery mode (on in Direct, off in MediaMTX). Uses Periodic Intra Refresh instead of IDR keyframes, removing the per-GOP bitrate spike; this is the real low-latency fix for the zero-latency stutter and is why Direct mode is smooth. ⚠ **Cannot work through the MediaMTX relay** (verified against MediaMTX source: it forwards RTP straight through, issues no PLI/FIR keyframe requests, and has no keyframe config); with MediaMTX + intra-refresh there are no IDRs after the first frame, so a mid-stream viewer never gets a random-access point and the player stays black ("LIVE"). Driving it from the mode (rather than exposing a checkbox) prevents that footgun.
+6. **Start / Stop button** — starts the GStreamer pipeline with the selected flows. At least one flow (video or audio) must be selected for the Start button to be enabled. Changes to a **Stop** button while the pipeline is running.
 
 > ℹ️ Both flow selectors are populated using the same domain-scanning and parsing logic as `mxl-info-gui` — calling `mxl-info -d <domain_path>` and parsing the output. Only active flows (those reported by `mxl-info`) are shown.
 
@@ -182,7 +209,7 @@ MEDIAMTX_WEBRTC  = os.environ.get("MEDIAMTX_WEBRTC_URL", "http://localhost:8889"
 
 The pipeline is built programmatically (not via `parse_launch`) using `webrtcbin` with a Python WHIP handshake. This avoids needing `whipsink` from gst-plugins-rs.
 
-- Do **not** start the pipeline at `__init__` — only when `start(domain_path, video_flow_uuid, audio_flow_uuid)` is called.
+- Do **not** start the pipeline at `__init__` — only when `start(domain_path, video_flow_uuid, audio_flow_uuid, enc_settings=None)` is called. `enc_settings` is an optional dict of `x264enc` overrides (`tune`, `speed_preset`, `bitrate`, `key_int_max`, `intra_refresh`); it is merged over the module-level `DEFAULT_ENCODER_SETTINGS` so a partial dict still works.
 - Imports required:
   ```python
   gi.require_version("Gst", "1.0")
@@ -193,7 +220,7 @@ The pipeline is built programmatically (not via `parse_launch`) using `webrtcbin
 - Run a `GLib.MainLoop` in a daemon thread so GStreamer bus messages and signals are dispatched.
 - Pipeline construction:
   1. Create `webrtcbin` with `bundle-policy = MAX_BUNDLE`.
-  2. For video: chain `mxlsrc(video-flow-id) → capsfilter(v210) → videoconvert → x264enc(zerolatency/ultrafast/key-int-max=30) → h264parse → rtph264pay(pt=96) → queue → webrtcbin sink pad`.
+  2. For video: chain `mxlsrc(video-flow-id) → capsfilter(v210) → videoconvert → x264enc → h264parse → rtph264pay(pt=96) → queue → webrtcbin sink pad`. The `x264enc` `tune`, `speed-preset`, `bitrate`, `key-int-max`, and `intra-refresh` properties are set from the merged `enc_settings` (defaults: zerolatency / superfast / 10000 kbit/s / 30 frames / intra-refresh off).
   3. For audio: chain `mxlsrc(audio-flow-id) → audioconvert → audioresample → capsfilter(layout=interleaved,channels=2) → opusenc → rtpopuspay(pt=97) → queue → webrtcbin sink pad`. `audioconvert` handles format conversion and channel downmixing; `audioresample` ensures Opus-compatible sample rates (8/12/16/24/48 kHz). The `capsfilter` **must** be placed after both converters — placing it directly after `mxlsrc` causes "Internal data stream error" when the source has more than 2 channels.
   4. Use `webrtcbin.request_pad_simple("sink_%u")` to obtain sink pads; link queue src pads to them.
 
@@ -213,12 +240,16 @@ The pipeline is built programmatically (not via `parse_launch`) using `webrtcbin
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET`  | `/config` | Return `{"mediamtx_webrtc_url": MEDIAMTX_WEBRTC}` for frontend use |
+| `GET`  | `/encoder-defaults` | Return the default `x264enc` settings (`tune`, `speed_preset`, `bitrate`, `key_int_max`, `intra_refresh`) used to pre-populate the Setup UI |
 | `POST` | `/get-domains` | Trigger a fresh domain scan; return updated domain list |
 | `GET`  | `/domains` | Return the cached domain list (each entry: `id`, `label`, `description`, `path`) |
 | `GET`  | `/scan-domain?domain_path=<path>` | Run `mxl-info -d` and return parsed flow list |
-| `POST` | `/pipeline/start` | Accept `domain_path`, `video_flow_uuid` (nullable), `audio_flow_uuid` (nullable); build and start pipeline |
+| `POST` | `/pipeline/start` | Accept `domain_path`, `video_flow_uuid` (nullable), `audio_flow_uuid` (nullable), `encoder` (nullable `{tune, speed_preset, bitrate, key_int_max, intra_refresh}`), and `use_mediamtx` (bool, default `true`); build and start pipeline. When `encoder` is omitted/null, `DEFAULT_ENCODER_SETTINGS` are used |
 | `POST` | `/pipeline/stop` | Stop and tear down the pipeline |
-| `GET`  | `/pipeline/status` | Return `{"running": bool, "video_flow_uuid": str\|null, "audio_flow_uuid": str\|null, "mode": "video+audio"\|"video"\|"audio"\|"stopped", "error": str\|null}` |
+| `GET`  | `/pipeline/status` | Return `{"running": bool, "video_flow_uuid": str\|null, "audio_flow_uuid": str\|null, "mode": "video+audio"\|"video"\|"audio"\|"stopped", "use_mediamtx": bool, "viewers": int, "error": str\|null, "encoder": {tune, speed_preset, bitrate, key_int_max, intra_refresh}}` |
+| `POST` | `/whep` | **Direct mode only, step 1 (server-offers).** Builds a per-viewer pipeline and returns **webrtcbin's SDP offer** (`application/sdp`), `201`, with `Location: /whep/{id}` |
+| `POST` | `/whep/{session_id}` | **Direct mode only, step 2.** Body is the browser's SDP **answer**; applies it to the session. Returns `204` |
+| `DELETE` | `/whep/{session_id}` | **Direct mode only.** Tear down a WHEP viewer (browser sends this on stop); returns `204` |
 
 - Serve the React static files as the last statement:
   ```python
@@ -239,6 +270,7 @@ Initialize a React + Vite project inside the `frontend/` directory targeting Vit
 - MXL domain dropdown (populated from `GET /domains`; refresh button calls `POST /get-domains`). Each option displays the domain `label` (fallback to path) rather than the UUID.
 - Video flow dropdown (populated from `GET /scan-domain?domain_path=...` when domain changes). First option is **"None — video disabled"**. Only include flows where the part after `:` in `flow_grouphint` contains "video" (case-insensitive).
 - Audio flow dropdown (same source as video). First option is **"None — audio disabled"**. Only include flows where the part after `:` in `flow_grouphint` contains "audio" (case-insensitive).
+- H.264 encoder controls — rendered only when a video flow is selected. State is initialised from `GET /encoder-defaults` on mount and sent as the `encoder` field of the `/pipeline/start` body (`null` when no video flow is selected). `tune` and `speed_preset` are dropdowns; `bitrate` and `key_int_max` are numeric inputs. All are disabled while running.
 - Start/Stop button — disabled when both flow selectors are "None". Label changes to "Stop" while running.
 - Always guard API responses with `Array.isArray(d) ? d : []` before calling `.map()` on flow lists.
 
@@ -264,6 +296,7 @@ Initialize a React + Vite project inside the `frontend/` directory targeting Vit
 ```js
 proxy: {
   '/config': 'http://localhost:9600',
+  '/encoder-defaults': 'http://localhost:9600',
   '/domains': 'http://localhost:9600',
   '/get-domains': 'http://localhost:9600',
   '/scan-domain': 'http://localhost:9600',

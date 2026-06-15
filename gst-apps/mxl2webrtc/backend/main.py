@@ -5,13 +5,17 @@ FastAPI backend for the MXL-to-WebRTC Gateway.
 
 Endpoints
 ---------
-GET  /config              – return MediaMTX WebRTC base URL for the browser
-POST /get-domains         – scan /mxl-domain for domain_def.json files
-GET  /domains             – return cached domain list
-GET  /scan-domain         – list MXL flows in a domain  ?domain_path=<path>
-POST /pipeline/start      – build and start the GStreamer pipeline
-POST /pipeline/stop       – stop the pipeline
-GET  /pipeline/status     – return pipeline state and active flow UUIDs
+GET    /config            – return MediaMTX WebRTC base URL for the browser
+GET    /encoder-defaults   – return default x264enc settings for the Setup UI
+POST   /get-domains        – scan /mxl-domain for domain_def.json files
+GET    /domains            – return cached domain list
+GET    /scan-domain        – list MXL flows in a domain  ?domain_path=<path>
+POST   /pipeline/start     – build and start the GStreamer pipeline
+POST   /pipeline/stop      – stop the pipeline
+GET    /pipeline/status    – return pipeline state and active flow UUIDs
+POST   /whep               – Direct mode step 1: return webrtcbin's SDP offer (+ Location)
+POST   /whep/{session_id}   – Direct mode step 2: apply the browser's SDP answer
+DELETE /whep/{session_id}  – Direct mode: tear down a WHEP viewer
 """
 
 from __future__ import annotations
@@ -24,12 +28,13 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from backend.gst_mxl2webrtc import GstReceiver
+from backend.gst_mxl2webrtc import DEFAULT_ENCODER_SETTINGS, GstReceiver
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,10 +66,20 @@ _receiver = GstReceiver()
 
 # ── Request models ─────────────────────────────────────────────────────────────
 
+class EncoderSettings(BaseModel):
+    tune:          int  = DEFAULT_ENCODER_SETTINGS["tune"]
+    speed_preset:  int  = DEFAULT_ENCODER_SETTINGS["speed_preset"]
+    bitrate:       int  = DEFAULT_ENCODER_SETTINGS["bitrate"]
+    key_int_max:   int  = DEFAULT_ENCODER_SETTINGS["key_int_max"]
+    intra_refresh: bool = DEFAULT_ENCODER_SETTINGS["intra_refresh"]
+
+
 class StartConfig(BaseModel):
     domain_path: str
     video_flow_uuid: Optional[str] = None
     audio_flow_uuid: Optional[str] = None
+    encoder: Optional[EncoderSettings] = None
+    use_mediamtx: bool = True
 
 
 # ── Domain / flow scanning helpers (same logic as mxl-info-gui) ───────────────
@@ -177,6 +192,12 @@ async def api_config() -> dict:
     return {"mediamtx_webrtc_url": MEDIAMTX_WEBRTC}
 
 
+@app.get("/encoder-defaults")
+async def api_encoder_defaults() -> dict:
+    """Default x264enc settings used to pre-populate the Setup UI."""
+    return DEFAULT_ENCODER_SETTINGS
+
+
 @app.post("/get-domains")
 async def api_get_domains() -> list[dict]:
     global _domains
@@ -200,8 +221,9 @@ async def api_scan_domain(
 async def api_pipeline_start(cfg: StartConfig) -> dict:
     if not cfg.video_flow_uuid and not cfg.audio_flow_uuid:
         raise HTTPException(status_code=400, detail="At least one flow UUID (video or audio) must be provided")
+    enc = cfg.encoder.model_dump() if cfg.encoder else None
     try:
-        _receiver.start(cfg.domain_path, cfg.video_flow_uuid, cfg.audio_flow_uuid)
+        _receiver.start(cfg.domain_path, cfg.video_flow_uuid, cfg.audio_flow_uuid, enc, cfg.use_mediamtx)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     return _receiver.get_status()
@@ -216,6 +238,47 @@ async def api_pipeline_stop() -> dict:
 @app.get("/pipeline/status")
 async def api_pipeline_status() -> dict:
     return _receiver.get_status()
+
+
+# ── Direct-mode WHEP server (browser plays straight from this process) ─────────
+
+@app.post("/whep")
+async def api_whep(request: Request) -> Response:
+    """Direct mode, step 1 (server-offers): build a per-viewer pipeline and return
+    webrtcbin's SDP *offer* (application/sdp), 201, with a Location for the answer/DELETE."""
+    # The host the browser connected to (drop the port) — substituted into the offer's ICE
+    # host candidates so the address is reachable for both local and remote viewers.
+    public_host = (request.headers.get("host") or "").rsplit(":", 1)[0]
+    try:
+        # Offload the blocking GStreamer negotiation so the event loop stays responsive.
+        session_id, offer = await run_in_threadpool(_receiver.create_session_offer, public_host)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return Response(
+        content=offer,
+        status_code=201,
+        media_type="application/sdp",
+        headers={"Location": f"/whep/{session_id}"},
+    )
+
+
+@app.post("/whep/{session_id}")
+async def api_whep_answer(session_id: str, request: Request) -> Response:
+    """Direct mode, step 2: apply the browser's SDP answer to the session."""
+    answer = (await request.body()).decode()
+    if not answer.strip():
+        raise HTTPException(status_code=400, detail="Empty SDP answer")
+    try:
+        await run_in_threadpool(_receiver.apply_session_answer, session_id, answer)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return Response(status_code=204)
+
+
+@app.delete("/whep/{session_id}")
+async def api_whep_delete(session_id: str) -> Response:
+    await run_in_threadpool(_receiver.remove_whep_session, session_id)
+    return Response(status_code=204)
 
 
 # ── Static frontend (must be last) ────────────────────────────────────────────

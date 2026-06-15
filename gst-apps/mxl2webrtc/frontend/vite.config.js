@@ -6,7 +6,8 @@ export default defineConfig({
   build: { outDir: "dist" },
   server: {
     proxy: {
-      "/config":       "http://localhost:9600",
+      "/config":           "http://localhost:9600",
+      "/encoder-defaults": "http://localhost:9600",
       "/get-domains":  "http://localhost:9600",
       "/domains":      "http://localhost:9600",
       "/scan-domain":  "http://localhost:9600",

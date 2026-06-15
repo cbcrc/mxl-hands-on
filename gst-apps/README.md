@@ -118,27 +118,56 @@ A read-only monitoring tool. Wraps the `mxl-info` CLI command and presents its o
 
 ## 3. MXL to WebRTC
 
-**Images:** `ghcr.io/cbcrc/mxl2webrtc:latest` + `bluenviron/mediamtx:latest`
+**Images:** `ghcr.io/cbcrc/mxl2webrtc:latest` (+ `bluenviron/mediamtx:latest` for relay mode)
 
 Reads one MXL video flow and/or one MXL audio flow and relays them as a low-latency WebRTC stream viewable directly in the browser — no browser plugin required.
 
-**How it works:**
+### Two delivery modes
+
+The UI checkbox **"Use MediaMTX relay"** selects how the stream reaches the browser. The modes differ in latency **and in how they scale with viewer count** — pick by what you need:
+
+| Mode | Encoding | Best for | Intra-refresh |
+|------|----------|----------|---------------|
+| **MediaMTX relay** (ticked, default) | **once** — MediaMTX fans out to every viewer | **many** viewers | no |
+| **Direct WHEP** (unticked) | **once per viewer** (CPU grows with viewers) | a **few**, lowest-latency viewers | yes |
+
+In **both** modes every viewer watches the **same** MXL flow(s) chosen at Start (the app is a relay of one selection, not a per-viewer source picker).
+
+**MediaMTX relay** (checkbox ticked — the default):
 
 ```
 mxlsrc → x264enc → rtph264pay ──┐
-                                 ├─ webrtcbin ─(WHIP)→ MediaMTX ─(WHEP)→ Browser
+                                 ├─ webrtcbin ─(WHIP)→ MediaMTX ─(WHEP)→ N Browsers
 mxlsrc → opusenc → rtpopuspay ──┘
 ```
 
-1. The GStreamer pipeline encodes the MXL flows (H.264 zero-latency + Opus) and publishes to a local [MediaMTX](https://github.com/bluenviron/mediamtx) instance via **WHIP**.
-2. The embedded browser player receives the stream from MediaMTX via **WHEP** and renders it in an HTML5 `<video>` element.
-3. MediaMTX runs with `network_mode: host` so WebRTC ICE candidates reflect the real host IP — required for the browser to connect.
+A **single** pipeline encodes the MXL flows (H.264 + Opus) **once** and pushes to a local [MediaMTX](https://github.com/bluenviron/mediamtx) instance via **WHIP**; MediaMTX acts as the SFU and fans the stream out to every browser via **WHEP** — so CPU does **not** grow with viewer count. This is the path for many viewers. Works everywhere (including Mac/WSL Docker Desktop). Cannot carry intra-refresh, so it keeps regular IDR keyframes.
 
-**Setup panel:** select the MXL domain, then pick a video flow and/or an audio flow from the discovered list. Only flows matching the correct role (video / audio) in their group hint are shown. Supports video+audio, video-only, or audio-only modes.
+**Direct WHEP** (checkbox unticked — lowest latency):
 
-**Operation panel:** shows the active flow UUIDs, pipeline status, and the live WebRTC player with a mute/unmute toggle.
+```
+N Browsers ◀─(WebRTC)─ N × ( webrtcbin ◀─ x264enc / opusenc ◀─ mxlsrc )   (one full pipeline per viewer)
+```
 
-For the full GStreamer pipeline breakdown see [gstreamer-pipeline.md — Section 2](./gstreamer-pipeline.md#6-mxl-to-webrtc-gst_mxl2webrtcpy).
+No MediaMTX: the app is its own signalling + media server, and **each viewer gets its own complete `mxlsrc → encode → webrtcbin` pipeline** — so CPU grows linearly with the viewer count (each opens its own reader on the same MXL flow). In return you get the **lowest latency** (no relay hop) and **intra-refresh** (no big periodic keyframes → smooth low-latency video). Signalling is *server-offers*: the server creates the SDP offer and the browser answers (webrtcbin reliably negotiates H.264 as the offerer). Intra-refresh is enabled automatically in this mode only — so it can never be selected in a mode that can't carry it. Best for one or a few simultaneous viewers.
+
+### Direct-mode networking — one config, local or remote (MediaMTX mode needs none of this)
+
+In Direct mode the browser connects straight to the `mxl2webrtc` container's `webrtcbin`, so its ICE **UDP** port must be reachable. The base `docker-compose.yml` already handles this and **the same config works whether the viewer is on this machine or another**: the service publishes the UDP range `8200-8210/udp` 1:1, and the backend rewrites the offer's ICE host candidate to **whatever host the browser opened the app on** — `localhost` for a local viewer (incl. Docker Desktop), the host's LAN IP for a remote viewer. No override file, no per-host env.
+
+```sh
+docker compose up -d mediamtx mxl2webrtc
+```
+
+Then open `http://<host>:9601` from any machine that can reach the Docker host (where `<host>` is `localhost` on the host itself, or the host's IP/name from another machine).
+
+> In **MediaMTX mode** you don't touch `mxl2webrtc` networking at all — the browser connects to the separate `mediamtx` service (always `network_mode: host`), and `mxl2webrtc` only WHIP-pushes to it. For **many** viewers, use MediaMTX relay mode (it encodes once); Direct mode re-encodes per viewer, so keep it to a few.
+
+**Setup panel:** select the MXL domain, then pick a video flow and/or an audio flow (only flows matching the correct role are shown; supports video+audio, video-only, or audio-only). Choose the delivery mode with the **Use MediaMTX relay** checkbox, and optionally adjust the H.264 encoder settings (tune, speed preset, bitrate, key-int max).
+
+**Operation panel:** shows the active flow UUIDs, pipeline status, connected viewer count, and the live WebRTC player with a mute/unmute toggle.
+
+For the full GStreamer pipeline breakdown see [gstreamer-pipeline.md — Section 2](./gstreamer-pipeline.md#2-mxl-to-webrtc-gst_mxl2webrtcpy).
 
 ---
 
