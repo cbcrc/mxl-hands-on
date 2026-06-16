@@ -80,6 +80,12 @@ const connDot = (active) => ({
 
 const disabledOverlay = (disabled) => disabled ? { opacity: 0.4, pointerEvents: "none" } : {};
 
+function fmtTs(ts) {
+  if (ts == null) return "—";
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString([], { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0");
+}
+
 // ── Flow option helpers ───────────────────────────────────────────────────────
 
 function flowOptionLabel(f) {
@@ -97,6 +103,7 @@ function flowRole(f) {
 
 const isVideoFlow = (f) => flowRole(f).includes("video");
 const isAudioFlow = (f) => flowRole(f).includes("audio");
+const isAncillaryFlow = (f) => flowRole(f).includes("ancillary");
 
 // ── WHEP player hook ──────────────────────────────────────────────────────────
 
@@ -274,6 +281,11 @@ export default function App() {
   const [flowsLoading, setFlowsLoading]     = useState(false);
   const [videoFlowUuid, setVideoFlowUuid]   = useState("none");
   const [audioFlowUuid, setAudioFlowUuid]   = useState("none");
+  const [ancillaryFlowUuid, setAncillaryFlowUuid] = useState("none");
+  const [dataStatus, setDataStatus]         = useState(null);
+  const [nowTick, setNowTick]               = useState(Date.now());
+  const [captionLines, setCaptionLines]     = useState([]);   // rolling last-N decoded lines
+  const lastCapTsRef                        = useRef(null);
   const [encoder, setEncoder]               = useState({ tune: 4, speed_preset: 2, bitrate: 10000, key_int_max: 30, intra_refresh: false });
   const [status, setStatus]                 = useState(null);
   const [starting, setStarting]             = useState(false);
@@ -319,6 +331,37 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
+  // Poll caption text + SCTE events at 500 ms while running (drives the caption
+  // overlay and the SCTE light); a separate tick ages out the 5 s light.
+  useEffect(() => {
+    if (!running) { setDataStatus(null); return; }
+    const poll = () =>
+      fetch(`${API}/data-status`).then(r => r.json()).then(setDataStatus).catch(() => {});
+    poll();
+    const id = setInterval(poll, 500);
+    const tick = setInterval(() => setNowTick(Date.now()), 500);
+    return () => { clearInterval(id); clearInterval(tick); };
+  }, [running]);
+
+  // Build the rolling caption window (deduped by caption_ts). cea608tott may emit
+  // either the whole multi-row roll-up window (rows joined by '\n') or a single
+  // completed row per carriage return. If it already gives us newlines, show those
+  // rows verbatim (accumulating would duplicate/overlap them); otherwise gather the
+  // last 3 single lines so they still visibly scroll.
+  useEffect(() => {
+    if (!running) { setCaptionLines([]); lastCapTsRef.current = null; return; }
+    const ts = dataStatus?.caption_ts;
+    const text = dataStatus?.caption;
+    if (ts && text && ts !== lastCapTsRef.current) {
+      lastCapTsRef.current = ts;
+      if (text.includes("\n")) {
+        setCaptionLines(text.split("\n").map(s => s.trimEnd()).filter(Boolean).slice(-3));
+      } else {
+        setCaptionLines(prev => [...prev, text.trimEnd()].slice(-3));
+      }
+    }
+  }, [dataStatus, running]);
+
   // Load flows for selected domain
   const loadFlows = useCallback((path) => {
     if (!path) { setFlows([]); return; }
@@ -334,6 +377,7 @@ export default function App() {
     setSelectedDomain(path || null);
     setVideoFlowUuid("none");
     setAudioFlowUuid("none");
+    setAncillaryFlowUuid("none");
     loadFlows(path || null);
   };
 
@@ -354,11 +398,12 @@ export default function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          domain_path:     selectedDomain,
-          video_flow_uuid: videoFlowUuid !== "none" ? videoFlowUuid : null,
-          audio_flow_uuid: audioFlowUuid !== "none" ? audioFlowUuid : null,
-          encoder:         videoFlowUuid !== "none" ? encoder : null,
-          use_mediamtx:    useMediamtx,
+          domain_path:        selectedDomain,
+          video_flow_uuid:    videoFlowUuid !== "none" ? videoFlowUuid : null,
+          audio_flow_uuid:    audioFlowUuid !== "none" ? audioFlowUuid : null,
+          ancillary_flow_uuid: ancillaryFlowUuid !== "none" ? ancillaryFlowUuid : null,
+          encoder:            videoFlowUuid !== "none" ? encoder : null,
+          use_mediamtx:       useMediamtx,
         }),
       });
       setStatus(await r.json());
@@ -373,9 +418,15 @@ export default function App() {
     fetch(`${API}/pipeline/status`).then(r => r.json()).then(setStatus).catch(() => {});
   };
 
-  const videoFlows = flows.filter(isVideoFlow);
-  const audioFlows = flows.filter(isAudioFlow);
+  const videoFlows   = flows.filter(isVideoFlow);
+  const audioFlows   = flows.filter(isAudioFlow);
+  const ancillaryFlows = flows.filter(isAncillaryFlow);
   const canStart   = !running && !starting && !!selectedDomain && (videoFlowUuid !== "none" || audioFlowUuid !== "none");
+
+  // SCTE light: lit for 5 s after the most recent trigger (server epoch seconds).
+  const scteTs    = dataStatus?.scte_ts ?? null;
+  const scteLit   = scteTs != null && (nowTick / 1000 - scteTs) < 5;
+  const scteLabel = scteTs != null ? fmtTs(scteTs) : null;
 
   // In Direct mode the browser plays straight from this app's own WHEP server
   // (same origin); in MediaMTX mode it plays from the MediaMTX WHEP endpoint.
@@ -495,6 +546,24 @@ export default function App() {
               >
                 Refresh Flows
               </button>
+            </div>
+          </div>
+
+          {/* Ancillary-data flow selector row (captions + SCTE on one flow) */}
+          <div style={{ ...S.row, marginBottom: "0.75rem" }}>
+            <div style={S.col}>
+              <label style={S.label}>Ancillary Data Flow (captions + SCTE)</label>
+              <select
+                style={S.select}
+                value={ancillaryFlowUuid}
+                onChange={e => setAncillaryFlowUuid(e.target.value)}
+                disabled={running || !selectedDomain}
+              >
+                <option value="none">None — ancillary data disabled</option>
+                {ancillaryFlows.map(f => (
+                  <option key={f.flow_uuid} value={f.flow_uuid}>{flowOptionLabel(f)}</option>
+                ))}
+              </select>
             </div>
           </div>
 
@@ -660,6 +729,26 @@ export default function App() {
                 : "Waiting for stream…"}
             </div>
           )}
+
+          {/* Closed-caption overlay (decoded from the MXL data flow) — rolling lines */}
+          {ancillaryFlowUuid !== "none" && captionLines.length > 0 && (
+            <div style={{
+              position: "absolute", left: 0, right: 0, bottom: "6%",
+              display: "flex", flexDirection: "column", alignItems: "center",
+              gap: "2px", pointerEvents: "none", padding: "0 1rem",
+            }}>
+              {captionLines.map((line, i) => (
+                <span key={`${i}-${line}`} style={{
+                  background: "rgba(0,0,0,0.75)", color: "#fff",
+                  font: "600 1.1rem/1.35 monospace", padding: "0.1rem 0.6rem",
+                  borderRadius: "3px", whiteSpace: "pre-wrap", textAlign: "center",
+                  opacity: 0.5 + 0.5 * ((i + 1) / captionLines.length),
+                }}>
+                  {line}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         <p style={{ color: "#444", fontSize: "0.72rem", marginTop: "0.4rem" }}>
@@ -667,6 +756,33 @@ export default function App() {
             ? `Receiving via WHEP (Direct) · ${whepUrl ?? "…"}`
             : `Receiving via WHEP (MediaMTX) · ${mediamtxUrl ?? "…"}/mxl2webrtc/whep`}
         </p>
+
+        {/* SCTE-104 trigger indicator */}
+        {ancillaryFlowUuid !== "none" && (
+          <div style={{
+            display: "flex", alignItems: "center", gap: "0.7rem",
+            marginTop: "0.75rem", padding: "0.6rem 0.9rem",
+            background: "#161616", borderRadius: "6px",
+          }}>
+            <span style={{
+              width: "18px", height: "18px", borderRadius: "50%",
+              background: scteLit ? "#ff3b30" : "#3a1010",
+              boxShadow: scteLit ? "0 0 12px 3px rgba(255,59,48,0.8)" : "none",
+              transition: "background 0.15s, box-shadow 0.15s", flexShrink: 0,
+            }} />
+            <span style={{ color: scteLit ? "#ff6b60" : "#888", fontWeight: 600, fontSize: "0.85rem" }}>
+              SCTE-104 {scteLit ? "TRIGGERED" : "idle"}
+              {dataStatus?.scte_event_id != null && (
+                <span style={{ color: "#777", fontWeight: 400 }}> · event {dataStatus.scte_event_id}</span>
+              )}
+            </span>
+            {scteLabel && (
+              <span style={{ color: "#888", fontSize: "0.8rem", fontFamily: "monospace", marginLeft: "auto" }}>
+                last: {scteLabel}{dataStatus?.scte_count ? ` (#${dataStatus.scte_count})` : ""}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Error banner */}
@@ -674,6 +790,15 @@ export default function App() {
         <div style={{ ...S.card, background: "#2a0a0a", border: "1px solid #5c1a1a" }}>
           <span style={{ color: "#f44336", fontSize: "0.85rem" }}>
             Pipeline error: {status.error}
+          </span>
+        </div>
+      )}
+
+      {/* Ancillary-data (captions / SCTE) error banner */}
+      {dataStatus?.error && (
+        <div style={{ ...S.card, background: "#2a1a0a", border: "1px solid #5c3a1a" }}>
+          <span style={{ color: "#ffb74d", fontSize: "0.85rem" }}>
+            Ancillary-data error: {dataStatus.error}
           </span>
         </div>
       )}

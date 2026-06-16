@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import struct
 import threading
 import time
 import uuid
@@ -102,6 +103,160 @@ def db_to_linear(db: float) -> float:
     return 10 ** (db / 20)
 
 
+# ── Ancillary-data (ST 2038 / captions / SCTE) helpers ──────────────────────────
+#
+# Closed captions and SCTE-104 share ONE `video/smpte291` MXL data flow ("Ancillary
+# Data"): the caption CEA-608 ANC (DID 0x61) and the SCTE-104 ANC (DID 0x41) are
+# combined per frame (the caption grain's bytes + the SCTE ANC packet appended in
+# Python — see _on_caption_to_anc) and written through a single `mxlsink`. This mirrors
+# a real VANC space carrying multiple ANC packet types.
+#
+# DID/SDID 0x41/0x07 is the SMPTE ST 2010 registration for SCTE-104 in VANC. The
+# ST 2038 ANC bit layout (see dmf-mxl/.../format/data.rs::st2038_anc_packet_from_ancillary_meta)
+# is: 6 zero bits, C, line(11), offset(12), DID(10), SDID(10), data_count(10),
+# data_count user-data words(10 each), checksum(10), then 1-bit padding to a byte.
+SCTE_DID = 0x41
+SCTE_SDID = 0x07
+
+# How often a caption row is pushed into tttocea608 (one wrapped line per tick,
+# cycling for the roll-up scroll). CEA-608 only carries ~2 chars/frame, so a full
+# 32-char row needs ~0.5s of frames to transmit; pushing faster makes the tail of
+# one row collide with the head of the next. 2s gives ample headroom and a
+# readable scroll speed.
+CAPTION_PUSH_MS = 2000
+
+# A SCTE trigger repeats its ANC packet for ~this long. mxlsrc samples the MXL ring
+# at the head and does NOT read every grain, so a single-frame marker is usually
+# skipped — repeating for ~0.5s guarantees the reader samples it. The consumer
+# debounces (1s), so a burst still registers as ONE event.
+SCTE_BURST_SEC = 0.5
+
+
+class _BitWriter:
+    """Minimal MSB-first bit writer for assembling an ST 2038 ANC packet."""
+
+    def __init__(self) -> None:
+        self._acc = 0
+        self._nbits = 0
+        self._out = bytearray()
+
+    def write(self, value: int, bits: int) -> None:
+        for i in range(bits - 1, -1, -1):
+            self._acc = (self._acc << 1) | ((value >> i) & 1)
+            self._nbits += 1
+            if self._nbits == 8:
+                self._out.append(self._acc & 0xFF)
+                self._acc = 0
+                self._nbits = 0
+
+    def pad_ones_to_byte(self) -> None:
+        while self._nbits != 0:
+            self._acc = (self._acc << 1) | 1
+            self._nbits += 1
+            if self._nbits == 8:
+                self._out.append(self._acc & 0xFF)
+                self._acc = 0
+                self._nbits = 0
+
+    def to_bytes(self) -> bytes:
+        return bytes(self._out)
+
+
+def chunk_caption(text: str, width: int = 32) -> list[str]:
+    """Word-wrap ``text`` into lines of at most ``width`` characters.
+
+    CEA-608 rows are a hard 32 characters; longer text is truncated by the
+    encoder (this is why a long single line showed clipped on the player). We
+    split on word boundaries, hard-splitting any word longer than a row.
+    """
+    lines: list[str] = []
+    cur = ""
+    for word in text.split():
+        while len(word) > width:
+            if cur:
+                lines.append(cur)
+                cur = ""
+            lines.append(word[:width])
+            word = word[width:]
+        if not cur:
+            cur = word
+        elif len(cur) + 1 + len(word) <= width:
+            cur += " " + word
+        else:
+            lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+# SCTE-104 splice_insert_type values (SCTE-104 §10.3.x).
+SCTE104_SPLICE_START_NORMAL = 0x01
+
+
+def build_scte104_message(event_id: int, splice_type: int = SCTE104_SPLICE_START_NORMAL,
+                          message_number: int = 0) -> bytes:
+    """A conformant SCTE-104 `multiple_operation_message` carrying a single
+    `splice_request_data` op (opID 0x0101), as carried in VANC per SMPTE ST 2010.
+
+    Layout (big-endian): reserved(0xFFFF), messageSize, protocol_version,
+    AS_index, message_number, DPI_PID_index, SCTE35_protocol_version,
+    timestamp.time_type(=0, no timestamp), num_ops(=1), then the op:
+    opID(0x0101), data_length, splice_request_data{ splice_insert_type,
+    splice_event_id, unique_program_id, pre_roll_time, brk_duration, avail_num,
+    avails_expected, auto_return_flag }.
+    """
+    splice_request = (
+        bytes([splice_type & 0xFF])
+        + struct.pack(">I", event_id & 0xFFFFFFFF)  # splice_event_id
+        + struct.pack(">H", 0)   # unique_program_id
+        + struct.pack(">H", 0)   # pre_roll_time (ms)
+        + struct.pack(">H", 0)   # brk_duration (1/10 s)
+        + bytes([0])             # avail_num
+        + bytes([0])             # avails_expected
+        + bytes([0])             # auto_return_flag
+    )  # 14 bytes
+    op = struct.pack(">H", 0x0101) + struct.pack(">H", len(splice_request)) + splice_request
+
+    body = (
+        bytes([0])               # protocol_version
+        + bytes([0])             # AS_index
+        + bytes([message_number & 0xFF])
+        + struct.pack(">H", 0)   # DPI_PID_index
+        + bytes([0])             # SCTE35_protocol_version
+        + bytes([0])             # timestamp.time_type = 0 (none)
+        + bytes([1])             # num_ops
+        + op
+    )
+    message_size = 4 + len(body)  # reserved(2) + messageSize(2) + body
+    return struct.pack(">H", 0xFFFF) + struct.pack(">H", message_size) + body
+
+
+def build_scte104_anc_packet(event_id: int,
+                             splice_type: int = SCTE104_SPLICE_START_NORMAL,
+                             message_number: int = 0) -> bytes:
+    """Wrap a SCTE-104 message in one ST 2038 ANC packet (DID 0x41 / SDID 0x07).
+
+    Each message byte goes in the low 8 bits of a 10-bit user-data word. Parity
+    and checksum bits are left zero — they are not validated on the read side, and
+    the consumer reconstructs the message from the low 8 bits of each word.
+    """
+    msg = build_scte104_message(event_id, splice_type, message_number)
+    w = _BitWriter()
+    w.write(0, 6)              # leading zero bits
+    w.write(0, 1)             # C (luma channel)
+    w.write(0, 11)            # line number
+    w.write(0, 12)            # horizontal offset
+    w.write(SCTE_DID, 10)     # DID
+    w.write(SCTE_SDID, 10)    # SDID
+    w.write(len(msg), 10)     # data_count (== message length, ≤255)
+    for b in msg:
+        w.write(b, 10)        # user-data word (low 8 bits = message byte)
+    w.write(0, 10)            # checksum (not validated on the read side)
+    w.pad_ones_to_byte()
+    return w.to_bytes()
+
+
 @dataclass
 class AudioState:
     pattern: str = "1 kHz tone"
@@ -114,6 +269,10 @@ class GstGenerator:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._pipeline: Optional[Gst.Pipeline] = None
+        # Captions/SCTE each live in their OWN pipeline: their appsrc-fed branches
+        # otherwise perturb the shared clock/base-time at startup and corrupt the
+        # first-buffer time mapping of the video/audio mxlsinks (epoch grains).
+        self._data_pipelines: list[Gst.Pipeline] = []
         self._running = False
         self._gen = 0  # incremented on each pipeline start; used to cancel stale patch threads
 
@@ -131,10 +290,27 @@ class GstGenerator:
         self._audio1 = AudioState()
         self._audio2 = AudioState()
 
+        # Ancillary-data state (captions + SCTE share ONE "Ancillary Data" flow)
+        self._ancillary_active = False
+        self._caption_text = ""
+        self._caption_chunks: list[str] = []   # text wrapped to <=32-char rows
+        self._caption_chunk_idx = 0            # cycles for the scroll
+        self._scte_count = 0          # number of triggers fired this run (for status)
+        self._scte_last_ts: Optional[float] = None  # epoch seconds of last trigger
+        self._scte_event_id = 0       # SCTE-104 splice_event_id, incremented per trigger
+        self._fn, self._fd = 30, 1    # framerate, set per start (for SCTE pacing)
+
         # Element refs for live property changes
         self._vsrc = None
         self._timeoverlay = None
         self._textoverlay = None
+        self._ccsrc = None            # appsrc feeding tttocea608 (caption text)
+        self._ancsrc = None           # appsrc feeding the output Ancillary Data flow
+        self._caption_pts = 0         # ns, monotonic per-push timestamp (text appsrc)
+        self._anc_pts = 0             # ns, monotonic per-grain timestamp (output appsrc)
+        self._caption_dur_ns = 0      # ns, frame-locked caption buffer duration (set per start)
+        self._scte_repeat = 0         # frames remaining to append the SCTE packet for
+        self._scte_burst_event_id = 0 # event_id of the in-progress SCTE burst
 
         self._glib_loop = GLib.MainLoop()
         threading.Thread(target=self._glib_loop.run, daemon=True).start()
@@ -148,8 +324,20 @@ class GstGenerator:
             self._config = config
             self._resolution = config.get("resolution", "1920x1080")
             self._framerate = config.get("framerate", "30")
+            self._fn, self._fd = FRAMERATES.get(self._framerate, (30, 1))
             self._audio1.channels = config.get("audio1", {}).get("channels", 2)
             self._audio2.channels = config.get("audio2", {}).get("channels", 2)
+            self._ancillary_active = bool(config.get("ancillary", {}).get("active"))
+            self._caption_text = ""
+            self._caption_chunks = []
+            self._caption_chunk_idx = 0
+            self._scte_count = 0
+            self._scte_last_ts = None
+            self._scte_event_id = 0
+            self._caption_pts = 0
+            self._anc_pts = 0
+            self._scte_repeat = 0
+            self._scte_burst_event_id = 0
             self._gen += 1
             gen = self._gen
             self._flow_uuids = self._generate_uuids(config)
@@ -194,6 +382,26 @@ class GstGenerator:
             self._ident = text
             if self._textoverlay:
                 self._textoverlay.set_property("text", text)
+
+    def set_caption(self, text: str) -> None:
+        with self._lock:
+            self._caption_text = text
+            self._caption_chunks = chunk_caption(text) if text.strip() else []
+            self._caption_chunk_idx = 0
+
+    def trigger_scte(self) -> None:
+        with self._lock:
+            if not self._ancillary_active or self._ccsrc is None:
+                raise RuntimeError("Ancillary Data flow is not active")
+            # One user trigger = one event (count/id bump here, once) sent as a burst
+            # of frames so the sampling reader can't miss it.
+            self._scte_count += 1
+            self._scte_event_id += 1
+            self._scte_last_ts = time.time()
+            self._scte_burst_event_id = self._scte_event_id
+            self._scte_repeat = max(1, round(SCTE_BURST_SEC * self._fn / self._fd))
+            log.info("SCTE-104 trigger queued (event_id=%d, %d-frame burst) on flow %s",
+                     self._scte_event_id, self._scte_repeat, self._flow_uuids.get("ancillary"))
 
     def set_audio_pattern(self, flow: int, pattern: str) -> None:
         if pattern not in AUDIO_PATTERNS:
@@ -240,6 +448,16 @@ class GstGenerator:
                     "channels": self._audio2.channels,
                     "level_db": self._audio2.level_db,
                 },
+                "ancillary": {
+                    "active": self._ancillary_active,
+                },
+                "captions": {
+                    "text": self._caption_text,
+                },
+                "scte": {
+                    "trigger_count":   self._scte_count,
+                    "last_trigger_ts": self._scte_last_ts,
+                },
             }
 
     def get_patterns(self) -> dict:
@@ -265,9 +483,15 @@ class GstGenerator:
             uuids["audio1"] = str(uuid.uuid5(_MXL_TGEN_NS, f"{grouphint}:audio1"))
         if config.get("audio2", {}).get("active"):
             uuids["audio2"] = str(uuid.uuid5(_MXL_TGEN_NS, f"{grouphint}:audio2"))
+        if config.get("ancillary", {}).get("active"):
+            uuids["ancillary"] = str(uuid.uuid5(_MXL_TGEN_NS, f"{grouphint}:ancillary"))
         return uuids
 
     def _teardown_pipeline(self) -> None:
+        for dp in self._data_pipelines:
+            dp.set_state(Gst.State.NULL)
+            dp.get_state(5 * Gst.SECOND)
+        self._data_pipelines = []
         if self._pipeline is None:
             return
         self._pipeline.set_state(Gst.State.NULL)
@@ -276,6 +500,8 @@ class GstGenerator:
         self._vsrc = None
         self._timeoverlay = None
         self._textoverlay = None
+        self._ccsrc = None
+        self._ancsrc = None
         self._audio1.src = None
         self._audio2.src = None
         import gc
@@ -352,7 +578,7 @@ class GstGenerator:
         if config.get("audio2", {}).get("active"):
             self._build_audio_branch(pipeline, 2, self._flow_uuids["audio2"], domain)
 
-        # ── Bus ───────────────────────────────────────────────────────────────
+        # ── Bus (A/V pipeline) ──────────────────────────────────────────────────
         bus = pipeline.get_bus()
         bus.add_signal_watch()
         bus.connect("message::error", self._on_error)
@@ -363,6 +589,53 @@ class GstGenerator:
         log.info("Pipeline state: %s (ret=%s)", state, ret)
 
         self._pipeline = pipeline
+
+        # ── Ancillary data (captions + SCTE-104 on ONE flow) ────────────────────
+        # Two SEPARATE pipelines, both kept out of the A/V pipeline (their appsrc-fed,
+        # manually-timestamped branches otherwise perturb the shared clock/base-time
+        # at startup and epoch the video/audio mxlsinks):
+        #
+        #   harvest:  appsrc(text) → tttocea608 → ccconverter → cctost2038anc → caps
+        #             → appsink(ccsink)            [harvests per-frame caption ANC bytes]
+        #   output:   appsrc(ancsrc) → queue → mxlsink   [the proven appsrc→mxlsink form]
+        #
+        # The ccsink callback (_on_caption_to_anc) pushes each caption grain's bytes to
+        # ancsrc 1:1 (preserving the per-frame CEA-608 cadence so it decodes), appending
+        # a SCTE-104 ANC packet on a triggered frame. Building the output grain fresh
+        # from bytes sidesteps the PyGObject limits that broke a pad probe (in-flight
+        # buffers aren't writable and info.data can't be replaced). Separate pipelines
+        # keep the output appsrc→mxlsink identical to the proven SCTE-only flow, so it
+        # doesn't epoch the way a single combined pipeline did.
+        #
+        # We deliberately do NOT block on get_state(): start() holds self._lock across
+        # _build_pipeline and the push callbacks also take it, so blocking would stall
+        # preroll and push the first grain at the epoch.
+        self._data_pipelines = []
+        gen = self._gen
+
+        if self._ancillary_active:
+            # Frame-lock the caption cadence: a text buffer must span a WHOLE number
+            # of frames, else (e.g. 2000ms = 119.88 frames at 59.94) every boundary is
+            # ~1 grain off and the latency rolls. Exact rational duration (ONE rounded
+            # division; frames*round(period) reintroduces ~40µs/buffer drift).
+            frames = max(1, round(CAPTION_PUSH_MS / 1000 * self._fn / self._fd))
+            self._caption_dur_ns = round(frames * Gst.SECOND * self._fd / self._fn)
+            interval_ms = max(1, round(self._caption_dur_ns / Gst.MSECOND))
+
+            hp, op = self._build_ancillary_pipelines(self._flow_uuids["ancillary"], domain)
+            self._connect_data_bus(hp)
+            self._connect_data_bus(op)
+            self._data_pipelines += [op, hp]   # output first so it's ready for pushes
+            op.set_state(Gst.State.PLAYING)
+            hp.set_state(Gst.State.PLAYING)
+            GLib.timeout_add(interval_ms, self._push_caption, gen)
+            log.info("Started ancillary-data pipelines (captions harvest + output)")
+
+    def _connect_data_bus(self, pipeline: Gst.Pipeline) -> None:
+        bus = pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message::error", self._on_error)
+        bus.connect("message::warning", self._on_warning)
 
     def _build_audio_branch(
         self, pipeline: Gst.Pipeline, flow_num: int, flow_uuid: str, domain: str
@@ -402,13 +675,157 @@ class GstGenerator:
 
         state.src = asrc
 
+    def _build_ancillary_pipelines(
+        self, flow_uuid: str, domain: str
+    ) -> tuple[Gst.Pipeline, Gst.Pipeline]:
+        """Build the harvest + output pipelines for the Ancillary Data flow.
+
+        harvest:  appsrc(text) → tttocea608 → ccconverter → cctost2038anc → caps
+                  → appsink(ccsink)   [emits one ST 2038 caption ANC grain per frame]
+        output:   appsrc(ancsrc) → queue → mxlsink   [proven appsrc→mxlsink form]
+
+        ccsink's new-sample callback (_on_caption_to_anc) forwards each caption grain's
+        bytes to ancsrc 1:1, appending a SCTE-104 ANC packet when a trigger is pending.
+        Returns (harvest, output).
+        """
+        fn, fd = self._fn, self._fd
+        anc_caps = f"meta/x-st-2038,alignment=frame,framerate={fn}/{fd}"
+
+        # ── Harvest pipeline ────────────────────────────────────────────────────
+        harvest = Gst.Pipeline.new("test-generator-anc-harvest")
+        ccsrc = Gst.ElementFactory.make("appsrc", "ccsrc")
+        ccsrc.set_property("caps", Gst.Caps.from_string("text/x-raw,format=utf8"))
+        ccsrc.set_property("format", Gst.Format.TIME)
+        ccsrc.set_property("is-live", True)
+        ccsrc.set_property("do-timestamp", False)
+
+        tttocea608 = Gst.ElementFactory.make("tttocea608", "tttocea608")
+        # pop-on: each caption is loaded off-screen and flipped complete, so a single
+        # ≤32-char wrapped chunk round-trips cleanly (roll-up smears ~2 chars at each
+        # carriage-return boundary). We cycle one chunk per tick (see _push_caption).
+        tttocea608.set_property("mode", "pop-on")
+
+        ccconv = Gst.ElementFactory.make("ccconverter", "ccconv")
+        cccaps = Gst.ElementFactory.make("capsfilter", "cccaps")
+        cccaps.set_property(
+            "caps", Gst.Caps.from_string(f"closedcaption/x-cea-608,framerate={fn}/{fd}")
+        )
+        cctoanc = Gst.ElementFactory.make("cctost2038anc", "cctoanc")
+        ccanccaps = Gst.ElementFactory.make("capsfilter", "ccanccaps")
+        ccanccaps.set_property("caps", Gst.Caps.from_string(anc_caps))
+
+        ccsink = Gst.ElementFactory.make("appsink", "ccsink")
+        ccsink.set_property("emit-signals", True)
+        ccsink.set_property("sync", False)
+        # Deliver EVERY caption grain in order (no drop) — dropping frames corrupts
+        # the per-frame CEA-608 control-code stream.
+        ccsink.set_property("max-buffers", 0)
+        ccsink.set_property("drop", False)
+        ccsink.connect("new-sample", self._on_caption_to_anc)
+
+        for el in (ccsrc, tttocea608, ccconv, cccaps, cctoanc, ccanccaps, ccsink):
+            harvest.add(el)
+        ccsrc.link(tttocea608)
+        tttocea608.link(ccconv)
+        ccconv.link(cccaps)
+        cccaps.link(cctoanc)
+        cctoanc.link(ccanccaps)
+        ccanccaps.link(ccsink)
+
+        # ── Output pipeline ─────────────────────────────────────────────────────
+        output = Gst.Pipeline.new("test-generator-anc-output")
+        ancsrc = Gst.ElementFactory.make("appsrc", "ancsrc")
+        ancsrc.set_property("caps", Gst.Caps.from_string(anc_caps))
+        ancsrc.set_property("format", Gst.Format.TIME)
+        ancsrc.set_property("is-live", True)
+        ancsrc.set_property("do-timestamp", False)
+        ancqueue = Gst.ElementFactory.make("queue", "ancqueue")
+        ancsink = Gst.ElementFactory.make("mxlsink", "ancsink")
+        ancsink.set_property("flow-id", flow_uuid)
+        ancsink.set_property("domain", domain)
+        for el in (ancsrc, ancqueue, ancsink):
+            output.add(el)
+        ancsrc.link(ancqueue)
+        ancqueue.link(ancsink)
+
+        self._ccsrc = ccsrc
+        self._ancsrc = ancsrc
+        return harvest, output
+
+    # ── Feed callbacks ──────────────────────────────────────────────────────────
+
+    def _push_caption(self, gen: int) -> bool:
+        """GLib timer: push the next wrapped caption row into the CEA-608 chain
+        (blank when idle, so the flow keeps producing per-frame CC ANC grains)."""
+        with self._lock:
+            if self._gen != gen or self._ccsrc is None:
+                return False  # pipeline restarted/stopped — cancel timer
+            if self._caption_chunks:
+                chunk = self._caption_chunks[self._caption_chunk_idx % len(self._caption_chunks)]
+                self._caption_chunk_idx += 1
+            else:
+                chunk = " "  # blank keep-alive row; the consumer ignores it
+            ccsrc = self._ccsrc
+            # Frame-locked duration (whole number of frames; see _build_pipeline) so
+            # the caption grains stay aligned with the flow's grain rate — a fixed
+            # 2000ms drifts at fractional rates like 59.94 and rolls the latency.
+            dur = self._caption_dur_ns
+            pts = self._caption_pts
+            self._caption_pts += dur
+        data = chunk.encode("utf-8")
+        buf = Gst.Buffer.new_allocate(None, len(data), None)
+        buf.fill(0, data)
+        buf.pts = pts
+        buf.duration = dur
+        ccsrc.emit("push-buffer", buf)
+        return True
+
+    def _on_caption_to_anc(self, appsink: "Gst.Element") -> "Gst.FlowReturn":
+        """harvest appsink → output appsrc bridge (cross-pipeline). Forward each
+        per-frame caption ANC grain's bytes to ancsrc, appending a SCTE-104 ANC
+        packet on a triggered frame. Output grain is built fresh from bytes (no
+        in-flight buffer surgery — that fails in this PyGObject)."""
+        sample = appsink.emit("pull-sample")
+        if sample is None:
+            return Gst.FlowReturn.OK
+        buf = sample.get_buffer()
+        ok, minfo = buf.map(Gst.MapFlags.READ)
+        if not ok:
+            return Gst.FlowReturn.OK
+        try:
+            cc_bytes = bytes(minfo.data)
+        finally:
+            buf.unmap(minfo)
+        event_id = None
+        with self._lock:
+            ancsrc = self._ancsrc
+            if ancsrc is None:
+                return Gst.FlowReturn.OK
+            # Output uses its OWN monotonic per-grain PTS (one frame period each), not
+            # the harvested grain's PTS (which can be invalid early → mxlsink epoch).
+            frame_ns = round(Gst.SECOND * self._fd / self._fn)
+            pts = self._anc_pts
+            self._anc_pts += frame_ns
+            if self._scte_repeat > 0:
+                # Append the SCTE-104 packet to this grain (one frame of the burst).
+                self._scte_repeat -= 1
+                event_id = self._scte_burst_event_id
+        out = cc_bytes + build_scte104_anc_packet(event_id) if event_id is not None else cc_bytes
+        obuf = Gst.Buffer.new_allocate(None, len(out), None)
+        obuf.fill(0, out)
+        obuf.pts = pts
+        obuf.duration = frame_ns
+        ancsrc.emit("push-buffer", obuf)
+        return Gst.FlowReturn.OK
+
     def _patch_flow_defs(self, config: dict, uuids: dict, gen: int) -> None:
         domain = config["domain"]
         grouphint = config.get("grouphint", "Test-Generator")
         flows = [
-            ("video",  config.get("video",  {})),
-            ("audio1", config.get("audio1", {})),
-            ("audio2", config.get("audio2", {})),
+            ("video",     config.get("video",     {})),
+            ("audio1",    config.get("audio1",    {})),
+            ("audio2",    config.get("audio2",    {})),
+            ("ancillary", config.get("ancillary", {})),
         ]
         for key, flow_cfg in flows:
             if not flow_cfg.get("active"):
@@ -431,7 +848,12 @@ class GstGenerator:
             try:
                 with open(path) as f:
                     data = json.load(f)
-                role = "Video" if key == "video" else "Audio"
+                role = {
+                    "video":     "Video",
+                    "audio1":    "Audio",
+                    "audio2":    "Audio",
+                    "ancillary": "Ancillary Data",
+                }.get(key, "Audio")
                 full_grouphint = f"{grouphint}:{role}"
                 data["grouphint"]   = full_grouphint
                 data["description"] = flow_cfg.get("description", "")

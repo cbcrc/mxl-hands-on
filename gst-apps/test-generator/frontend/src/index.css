@@ -8,3 +8,8 @@ body {
   justify-content: center;
   padding: 2rem 1rem;
 }
+
+@keyframes tallyPulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}

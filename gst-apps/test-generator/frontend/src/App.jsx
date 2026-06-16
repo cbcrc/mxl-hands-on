@@ -73,6 +73,12 @@ const badge = (running) => ({
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+function fmtTs(ts) {
+  if (ts == null) return "—";
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString([], { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0");
+}
+
 async function post(path, body) {
   const r = await fetch(`${API}${path}`, {
     method: "POST",
@@ -216,9 +222,10 @@ function AudioPanel({ flowNum, audioPatterns, status, disabled }) {
 // ── App ───────────────────────────────────────────────────────────────────────
 
 const DEFAULT_FLOWS = {
-  video:  { active: true, description: "video-out-1",  label: "video-test-pattern"  },
-  audio1: { active: true, description: "audio-out-1",  label: "audio-test-pattern-1", channels: 2 },
-  audio2: { active: true, description: "audio-out-2",  label: "audio-test-pattern-2", channels: 2 },
+  video:    { active: true,  description: "video-out-1", label: "video-test-pattern"   },
+  audio1:   { active: true,  description: "audio-out-1", label: "audio-test-pattern-1", channels: 2 },
+  audio2:   { active: true,  description: "audio-out-2", label: "audio-test-pattern-2", channels: 2 },
+  ancillary:{ active: false, description: "ancillary-out", label: "ancillary-data"      },
 };
 
 export default function App() {
@@ -238,6 +245,9 @@ export default function App() {
   // ── Operation: video
   const [identDraft, setIdentDraft] = useState("");
   const identApplied = useRef(false);
+
+  // ── Operation: captions
+  const [captionDraft, setCaptionDraft] = useState("");
 
   // ── Error
   const [error, setError] = useState("");
@@ -302,9 +312,10 @@ export default function App() {
         grouphint,
         resolution,
         framerate,
-        video:  flows.video,
-        audio1: flows.audio1,
-        audio2: flows.audio2,
+        video:     flows.video,
+        audio1:    flows.audio1,
+        audio2:    flows.audio2,
+        ancillary: flows.ancillary,
       });
       await fetchStatus();
     } catch (e) {
@@ -332,6 +343,14 @@ export default function App() {
 
   const handleIdent = async () => {
     try { await post("/video/ident", { text: identDraft }); } catch {}
+  };
+
+  const handleCaption = async () => {
+    try { await post("/captions/text", { text: captionDraft }); } catch {}
+  };
+
+  const handleScte = async () => {
+    try { await post("/scte/trigger", {}); } catch (e) { setError(e.message); }
   };
 
   // ── Domain options ────────────────────────────────────────────────────────
@@ -483,9 +502,10 @@ export default function App() {
                 </tr>
               </thead>
               <tbody>
-                <FlowRow flowKey="video"  label="Video"        hasChannels={false} />
-                <FlowRow flowKey="audio1" label="Audio Flow 1" hasChannels={true}  />
-                <FlowRow flowKey="audio2" label="Audio Flow 2" hasChannels={true}  />
+                <FlowRow flowKey="video"    label="Video"        hasChannels={false} />
+                <FlowRow flowKey="audio1"   label="Audio Flow 1" hasChannels={true}  />
+                <FlowRow flowKey="audio2"   label="Audio Flow 2" hasChannels={true}  />
+                <FlowRow flowKey="ancillary" label="Ancillary Data" hasChannels={false} />
               </tbody>
             </table>
           </div>
@@ -569,6 +589,75 @@ export default function App() {
           status={status}
           disabled={!running}
         />
+
+        {/* ── Ancillary data: captions + SCTE on one flow ── */}
+        {(() => {
+          const ancActive = status?.ancillary?.active;
+          return (
+            <div style={{ ...S.card, border: "1px solid #2a2a2a", opacity: ancActive ? 1 : 0.4 }}>
+              <div style={S.sectionTitle}>
+                Ancillary Data {ancActive ? "" : "(flow not active)"}
+              </div>
+
+              {/* Closed captions */}
+              <div>
+                <label style={S.label}>Closed Captions</label>
+                <textarea
+                  style={{ ...S.input, minHeight: "3.5rem", resize: "vertical", fontFamily: "inherit" }}
+                  placeholder="Type caption text — it wraps to 32-char rows and scrolls/repeats as CEA-608…"
+                  value={captionDraft}
+                  onChange={(e) => setCaptionDraft(e.target.value)}
+                  disabled={!running || !ancActive}
+                />
+                <div style={{ marginTop: "0.5rem", display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                  <button
+                    style={btn("primary", !running || !ancActive)}
+                    onClick={handleCaption}
+                    disabled={!running || !ancActive}
+                  >
+                    Apply Caption
+                  </button>
+                  {(() => {
+                    const looping = running && ancActive && (status?.captions?.text ?? "").trim() !== "";
+                    return (
+                      <span style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                        <span style={{
+                          width: "11px", height: "11px", borderRadius: "50%",
+                          background: looping ? "#19c24a" : "#333",
+                          boxShadow: looping ? "0 0 8px 2px rgba(25,194,74,0.7)" : "none",
+                          animation: looping ? "tallyPulse 1.4s ease-in-out infinite" : "none",
+                        }} />
+                        <span style={{ fontSize: "0.78rem", fontWeight: 600, color: looping ? "#19c24a" : "#666" }}>
+                          {looping ? "LOOPING" : "idle"}
+                        </span>
+                      </span>
+                    );
+                  })()}
+                </div>
+              </div>
+
+              {/* SCTE trigger */}
+              <div style={{ marginTop: "1rem" }}>
+                <label style={S.label}>SCTE-104 Trigger</label>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                  <button
+                    style={btn("danger", !running || !ancActive)}
+                    onClick={handleScte}
+                    disabled={!running || !ancActive}
+                  >
+                    ⚡ Trigger SCTE
+                  </button>
+                  <span style={{ color: "#888", fontSize: "0.8rem" }}>
+                    Triggers sent: {status?.scte?.trigger_count ?? 0}
+                    {status?.scte?.last_trigger_ts != null && (
+                      <> · last: <span style={{ fontFamily: "monospace" }}>{fmtTs(status.scte.last_trigger_ts)}</span></>
+                    )}
+                  </span>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

@@ -25,6 +25,31 @@ COPY gst-apps/test-generator/frontend/ ./
 RUN npm run build
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Stage 1b – Build gst-plugin-closedcaption (rsclosedcaption) from gst-plugins-rs
+# Provides tttocea608 / cctost2038anc used for the CEA-608 ↔ ST 2038 ANC caption
+# path. Tag 0.14.5 is the first series shipping the ST 2038 elements and targets
+# the GStreamer 1.24 ABI from Ubuntu 24.04 apt.
+# ─────────────────────────────────────────────────────────────────────────────
+FROM ubuntu:24.04 AS rscc-builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ca-certificates curl build-essential pkg-config \
+        libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+        libpango1.0-dev libcairo2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+RUN git clone --depth 1 --branch 0.14.5 \
+      https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs.git /tmp/gst-plugins-rs \
+ && cd /tmp/gst-plugins-rs \
+ && cargo build --release -p gst-plugin-closedcaption \
+ && cp target/release/libgstrsclosedcaption.so /tmp/libgstrsclosedcaption.so
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Stage 2 – Runtime on Ubuntu 24.04 (GLIBC 2.39)
 # ─────────────────────────────────────────────────────────────────────────────
 FROM ubuntu:24.04
@@ -50,6 +75,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY gst-apps/test-generator/backend/requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
+
+# ── Closed-caption / ST 2038 GStreamer plugin (built in stage 1b) ─────────────
+COPY --from=rscc-builder /tmp/libgstrsclosedcaption.so /usr/lib/x86_64-linux-gnu/gstreamer-1.0/
 
 # ── MXL libraries ────────────────────────────────────────────────────────────
 COPY dmf-mxl/rust/target/release/libgstmxl.so /usr/lib/x86_64-linux-gnu/gstreamer-1.0/

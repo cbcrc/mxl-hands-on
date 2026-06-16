@@ -53,10 +53,15 @@ class StartRequest(BaseModel):
     video: FlowCfg
     audio1: AudioFlowCfg
     audio2: AudioFlowCfg
+    ancillary: FlowCfg
 
 
 class PatternReq(BaseModel):
     pattern: str
+
+
+class CaptionReq(BaseModel):
+    text: str
 
 
 class TimecodeReq(BaseModel):
@@ -154,6 +159,24 @@ def video_timecode(req: TimecodeReq):
 @app.post("/video/ident")
 def video_ident(req: IdentReq):
     generator.set_ident(req.text)
+    return {"status": "ok"}
+
+
+# ── Ancillary data: captions / SCTE ─────────────────────────────────────────────
+
+
+@app.post("/captions/text")
+def captions_text(req: CaptionReq):
+    generator.set_caption(req.text)
+    return {"status": "ok"}
+
+
+@app.post("/scte/trigger")
+def scte_trigger():
+    try:
+        generator.trigger_scte()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
     return {"status": "ok"}
 
 

@@ -87,16 +87,18 @@ Open the UIs in a browser once the containers are up:
 
 **Image:** `ghcr.io/cbcrc/test-generator:latest`
 
-Generates one synthetic video flow and two independent audio flows and writes them to an MXL domain on disk. No external signal source required.
+Generates one synthetic video flow and two independent audio flows — and, optionally, an **Ancillary Data** flow that carries both **closed captions** and **SCTE-104** triggers — and writes them to an MXL domain on disk. No external signal source required.
 
 **Setup panel** (before starting the pipeline):
 - Select the MXL domain, output raster (720p / 1080p / 2160p), and frame rate (24–60 fps).
 - Name each flow (group hint, description, label) and set the channel count for each audio flow (1–64 ch, fixed for the pipeline lifetime).
+- Optionally enable the **Ancillary Data** flow (off by default) to also publish captions + SCTE-104 over one data flow.
 
 **Operation panel** (while running):
 - Switch the video test pattern live (SMPTE bars, solid colours, etc.).
 - Toggle the timecode burn-in and change the ident overlay without stopping the pipeline.
 - Adjust the audio level (−60 … 0 dBFS in 0.5 dB steps) and wave type per audio flow.
+- Type caption text — it wraps and scrolls as looping closed captions (a **LOOPING** tally lights while active) — and fire a **SCTE-104 trigger** with a button (shows the count and last-trigger time).
 
 For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 1](./gstreamer-pipeline.md#2-test-generator-gst_generatorpy).
 
@@ -163,9 +165,9 @@ Then open `http://<host>:9601` from any machine that can reach the Docker host (
 
 > In **MediaMTX mode** you don't touch `mxl2webrtc` networking at all — the browser connects to the separate `mediamtx` service (always `network_mode: host`), and `mxl2webrtc` only WHIP-pushes to it. For **many** viewers, use MediaMTX relay mode (it encodes once); Direct mode re-encodes per viewer, so keep it to a few.
 
-**Setup panel:** select the MXL domain, then pick a video flow and/or an audio flow (only flows matching the correct role are shown; supports video+audio, video-only, or audio-only). Choose the delivery mode with the **Use MediaMTX relay** checkbox, and optionally adjust the H.264 encoder settings (tune, speed preset, bitrate, key-int max).
+**Setup panel:** select the MXL domain, then pick a video flow and/or an audio flow (only flows matching the correct role are shown; supports video+audio, video-only, or audio-only). Optionally also pick an **Ancillary Data** flow to decode its captions + SCTE alongside. Choose the delivery mode with the **Use MediaMTX relay** checkbox, and optionally adjust the H.264 encoder settings (tune, speed preset, bitrate, key-int max).
 
-**Operation panel:** shows the active flow UUIDs, pipeline status, connected viewer count, and the live WebRTC player with a mute/unmute toggle.
+**Operation panel:** shows the active flow UUIDs, pipeline status, connected viewer count, and the live WebRTC player with a mute/unmute toggle. If an ancillary flow is selected, the decoded captions scroll as an overlay on the player and a SCTE-104 indicator light flashes for 5 s on each trigger (showing the event id and time).
 
 For the full GStreamer pipeline breakdown see [gstreamer-pipeline.md — Section 2](./gstreamer-pipeline.md#2-mxl-to-webrtc-gst_mxl2webrtcpy).
 

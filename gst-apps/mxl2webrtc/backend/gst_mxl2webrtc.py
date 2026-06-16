@@ -32,6 +32,7 @@ selected per pipeline start:
 from __future__ import annotations
 
 import gc
+import json
 import logging
 import os
 import threading
@@ -94,6 +95,96 @@ DEFAULT_ENCODER_SETTINGS = {
 }
 
 
+# ── SCTE-104 / ST 2038 ANC parsing (consumer side) ──────────────────────────────
+#
+# The ancillary flow carries caption ANC (DID 0x61) every frame plus a SCTE-104 ANC
+# packet (DID 0x41 / SDID 0x07) on triggered frames. We can't treat "non-empty grain"
+# as a trigger anymore, so we parse the ANC packets and look for the SCTE-104 one,
+# then decode the SCTE-104 multiple_operation_message inside it.
+
+class _BitReader:
+    """MSB-first bit reader over a bytes buffer."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+        self._pos = 0  # bit position
+
+    def read(self, bits: int) -> int:
+        v = 0
+        for _ in range(bits):
+            byte = self._data[self._pos >> 3]
+            v = (v << 1) | ((byte >> (7 - (self._pos & 7))) & 1)
+            self._pos += 1
+        return v
+
+    def align_to_byte(self) -> None:
+        if self._pos & 7:
+            self._pos = (self._pos + 7) & ~7
+
+    def remaining_bits(self) -> int:
+        return len(self._data) * 8 - self._pos
+
+
+def parse_st2038_packets(data: bytes) -> list[tuple[int, int, list[int]]]:
+    """Return (did, sdid, [udw]) for each ST 2038 ANC packet in a grain buffer
+    (meta/x-st-2038 = concatenated ST 2038 ANC packets). did/sdid/udw are the low
+    8 bits of their 10-bit fields. Layout per data.rs::st2038_anc_packet_from_ancillary_meta."""
+    r = _BitReader(data)
+    packets: list[tuple[int, int, list[int]]] = []
+    # Smallest packet (data_count=0): 6+1+11+12+10+10+10+10(checksum) = 70 bits.
+    while r.remaining_bits() >= 70:
+        try:
+            if r.read(6) != 0:
+                break               # not a valid ST 2038 packet start
+            r.read(1)               # C (channel)
+            r.read(11)              # line
+            r.read(12)              # offset
+            did = r.read(10)
+            sdid = r.read(10)
+            dc8 = r.read(10) & 0xFF  # data_count (low 8 bits = UDW count)
+            udw = [r.read(10) & 0xFF for _ in range(dc8)]
+            r.read(10)              # checksum
+            r.align_to_byte()       # ST 2038 pads to a byte boundary with 1-bits
+            packets.append((did & 0xFF, sdid & 0xFF, udw))
+        except IndexError:
+            break
+    return packets
+
+
+def parse_scte104(msg: bytes) -> dict | None:
+    """Parse a SCTE-104 multiple_operation_message; return the first op's fields."""
+    if len(msg) < 14:
+        return None
+    i = 4          # skip reserved(2) + messageSize(2)
+    i += 1         # protocol_version
+    i += 1         # AS_index
+    i += 1         # message_number
+    i += 2         # DPI_PID_index
+    i += 1         # SCTE35_protocol_version
+    time_type = msg[i]; i += 1
+    if time_type != 0:   # we only ever send time_type=0 (no timestamp bytes)
+        return None
+    i += 1         # num_ops
+    if i + 4 > len(msg):
+        return None
+    op_id = (msg[i] << 8) | msg[i + 1]; i += 2
+    i += 2         # data_length
+    out: dict = {"opID": op_id}
+    if op_id == 0x0101 and i + 5 <= len(msg):  # splice_request_data
+        out["splice_insert_type"] = msg[i]
+        out["splice_event_id"] = int.from_bytes(msg[i + 1:i + 5], "big")
+    return out
+
+
+def find_scte104(grain: bytes) -> dict | None:
+    """Scan a grain's ANC packets for a SCTE-104 packet (DID 0x41 / SDID 0x07) and
+    return its parsed message, or None if there isn't one this frame."""
+    for did, sdid, udw in parse_st2038_packets(grain):
+        if did == 0x41 and sdid == 0x07:
+            return parse_scte104(bytes(udw))
+    return None
+
+
 class GstReceiver:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -108,6 +199,18 @@ class GstReceiver:
         self._domain_path: str | None = None
         self._enc_settings: dict = dict(DEFAULT_ENCODER_SETTINGS)
 
+        # Ancillary data (captions / SCTE) — decoded by a side pipeline shared by
+        # all viewers, independent of the WebRTC delivery mode.
+        self._ancillary_flow_uuid: str | None = None   # one flow carries captions + SCTE
+        self._data_pipelines: list[Gst.Pipeline] = []
+        self._data_error: str | None = None
+        self._caption_text: str = ""
+        self._caption_ts: float | None = None     # epoch seconds of last caption
+        self._scte_ts: float | None = None         # epoch seconds of last SCTE trigger
+        self._scte_count: int = 0
+        self._scte_event_id: int | None = None     # last decoded SCTE-104 splice_event_id
+        self._scte_splice_type: int | None = None  # last decoded splice_insert_type
+
         self._glib_loop = GLib.MainLoop()
         threading.Thread(target=self._glib_loop.run, daemon=True).start()
 
@@ -120,16 +223,25 @@ class GstReceiver:
         audio_flow_uuid: str | None,
         enc_settings: dict | None = None,
         use_mediamtx: bool = True,
+        ancillary_flow_uuid: str | None = None,
     ) -> None:
         with self._lock:
             self._teardown()
             self._domain_path = domain_path
             self._video_flow_uuid = video_flow_uuid
             self._audio_flow_uuid = audio_flow_uuid
+            self._ancillary_flow_uuid = ancillary_flow_uuid
             self._use_mediamtx = use_mediamtx
             # Merge caller overrides over the defaults so a partial dict still works.
             self._enc_settings = {**DEFAULT_ENCODER_SETTINGS, **(enc_settings or {})}
             self._error_msg = None
+            self._caption_text = ""
+            self._caption_ts = None
+            self._scte_ts = None
+            self._scte_count = 0
+            self._scte_event_id = None
+            self._scte_splice_type = None
+            self._data_error = None
             try:
                 if use_mediamtx:
                     self._build_pipeline_mediamtx()
@@ -140,12 +252,18 @@ class GstReceiver:
                 self._error_msg = str(exc)
                 self._running = False
                 raise
+            # The ancillary (captions + SCTE) decode runs in its own pipeline so a
+            # missing caption element can't take down the A/V stream. Errors are
+            # recorded in _data_error and surfaced via /data-status.
+            if ancillary_flow_uuid:
+                self._build_data_pipelines()
 
     def stop(self) -> None:
         with self._lock:
             self._teardown()
             self._video_flow_uuid = None
             self._audio_flow_uuid = None
+            self._ancillary_flow_uuid = None
             self._domain_path = None
 
     def get_status(self) -> dict:
@@ -161,14 +279,29 @@ class GstReceiver:
             else:
                 mode = "stopped"
             return {
-                "running":          self._running,
-                "video_flow_uuid":  v,
-                "audio_flow_uuid":  a,
-                "mode":             mode if self._running else "stopped",
-                "use_mediamtx":     self._use_mediamtx,
-                "viewers":          len(self._sessions),
-                "error":            self._error_msg,
-                "encoder":          dict(self._enc_settings),
+                "running":             self._running,
+                "video_flow_uuid":     v,
+                "audio_flow_uuid":     a,
+                "ancillary_flow_uuid": self._ancillary_flow_uuid,
+                "mode":                mode if self._running else "stopped",
+                "use_mediamtx":        self._use_mediamtx,
+                "viewers":             len(self._sessions),
+                "error":               self._error_msg,
+                "encoder":             dict(self._enc_settings),
+            }
+
+    def get_data_status(self) -> dict:
+        """Latest decoded caption + most recent SCTE trigger, for fast UI polling."""
+        with self._lock:
+            return {
+                "caption":             self._caption_text,
+                "caption_ts":          self._caption_ts,
+                "scte_ts":             self._scte_ts,
+                "scte_count":          self._scte_count,
+                "scte_event_id":       self._scte_event_id,
+                "scte_splice_type":    self._scte_splice_type,
+                "ancillary_flow_uuid": self._ancillary_flow_uuid,
+                "error":               self._data_error,
             }
 
     # ── Shared encode helpers ──────────────────────────────────────────────────
@@ -319,6 +452,130 @@ class GstReceiver:
             raise RuntimeError("Could not request audio sink pad from webrtcbin")
         if src_pad.link(sink_pad) != Gst.PadLinkReturn.OK:
             raise RuntimeError("Failed to link audio queue to webrtcbin")
+
+    # ── Ancillary-data decode pipeline (captions + SCTE) ───────────────────────
+
+    def _read_flow_framerate(self, flow_uuid: str) -> str:
+        """Return the flow's grain rate as 'num/den' from flow_def.json. mxlsrc
+        requires a downstream framerate to negotiate meta/x-st-2038 caps; the rate
+        also paces CEA-608 decode. Defaults to 30000/1001 if it can't be read."""
+        default = "30000/1001"
+        if not self._domain_path:
+            return default
+        path = os.path.join(self._domain_path, f"{flow_uuid}.mxl-flow", "flow_def.json")
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except Exception:
+            return default
+
+        def find_rate(obj):
+            if isinstance(obj, dict):
+                r = obj.get("grain_rate")
+                if isinstance(r, dict) and r.get("numerator") and r.get("denominator"):
+                    return f"{r['numerator']}/{r['denominator']}"
+                for v in obj.values():
+                    got = find_rate(v)
+                    if got:
+                        return got
+            return None
+
+        return find_rate(data) or default
+
+    def _build_data_pipelines(self) -> None:
+        """Decode the single 'Ancillary Data' flow (captions + SCTE muxed). One
+        pipeline tees the ST 2038 grains to a CEA-608 caption decoder and to a raw
+        appsink that scans the ANC packets for SCTE-104. Assembled with
+        Gst.parse_launch (delayed pad linking — st2038anctocc/ccconverter negotiate
+        caps dynamically and can't be joined with a static Element.link())."""
+        self._data_pipelines = []
+        self._data_error = None
+        if not self._ancillary_flow_uuid:
+            return
+        try:
+            p = self._build_ancillary_pipeline(self._ancillary_flow_uuid)
+            self._start_data_pipeline(p)
+            self._data_pipelines.append(p)
+            log.info("Ancillary decode pipeline started")
+        except Exception as exc:
+            log.warning("Ancillary decode pipeline failed: %s", exc)
+            self._data_error = f"ancillary: {exc}"
+
+    def _start_data_pipeline(self, pipeline: Gst.Pipeline) -> None:
+        bus = pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message::error", self._on_data_error)
+        ret = pipeline.set_state(Gst.State.PLAYING)
+        if ret == Gst.StateChangeReturn.FAILURE:
+            pipeline.set_state(Gst.State.NULL)
+            raise RuntimeError(f"{pipeline.get_name()} failed to reach PLAYING")
+
+    def _build_ancillary_pipeline(self, flow_uuid: str) -> Gst.Pipeline:
+        rate = self._read_flow_framerate(flow_uuid)
+        # ONE linear caption pipeline (no tee — a tee with a second branch stalled
+        # cea608tott and blocked all decode). SCTE-104 is parsed from a pad probe on
+        # the raw ST 2038 grain at the capsfilter src, so there's no second branch.
+        desc = (
+            f"mxlsrc data-flow-id={flow_uuid} domain={self._domain_path} "
+            f"! capsfilter name=anccaps caps=meta/x-st-2038,alignment=frame,framerate={rate} "
+            f"! st2038anctocc ! ccconverter ! closedcaption/x-cea-608 "
+            f"! cea608tott ! text/x-raw,format=utf8 "
+            f"! appsink name=ccsink emit-signals=true sync=false max-buffers=1 drop=true"
+        )
+        pipeline = Gst.parse_launch(desc)
+        pipeline.get_by_name("ccsink").connect("new-sample", self._on_caption_sample)
+        # SCTE-104 detection: probe each raw grain before the caption decoder.
+        anccaps = pipeline.get_by_name("anccaps")
+        anccaps.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, self._scte_grain_probe)
+        return pipeline
+
+    def _on_caption_sample(self, appsink: Gst.Element) -> Gst.FlowReturn:
+        sample = appsink.emit("pull-sample")
+        if sample is None:
+            return Gst.FlowReturn.OK
+        buf = sample.get_buffer()
+        ok, info = buf.map(Gst.MapFlags.READ)
+        if ok:
+            try:
+                text = bytes(info.data).decode("utf-8", "replace").strip()
+            finally:
+                buf.unmap(info)
+            if text:  # ignore the blank keep-alive rows the producer sends
+                with self._lock:
+                    self._caption_text = text
+                    self._caption_ts = time.time()
+        return Gst.FlowReturn.OK
+
+    def _scte_grain_probe(self, _pad: Gst.Pad, info: Gst.PadProbeInfo) -> Gst.PadProbeReturn:
+        """Pad probe on the raw ST 2038 grain: parse each grain's ANC packets and act
+        on a SCTE-104 packet (DID 0x41 / SDID 0x07). The muxed flow carries caption
+        ANC every frame, so we can't treat 'non-empty grain' as a trigger — we must
+        parse. Debounced (the marker rides a single grain)."""
+        buf = info.get_buffer()
+        if buf is None or buf.get_size() == 0:
+            return Gst.PadProbeReturn.OK
+        ok, minfo = buf.map(Gst.MapFlags.READ)
+        if not ok:
+            return Gst.PadProbeReturn.OK
+        try:
+            scte = find_scte104(bytes(minfo.data))
+        finally:
+            buf.unmap(minfo)
+        if scte is not None:
+            now = time.time()
+            with self._lock:
+                if self._scte_ts is None or now - self._scte_ts > 1.0:
+                    self._scte_ts = now
+                    self._scte_count += 1
+                    self._scte_event_id = scte.get("splice_event_id")
+                    self._scte_splice_type = scte.get("splice_insert_type")
+                    log.info("SCTE-104 received: opID=0x%04x event_id=%s type=%s",
+                             scte.get("opID", 0), self._scte_event_id, self._scte_splice_type)
+        return Gst.PadProbeReturn.OK
+
+    def _on_data_error(self, _bus: Gst.Bus, msg: Gst.Message) -> None:
+        err, debug = msg.parse_error()
+        log.error("Ancillary-data pipeline error: %s  debug: %s", err, debug)
 
     # ── Direct mode (one full mxlsrc→encode→webrtcbin pipeline per WHEP viewer) ─
 
@@ -621,6 +878,10 @@ class GstReceiver:
     # ── Teardown ──────────────────────────────────────────────────────────────
 
     def _teardown(self) -> None:
+        for p in self._data_pipelines:
+            p.set_state(Gst.State.NULL)
+            p.get_state(5 * Gst.SECOND)
+        self._data_pipelines = []
         if self._pipeline is None and not self._sessions:
             self._running = False
             return

@@ -14,7 +14,7 @@ This single-port design means the browser always uses the **same origin** for bo
 
 ## Delivery modes (MediaMTX relay vs Direct WHEP)
 
-The pipeline supports two WebRTC delivery modes, chosen per start via `use_mediamtx` (UI checkbox "Use MediaMTX relay"). The `GstReceiver.start(...)` signature is `start(domain_path, video_flow_uuid, audio_flow_uuid, enc_settings=None, use_mediamtx=True)`.
+The pipeline supports two WebRTC delivery modes, chosen per start via `use_mediamtx` (UI checkbox "Use MediaMTX relay"). The `GstReceiver.start(...)` signature is `start(domain_path, video_flow_uuid, audio_flow_uuid, enc_settings=None, use_mediamtx=True, ancillary_flow_uuid=None)` — the last selects an optional Ancillary Data flow (captions + SCTE) decoded by a side pipeline (see "Ancillary data" below) independent of the WebRTC delivery mode.
 
 **MediaMTX relay (`use_mediamtx=True`, default):** `mxlsrc → encode → webrtcbin` pushes via WHIP to the `mediamtx` service (the original design). Most compatible across environments, but **cannot carry intra-refresh** (see the intra-refresh note). The browser plays from `<mediamtx_webrtc_url>/mxl2webrtc/whep`.
 
@@ -31,6 +31,26 @@ The signalling calls run in a FastAPI **threadpool** (`run_in_threadpool`) so th
 - **Per-request host-candidate rewrite** — `create_session_offer(public_host)` takes the host the browser connected to (`POST /whep` `Host` header, minus the port) and `_rewrite_candidates` substitutes it into the offer's `typ host` ICE candidates (and the `c=` line). So the candidate is `localhost` for a local viewer (incl. Docker Desktop) or the host's LAN IP for a remote viewer — automatically, no `WEBRTC_PUBLIC_IP` and no host networking.
 
 **Deployment:** a single `docker-compose.yml` (bridged) covers every case — `docker compose up -d mediamtx mxl2webrtc`, then open `http://<host>:9601` from the host or any machine that can reach it. MediaMTX mode needs no `mxl2webrtc` networking (the browser talks to the host-networked `mediamtx` service). Direct mode re-encodes per viewer, so for **many** viewers use MediaMTX relay mode.
+
+## Ancillary data (closed captions + SCTE on one flow)
+
+If the user selects an **Ancillary Data** flow (produced by the Test Generator over one `video/smpte291` data flow carrying both caption ANC and SCTE-104 ANC), `start()` builds **one side pipeline** — independent of the WebRTC pipeline(s) and shared by all viewers — that decodes both for the UI. Stored in `self._data_pipelines`; errors are recorded in `self._data_error` and surfaced via `GET /data-status`.
+
+The grains are **tee'd** to a caption decoder and to a raw appsink that scans the ANC for SCTE-104:
+
+```
+mxlsrc(ancillary) → meta/x-st-2038,framerate=<rate> → tee ─┬→ queue → st2038anctocc → ccconverter → cea-608 → cea608tott → text → appsink (ccsink)
+                                                           └→ queue → appsink (sctesink)   # parse ANC for SCTE-104
+```
+
+- **Caption decode (ccsink):** the `new-sample` callback stores the latest decoded text + a timestamp (ignoring the producer's blank keep-alive rows).
+- **SCTE-104 detect (sctesink):** the muxed flow carries caption ANC *every* frame, so "non-empty grain" is **not** a trigger. The callback parses the ST 2038 ANC packets (`parse_st2038_packets`), finds the SCTE-104 packet (DID `0x41` / SDID `0x07`), and decodes the SCTE-104 `multiple_operation_message` (`parse_scte104` → `opID`, `splice_event_id`, `splice_insert_type`). Debounced 1 s.
+
+⚠ **Two non-obvious requirements:**
+- **Build with `Gst.parse_launch`, not programmatic `Element.link()`.** `st2038anctocc → ccconverter` negotiate caps dynamically and a static `Element.link()` fails (`Failed to link st2038anctocc → ccconv`), even though the exact chain works under `gst-launch`. `parse_launch` does the delayed pad linking.
+- **mxlsrc needs a downstream `framerate` capsfilter** — its data src-pad template carries no framerate and `set_caps` errors without one. Read the flow's grain rate from `{domain}/{uuid}.mxl-flow/flow_def.json` (`grain_rate.numerator`/`.denominator`, top-level after the `#[serde(flatten)]`) and pin it as `meta/x-st-2038,alignment=frame,framerate=<num>/<den>`.
+
+The frontend polls `GET /data-status` every 500 ms and renders a rolling caption overlay on the player plus a SCTE-104 indicator light (lit 5 s after a trigger, with a millisecond timestamp and the decoded `splice_event_id`).
 
 ## Environment & File Specifications
 - **MXL src documentation:** `./dmf-mxl/rust/gst-mxl-rs/readme.md` — authoritative reference for `mxlsrc` properties.
@@ -57,6 +77,7 @@ This section is used to configure and select the MXL input flows before starting
 1. **MXL Domain Selector:** Scan `/mxl-domain` recursively for `domain_def.json` files. Read the `id` field for the domain UUID, the `label` and `description` fields, and use the containing directory path as the domain path. Provide a dropdown to select the target MXL domain — **each option displays the domain `label`** (falling back to the directory path when the label is absent) instead of the raw UUID. Changing the domain resets both flow selectors.
 2. **Video Flow Selector:** A dropdown populated from the flow list for the selected domain. Each option displays the first 8 characters of the UUID, description, label, and group hint. Includes a **"None"** option at the top — selecting "None" means no video input (audio-only mode). **Only show flows that have "video" (case-insensitive) after `:` in their `flow_grouphint`.**
 3. **Audio Flow Selector:** A dropdown populated from the same domain flow list, following the same display format. Includes a **"None"** option at the top — selecting "None" means no audio input (video-only mode). **Only show flows that have "audio" (case-insensitive) after `:` in their `flow_grouphint`.**
+3a. **Ancillary Data Flow Selector:** one more dropdown from the same flow list, with a **"None"** option. Filter by the role after `:` in `flow_grouphint` containing "ancillary". Optional; selecting it enables both the caption overlay and the SCTE light in the Operation section. Sent as `ancillary_flow_uuid` in the start payload.
 4. **Refresh Flow List button** — manually triggers `scan_domain` for the selected domain.
 5. **H.264 Encoder Settings:** Shown only when a video flow is selected (the settings apply to the `x264enc` video branch). Pre-populated from `GET /encoder-defaults` and sent with the pipeline start request. Disabled while the pipeline is running. Exposes four `x264enc` properties:
    - **Tune** (`tune`): dropdown over the `x264enc` `GstX264EncTune` flag bits — `Zero-latency (4)` (default) / `Zero-latency + Fast-decode (6)` / `Fast-decode (2)` / `None (0)`. The values are flag bits (`stillimage=1`, `fastdecode=2`, `zerolatency=4`) and may be OR-combined; `6` is `zerolatency | fastdecode`.
@@ -76,6 +97,9 @@ This section is enabled only once the pipeline is running (greyed-out and non-in
 
 1. **MXL Input Status:** Displays the active video flow UUID (or "—" if video is not active) and the active audio flow UUID (or "—" if audio is not active), each with a coloured presence dot.
 2. **WebRTC Player:** An embedded HTML5 `<video>` element that receives the low-latency WebRTC stream from MediaMTX using the WHEP protocol. The player connects to `<mediamtx_webrtc_url>/mxl2webrtc/whep` — where `mediamtx_webrtc_url` is returned by the `/config` endpoint. The player starts automatically when the pipeline starts and stops when it stops.
+3. **Closed-caption overlay:** When an ancillary flow is selected, the decoded text from `GET /data-status` is rendered as a rolling overlay (last ~3 lines) on the video. cea608tott may emit either a single completed row per emission or the whole multi-row window joined by `\n`; the overlay handles both — if the text contains `\n` it shows those rows verbatim, otherwise it accumulates the last 3 single lines (deduped by `caption_ts`) so they visibly scroll.
+4. **SCTE-104 indicator:** light turns red for **5 s** after each trigger and shows the event time with milliseconds (`HH:MM:SS.mmm`) plus the decoded `scte_event_id`. Driven by `scte_ts` / `scte_event_id` from `GET /data-status` (polled every 500 ms).
+5. **Ancillary-data error banner:** if the side pipeline failed to start, `data-status.error` is shown in an amber banner.
 
 ---
 
@@ -127,7 +151,7 @@ This section is enabled only once the pipeline is running (greyed-out and non-in
   > ⚠️ MediaMTX requires `network_mode: host` so that its WebRTC ICE candidates reflect the real host IP. When using `network_mode: host`, `ports:` mappings are ignored — the ports are bound directly on the host. The `mxl2webrtc` bridge container reaches MediaMTX via `host.docker.internal` (resolved to the host gateway via `extra_hosts`).
 
 - The build context is the **repository root** (`..` relative to `./gst-apps/`). All `COPY` paths in the Dockerfile are relative to the repository root (e.g. `COPY gst-apps/mxl2webrtc/backend/ /app/backend/`).
-- The Dockerfile uses **two stages**: a `node:18-bullseye-slim` stage to build the React frontend, and an `ubuntu:24.04` runtime stage. There is no Cargo/Rust build stage — `webrtcbin` is used instead of `whipsink`.
+- The Dockerfile uses **three stages**: a `node:18-bullseye-slim` frontend builder, an `ubuntu:24.04` **`rscc-builder`** stage, and an `ubuntu:24.04` runtime stage. `webrtcbin` is used instead of `whipsink`, so there is no Cargo stage *for WebRTC* — but the ancillary decode needs `st2038anctocc` / `cea608tott` from `gst-plugin-closedcaption`, which the `rscc-builder` stage compiles (`cargo build --release -p gst-plugin-closedcaption`, gst-plugins-rs tag `0.14.5`; build deps `libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libpango1.0-dev libcairo2-dev` + rustup). The runtime stage `COPY --from=rscc-builder`s `libgstrsclosedcaption.so` into `/usr/lib/x86_64-linux-gnu/gstreamer-1.0/`; its pango/cairo runtime deps come from `gstreamer1.0-plugins-base`.
 - Add port mapping `9601:9600` only — FastAPI serves both the API and React frontend on the same port. The host-side port (`9601`) can be changed freely in `docker-compose.yml`.
 
 **Stage 1 (Frontend Builder):**
@@ -162,9 +186,9 @@ RUN npm run build
   COPY dmf-mxl/rust/target/release/libgstmxl.so \
        /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmxl.so
 
-  COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.1 /opt/mxl/lib/libmxl.so.1.1
+  COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.2 /opt/mxl/lib/libmxl.so.1.2
   RUN cd /opt/mxl/lib \
-   && ln -sf libmxl.so.1.1 libmxl.so.1 \
+   && ln -sf libmxl.so.1.2 libmxl.so.1 \
    && ln -sf libmxl.so.1 libmxl.so \
    && ldconfig /opt/mxl/lib /usr/lib/x86_64-linux-gnu/gstreamer-1.0 \
    && mkdir -p /workspace/mxl/build/Linux-Clang-Release/lib \
@@ -244,9 +268,10 @@ The pipeline is built programmatically (not via `parse_launch`) using `webrtcbin
 | `POST` | `/get-domains` | Trigger a fresh domain scan; return updated domain list |
 | `GET`  | `/domains` | Return the cached domain list (each entry: `id`, `label`, `description`, `path`) |
 | `GET`  | `/scan-domain?domain_path=<path>` | Run `mxl-info -d` and return parsed flow list |
-| `POST` | `/pipeline/start` | Accept `domain_path`, `video_flow_uuid` (nullable), `audio_flow_uuid` (nullable), `encoder` (nullable `{tune, speed_preset, bitrate, key_int_max, intra_refresh}`), and `use_mediamtx` (bool, default `true`); build and start pipeline. When `encoder` is omitted/null, `DEFAULT_ENCODER_SETTINGS` are used |
+| `POST` | `/pipeline/start` | Accept `domain_path`, `video_flow_uuid` (nullable), `audio_flow_uuid` (nullable), `ancillary_flow_uuid` (nullable), `encoder` (nullable `{tune, speed_preset, bitrate, key_int_max, intra_refresh}`), and `use_mediamtx` (bool, default `true`); build and start pipeline. When `encoder` is omitted/null, `DEFAULT_ENCODER_SETTINGS` are used |
 | `POST` | `/pipeline/stop` | Stop and tear down the pipeline |
-| `GET`  | `/pipeline/status` | Return `{"running": bool, "video_flow_uuid": str\|null, "audio_flow_uuid": str\|null, "mode": "video+audio"\|"video"\|"audio"\|"stopped", "use_mediamtx": bool, "viewers": int, "error": str\|null, "encoder": {tune, speed_preset, bitrate, key_int_max, intra_refresh}}` |
+| `GET`  | `/pipeline/status` | Return `{"running": bool, "video_flow_uuid": str\|null, "audio_flow_uuid": str\|null, "ancillary_flow_uuid": str\|null, "mode": ..., "use_mediamtx": bool, "viewers": int, "error": str\|null, "encoder": {...}}` |
+| `GET`  | `/data-status` | Return the decoded ancillary data for fast UI polling: `{"caption": str, "caption_ts": float\|null, "scte_ts": float\|null, "scte_count": int, "scte_event_id": int\|null, "scte_splice_type": int\|null, "ancillary_flow_uuid": str\|null, "error": str\|null}` |
 | `POST` | `/whep` | **Direct mode only, step 1 (server-offers).** Builds a per-viewer pipeline and returns **webrtcbin's SDP offer** (`application/sdp`), `201`, with `Location: /whep/{id}` |
 | `POST` | `/whep/{session_id}` | **Direct mode only, step 2.** Body is the browser's SDP **answer**; applies it to the session. Returns `204` |
 | `DELETE` | `/whep/{session_id}` | **Direct mode only.** Tear down a WHEP viewer (browser sends this on stop); returns `204` |
@@ -327,3 +352,7 @@ exec python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 9600
 | No audio in browser despite green status dot | `<video muted>` permanently silences audio; browser autoplay blocks unmuted streams | Start the video element muted, then show a Mute/Unmute button once playing so the user can enable audio |
 | No audio from Opus even though pipeline starts | `opusenc` only accepts 8/12/16/24/48 kHz; a 96 kHz or 44.1 kHz MXL source fails to negotiate | Add `audioresample` between `audioconvert` and `opusenc` in the audio branch |
 | `Internal data stream error` with multi-channel audio | `capsfilter(channels=2)` placed directly after `mxlsrc` asks the source to produce 2 channels — impossible when the source has more | Move `audioconvert → audioresample` before the `capsfilter`; `audioconvert` can then downmix N→2 channels as negotiated by the downstream caps |
+| `Failed to link st2038anctocc → ccconverter` | static `Element.link()` can't link these dynamically-negotiating caption elements | Build the ancillary decode pipeline with `Gst.parse_launch` (delayed pad linking, like `gst-launch`) |
+| SCTE light never fires on the muxed flow | the flow now has caption ANC every frame, so "non-empty grain" is always true | Parse the ANC packets and match the SCTE-104 DID/SDID (`0x41`/`0x07`), don't use buffer size |
+| `st2038anctocc` exists but caption pipeline won't start | `mxlsrc` data src-pad has no framerate; `set_caps` errors without one | Add a downstream `meta/x-st-2038,alignment=frame,framerate=<num>/<den>` capsfilter; read the rate from the flow's `flow_def.json` `grain_rate` |
+| `st2038anctocc` missing at runtime though the image built | `libgstrsclosedcaption.so` failed to load — a pango/cairo runtime lib is absent | Ensure `gstreamer1.0-plugins-base` is installed (pulls pango/cairo); confirm with `gst-inspect-1.0 st2038anctocc` |

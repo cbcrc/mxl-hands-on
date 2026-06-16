@@ -78,6 +78,7 @@ class StartConfig(BaseModel):
     domain_path: str
     video_flow_uuid: Optional[str] = None
     audio_flow_uuid: Optional[str] = None
+    ancillary_flow_uuid: Optional[str] = None
     encoder: Optional[EncoderSettings] = None
     use_mediamtx: bool = True
 
@@ -223,7 +224,14 @@ async def api_pipeline_start(cfg: StartConfig) -> dict:
         raise HTTPException(status_code=400, detail="At least one flow UUID (video or audio) must be provided")
     enc = cfg.encoder.model_dump() if cfg.encoder else None
     try:
-        _receiver.start(cfg.domain_path, cfg.video_flow_uuid, cfg.audio_flow_uuid, enc, cfg.use_mediamtx)
+        _receiver.start(
+            cfg.domain_path,
+            cfg.video_flow_uuid,
+            cfg.audio_flow_uuid,
+            enc,
+            cfg.use_mediamtx,
+            cfg.ancillary_flow_uuid,
+        )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     return _receiver.get_status()
@@ -238,6 +246,13 @@ async def api_pipeline_stop() -> dict:
 @app.get("/pipeline/status")
 async def api_pipeline_status() -> dict:
     return _receiver.get_status()
+
+
+@app.get("/data-status")
+async def api_data_status() -> dict:
+    """Latest decoded caption text + most recent SCTE trigger (polled frequently
+    by the UI for the caption overlay and the SCTE indicator light)."""
+    return _receiver.get_data_status()
 
 
 # ── Direct-mode WHEP server (browser plays straight from this process) ─────────

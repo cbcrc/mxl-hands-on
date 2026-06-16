@@ -117,6 +117,84 @@ flowchart TB
     video_branch ~~~ audio1_branch ~~~ audio2_branch
 ```
 
+### Ancillary data — Closed Captions + SCTE-104 on one flow (optional, separate pipeline)
+
+When the user enables the **Ancillary Data** flow, the generator runs the **proven linear caption
+pipeline** in **its own GStreamer pipeline** (separate from A/V) and **appends** a SCTE-104 ANC
+packet to the grain in flight with a **pad probe** when the operator triggers — so captions and
+SCTE-104 ride one `video/smpte291` flow:
+
+```bash
+gst-launch-1.0 \
+  appsrc is-live=true format=time caps="text/x-raw,format=utf8" \
+    ! tttocea608 mode=pop-on \
+    ! ccconverter \
+    ! "closedcaption/x-cea-608,framerate=30/1" \
+    ! cctost2038anc \
+    ! "meta/x-st-2038,alignment=frame,framerate=30/1" \
+    ! queue \
+    ! mxlsink flow-id="<ancillary-uuid>" domain="/mxl-domain/<domain-uuid>.mxl-domain"
+#   (a pad probe on the meta/x-st-2038 capsfilter src appends the SCTE-104 ANC packet on trigger)
+```
+
+> The flow UUID is deterministic UUID v5 with role `:Ancillary Data`.
+
+#### Explanation
+
+**Why a separate pipeline (the key design point).** The caption branch is `appsrc`-fed and
+**manually timestamped**. If it shares the A/V pipeline, its startup disturbs the shared pipeline
+clock/base-time, and the video/audio `mxlsink`s latch a wrong *first-buffer* time offset — every
+flow then writes grains at the 1970 epoch (mxl-info shows latency ≈ today's Unix time, "~56
+years"). Giving the ancillary data its own pipeline keeps the A/V pipeline byte-for-byte the
+original, working one. The backend sets it PLAYING and starts the push timer **without blocking**
+on `get_state()` (the timer needs the instance lock that `start()` holds, so blocking would stall
+preroll and again push the first grain to the epoch).
+
+**Caption chain** — `appsrc(text/x-raw,utf8) → tttocea608 mode=pop-on → ccconverter
+→ capsfilter(closedcaption/x-cea-608,framerate) → cctost2038anc
+→ capsfilter(meta/x-st-2038,alignment=frame,framerate) → queue → mxlsink`.
+The caption text is **word-wrapped into ≤32-character rows** (CEA-608's hard per-row limit — this
+is why long lines were previously clipped) and a GLib timer pushes **one row every 2 s**,
+cycling/wrapping the index so the rows scroll and the message repeats. When there is no caption
+text it pushes a **blank row** so the flow keeps producing per-frame CC ANC grains. **Pop-on** is
+used rather than roll-up: pop-on loads each caption off-screen and flips it complete, so a single
+≤32-char chunk round-trips cleanly, whereas roll-up smears ~2 characters at each carriage-return
+boundary (e.g. `"to check"` → `"toheck"`). The 2 s cadence must stay above the row's CEA-608
+transmit time (~16 frames for 32 chars at 2 chars/frame).
+
+**SCTE-104 injection (pad probe)** — a `Gst.PadProbeType.BUFFER` probe on the ANC capsfilter's src
+pad watches for a pending trigger. When set, it `copy_deep()`s the grain and **appends** one
+conformant SCTE-104 ANC packet (DID `0x41` / SDID `0x07`, SMPTE ST 2010; `multiple_operation_message`
+with one `splice_request_data` op, opID `0x0101`, incrementing `splice_event_id`). ST 2038 ANC
+packets are byte-aligned, so the concatenation is a valid multi-ANC grain that `mxlsink` and the
+consumer both parse. The probe leaves the grain's PTS and the pipeline clock untouched, so it
+cannot affect timing.
+
+**Why a probe (two earlier attempts failed).** `st2038ancmux` (muxing a caption leg + a per-frame
+SCTE leg) produced jittery latency (grains 0–35 ahead, cycling) and undecodable grains — the
+aggregator couldn't align the bursty caption leg with the SCTE leg. An appsink→appsrc bridge
+(forwarding each grain to an output appsrc) wrote every grain at the epoch. The pad probe keeps the
+*proven* linear caption→mxlsink timing (which gave good latency and decoded) and only adds bytes,
+so it can reintroduce neither failure.
+
+#### Diagram
+
+```mermaid
+flowchart LR
+    subgraph ancillary_pipeline["Ancillary Data pipeline (separate)"]
+        ccsrc["appsrc\ntext/x-raw,utf8\n(one ≤32-char row / 2s, cycling;\nblank row when idle)"]
+        cc608["tttocea608\nmode=pop-on"]
+        ccconv["ccconverter"]
+        cccaps["capsfilter\nclosedcaption/x-cea-608"]
+        ccanc["cctost2038anc"]
+        ccanccaps["capsfilter\nmeta/x-st-2038\n(pad probe: append SCTE-104 on trigger)"]
+        ccq["queue"]
+        ancsink["mxlsink\nflow-id=ancillary-uuid"]
+
+        ccsrc --> cc608 --> ccconv --> cccaps --> ccanc --> ccanccaps --> ccq --> ancsink
+    end
+```
+
 ---
 
 ## 2. MXL-to-WebRTC (`gst_mxl2webrtc.py`)
@@ -241,6 +319,83 @@ flowchart LR
     mediamtx -->|"WHEP egress"| browser["Browser\n(WebRTC consumer)"]
 
     wb -. "Mode B: Direct WHEP\nserver offers, browser answers\n(/whep, per-viewer pipeline)" .-> browser
+```
+
+### Ancillary data — Caption decode & SCTE-104 parse (optional, one flow)
+
+If the user selects an **Ancillary Data** flow, the app builds **one side pipeline** (shared by
+all viewers, independent of the WebRTC delivery mode) that decodes the single `video/smpte291`
+flow carrying both caption ANC and SCTE-104 ANC. The grains are **tee'd** to a CEA-608 caption
+decoder and to a raw appsink that scans the ANC for SCTE-104. Assembled with `Gst.parse_launch`
+(delayed pad linking — see Explanation).
+
+```bash
+gst-launch-1.0 \
+  mxlsrc data-flow-id="<ancillary-flow-id>" domain="/mxl-domain/<domain>" \
+    ! "meta/x-st-2038,alignment=frame,framerate=30/1" \
+    ! tee name=t \
+  t. ! queue ! st2038anctocc ! ccconverter ! "closedcaption/x-cea-608" \
+     ! cea608tott ! "text/x-raw,format=utf8" \
+     ! appsink name=ccsink emit-signals=true sync=false \
+  t. ! queue \
+     ! appsink name=sctesink emit-signals=true sync=false
+```
+
+> The `framerate` in the capsfilter is read from the flow's `flow_def.json` `grain_rate`.
+
+#### Explanation
+
+This runs regardless of the WebRTC mode (stored in `self._data_pipelines`); any error is
+surfaced through `GET /data-status`.
+
+**Build with `Gst.parse_launch`, not programmatic linking.** `st2038anctocc → ccconverter`
+negotiate caps dynamically; a static `Element.link()` fails (`Failed to link st2038anctocc →
+ccconv`) even though the same chain works under `gst-launch`. `parse_launch` performs the
+delayed pad linking that handles this.
+
+**mxlsrc needs a downstream `framerate`.** `mxlsrc`'s data src-pad template carries no
+framerate and its `set_caps` errors without one, so the pipeline pins
+`meta/x-st-2038,alignment=frame,framerate=<num>/<den>`, with the rate read from the producer's
+`flow_def.json` (`grain_rate`).
+
+**Caption decode (ccsink leg)** — `st2038anctocc → ccconverter → closedcaption/x-cea-608
+→ cea608tott → text/x-raw,utf8 → appsink`. The callback stores the latest decoded text + a
+timestamp (ignoring the producer's blank keep-alive rows). `st2038anctocc` extracts only the
+caption ANC and ignores the SCTE ANC. The frontend polls `GET /data-status` (500 ms) and renders
+a rolling 3-line overlay (handling both single-row and joined multi-row `cea608tott` output).
+
+**SCTE-104 parse (sctesink leg)** — the muxed flow carries caption ANC **every** frame, so
+"non-empty grain" is no longer a trigger. The callback parses the ST 2038 ANC packets
+(`parse_st2038_packets`), finds the SCTE-104 packet (DID `0x41` / SDID `0x07`), and decodes the
+SCTE-104 `multiple_operation_message` (`parse_scte104` → `opID`, `splice_event_id`,
+`splice_insert_type`). Debounced 1 s; the UI lights an indicator for 5 s with the event time
+(ms) and the decoded `splice_event_id`.
+
+#### Diagram
+
+```mermaid
+flowchart LR
+    subgraph anc_pipeline["Ancillary decode pipeline (one flow)"]
+        ancsrc["mxlsrc\ndata-flow-id=ancillary"]
+        anccaps["capsfilter\nmeta/x-st-2038\nframerate"]
+        tee["tee"]
+        ccq["queue"]
+        anctocc["st2038anctocc"]
+        ccconv["ccconverter"]
+        c608["capsfilter\nclosedcaption/x-cea-608"]
+        cea608tott["cea608tott"]
+        ctext["capsfilter\ntext/x-raw,utf8"]
+        ccsink["appsink ccsink\n(store latest caption)"]
+        scq["queue"]
+        scsink["appsink sctesink\n(parse ANC → SCTE-104)"]
+
+        ancsrc --> anccaps --> tee
+        tee --> ccq --> anctocc --> ccconv --> c608 --> cea608tott --> ctext --> ccsink
+        tee --> scq --> scsink
+    end
+
+    ccsink -. "GET /data-status (500ms)" .-> ui["Browser UI\ncaption overlay + SCTE-104 light"]
+    scsink -. "GET /data-status (500ms)" .-> ui
 ```
 
 ---
