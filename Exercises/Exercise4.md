@@ -96,7 +96,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
 
 1. Navigate to exercise 5 working directory
     ```sh
-        cd ~/mxl-hands-on/docker/exercise-5
+        cd ~/mxl-hands-on/docker/exercise-4
     ```
 1. If you did **NOT** do the preparations steps for either WLS or MacOS, make sure you have a /Volumes/mxl mounted in *tmpfs* or *ram*.
    ```sh
