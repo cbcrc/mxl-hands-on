@@ -131,6 +131,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
 | HLS to MXL Gateway | http://localhost:9603 | http://localhost:9603/docs |
 | Input Selector | http://localhost:9604 | http://localhost:9604/docs |
 | HTML5 Keyer | http://localhost:9605 | http://localhost:9605/docs |
+| SPX server | http://localhost:5660 | none |
 
 Reference HLS stream that are 1920x1080p60
 ```sh
