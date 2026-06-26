@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 
 const API = "";
-const NUM_INPUTS = 3;
+const DEFAULT_INPUTS = 3;
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
@@ -136,7 +136,8 @@ export default function App() {
 
   // Setup form state
   const [selectedDomain, setSelectedDomain] = useState("");
-  const [inputs, setInputs] = useState(["none", "none", "none"]);
+  const [maxInputs, setMaxInputs] = useState(DEFAULT_INPUTS);
+  const [inputs, setInputs] = useState(() => Array(DEFAULT_INPUTS).fill("none"));
   const [grouphint,   setGrouphint]   = useState("Input-Selector");
   const [description, setDescription] = useState("selector-out-1");
   const [label,       setLabel]       = useState("input-selector-video");
@@ -167,6 +168,20 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    fetch(`${API}/config`)
+      .then(r => r.json())
+      .then(d => {
+        const n = Number(d?.max_inputs);
+        if (Number.isInteger(n) && n >= 1) {
+          setMaxInputs(n);
+          setInputs((prev) => {
+            const next = Array(n).fill("none");
+            for (let i = 0; i < Math.min(n, prev.length); i++) next[i] = prev[i];
+            return next;
+          });
+        }
+      })
+      .catch(() => {});
     fetch(`${API}/domains`)
       .then(r => r.json())
       .then(d => {
@@ -188,7 +203,7 @@ export default function App() {
 
   const handleDomainChange = (path) => {
     setSelectedDomain(path);
-    setInputs(["none", "none", "none"]);
+    setInputs(Array(maxInputs).fill("none"));
     setFormatErr(null);
     loadFlows(path);
   };
@@ -258,6 +273,7 @@ export default function App() {
 
   const videoFlows = flows.filter(isVideoFlow);
   const anyMxlInput = inputs.some((v) => v !== "none");
+  const slotIndexes = Array.from({ length: maxInputs }, (_, i) => i);
   const canStart =
     !running &&
     !starting &&
@@ -380,7 +396,7 @@ export default function App() {
                 </tr>
               </thead>
               <tbody>
-                {[0, 1, 2].map((idx) => (
+                {slotIndexes.map((idx) => (
                   <tr key={idx}>
                     <td style={{ padding: "0.5rem 0.6rem", color: "#ccc", fontWeight: 600 }}>Input {idx + 1}</td>
                     <td style={{ padding: "0.5rem 0.6rem" }}>
@@ -455,28 +471,27 @@ export default function App() {
         {/* Active Input selector */}
         <div style={{ marginBottom: "1.25rem" }}>
           <label style={S.label}>Active Input</label>
-          <div style={{ display: "flex", gap: "0.6rem" }}>
-            {[0, 1, 2].map((idx) => {
+          <div style={{ display: "flex", gap: "0.6rem", flexWrap: "wrap" }}>
+            {slotIndexes.map((idx) => {
               const isActive = activeInput === idx;
               const kind     = slotKinds[idx] || "black";
               const uuid     = slotUuids[idx];
               const isBlack  = kind !== "mxl";
-              const btnDisabled = !running || isBlack;
+              const btnDisabled = !running;
               return (
                 <button
                   key={idx}
                   onClick={() => switchActive(idx)}
                   disabled={btnDisabled}
-                  title={isBlack ? "Black-fill slots cannot be switched to live" : undefined}
                   style={{
-                    flex: 1,
+                    flex: "1 1 140px",
                     padding: "0.9rem 0.75rem",
                     borderRadius: "6px",
                     border: isActive ? "2px solid #4caf50" : "2px solid #2a2a2a",
                     background: isActive ? "#1a3a1a" : "#222",
                     color: "#fff",
                     cursor: btnDisabled ? "not-allowed" : "pointer",
-                    opacity: isBlack ? 0.45 : 1,
+                    opacity: 1,
                     textAlign: "left",
                     transition: "border-color 0.15s, background 0.15s",
                   }}
@@ -485,7 +500,7 @@ export default function App() {
                     {isActive && "● "}Input {idx + 1}
                   </div>
                   <div style={{ fontSize: "0.78rem", color: "#aaa" }}>
-                    {kind === "mxl" ? "MXL flow" : "⬛ Black fill (disabled)"}
+                    {kind === "mxl" ? "MXL flow" : "⬛ Black fill"}
                   </div>
                   <div style={{ fontSize: "0.72rem", color: "#666", fontFamily: "monospace", marginTop: "0.2rem" }}>
                     {uuid ? `${uuid.slice(0, 8)}…` : "—"}
@@ -500,7 +515,7 @@ export default function App() {
         <div style={{ marginBottom: "1.25rem" }}>
           <label style={S.label}>Input Status</label>
           <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-            {[0, 1, 2].map((idx) => {
+            {slotIndexes.map((idx) => {
               const isActive = activeInput === idx;
               const kind     = slotKinds[idx] || "black";
               const uuid     = slotUuids[idx];

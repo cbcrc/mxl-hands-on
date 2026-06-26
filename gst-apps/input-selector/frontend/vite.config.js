@@ -10,6 +10,7 @@ export default defineConfig({
       "/domains":     "http://localhost:9600",
       "/scan-domain": "http://localhost:9600",
       "/pipeline":    "http://localhost:9600",
+      "/config":      "http://localhost:9600",
     },
   },
 });

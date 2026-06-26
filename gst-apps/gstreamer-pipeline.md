@@ -664,124 +664,77 @@ flowchart TB
 
 ---
 
-## 5. Input Selector (`gst_selector.py`)
+## 5. Input Selector (native Rust grain-router — no GStreamer)
 
-### `gst-launch-1.0` command
+> **This app no longer uses GStreamer.** The Python/GStreamer backend was replaced by a
+> native Rust backend (`gst-apps/input-selector/backend-rs/`) that uses the MXL Rust SDK
+> (`dmf-mxl/rust/mxl`) directly. There is no `gst-launch` equivalent — the switching engine
+> is a grain-copy loop, not a pipeline. It supports a **configurable** number of inputs
+> (`MAX_INPUTS`, default 3), not a fixed 3.
 
-**All three slots connected to MXL flows**
+### How it works
 
-```bash
-gst-launch-1.0 \
-  input-selector name=sel \
-  mxlsrc video-flow-id="<flow-id-1>" domain="/mxl-domain/<domain-uuid>.mxl-domain" \
-       ! "video/x-raw,format=v210" ! queue ! sel.sink_0 \
-  mxlsrc video-flow-id="<flow-id-2>" domain="/mxl-domain/<domain-uuid>.mxl-domain" \
-       ! "video/x-raw,format=v210" ! queue ! sel.sink_1 \
-  mxlsrc video-flow-id="<flow-id-3>" domain="/mxl-domain/<domain-uuid>.mxl-domain" \
-       ! "video/x-raw,format=v210" ! queue ! sel.sink_2 \
-  sel. ! "video/x-raw,format=v210" \
-       ! queue \
-       ! mxlsink flow-id="<output-flow-id>" domain="/mxl-domain/<domain-uuid>.mxl-domain"
-```
+Implements a **live N-to-1 MXL video selector** as a grain replicator. The key fact it relies
+on is that **MXL grain indices are absolute (epoch/TAI)** — every flow at the same grain rate
+shares one index timeline. A dedicated OS thread runs one iteration per grain (= frame):
 
-**Two MXL flows + one black-fill slot (slot 3 empty)**
+1. Read the active slot from an atomic (flipped live by `POST /pipeline/active-input`).
+2. Read the active source's **complete** grain at the current epoch index (running a couple of
+   grains behind the live edge so the source grain is already committed), or synthesise a black
+   v210 grain for an empty slot.
+3. Copy the grain payload **verbatim** into the output writer's grain at the same index and
+   `commit()` it.
 
-```bash
-gst-launch-1.0 \
-  input-selector name=sel \
-  mxlsrc video-flow-id="<flow-id-1>" domain="/mxl-domain/<domain-uuid>.mxl-domain" \
-       ! "video/x-raw,format=v210" ! queue ! sel.sink_0 \
-  mxlsrc video-flow-id="<flow-id-2>" domain="/mxl-domain/<domain-uuid>.mxl-domain" \
-       ! "video/x-raw,format=v210" ! queue ! sel.sink_1 \
-  videotestsrc pattern=2 is-live=true \
-       ! videoconvert \
-       ! "video/x-raw,format=v210,width=1920,height=1080,framerate=30000/1001,interlace-mode=progressive" \
-       ! queue ! sel.sink_2 \
-  sel. ! "video/x-raw,format=v210" \
-       ! queue \
-       ! mxlsink flow-id="<output-flow-id>" domain="/mxl-domain/<domain-uuid>.mxl-domain"
-```
+Because each output grain is committed atomically from exactly one source, flipping the atomic
+between iterations always lands on a frame boundary — **the switch is clean by construction**.
+There is no caps renegotiation, no `active-pad` race, and no live-vs-pipeline clock mismatch.
+Only the active source is read each frame, so cost is **O(1) regardless of input count**.
 
-> **Note:** The black-fill capsfilter must declare the **exact same** `width`,
-> `height`, `framerate`, and `interlace-mode` as the validated MXL inputs — the
-> backend reads these from each selected input's `flow_def.json` and rejects the
-> Start request if they don't match. Live switching is done at runtime by setting
-> the `active-pad` property on `input-selector`; no pipeline rebuild is needed.
+Core SDK calls (`dmf-mxl/rust/mxl`): `GrainReader::get_complete_grain(index, timeout)`,
+`GrainWriter::open_grain(index) → payload_mut() → commit(total_slices)`, and
+`MxlInstance::{get_current_index, get_duration_until_index, sleep_for}` for pacing.
 
-### Explanation
+**Format-matching invariant.** Before starting, the backend reads each selected input's
+`{domain}/{uuid}.mxl-flow/flow_def.json` and verifies that `frame_width`, `frame_height`,
+`grain_rate`, and `interlace_mode` all match. On mismatch, `POST /pipeline/start` returns HTTP
+400 with `{detail, errors, per_slot}` and the UI shows a banner. Matching is required because
+the output flow has a single fixed grain size and payloads are copied byte-for-byte.
 
-Implements a **live 3-to-1 MXL video selector**. Up to three input slots are wired in parallel
-into a single GStreamer `input-selector` element, whose single source pad feeds one `mxlsink`.
-The pipeline keeps all three input branches in `PLAYING` at all times; switching the live output
-is done by changing `input-selector`'s `active-pad` property, which is a sub-frame, glitch-free
-operation as long as every branch produces buffers with identical caps.
+**Black-fill slots are fully live-switchable.** Unlike the old GStreamer version (where a
+`videotestsrc` on the pipeline clock could not be switched into live), black grains are
+synthesised in Rust on the same absolute index timeline as every other source — a flat v210
+black frame (Y=0x040, Cb=Cr=0x200) tiled across the payload. Switching to/from black is just as
+clean as any MXL source. At least one slot must still be a real MXL input, since the output
+format is derived from it.
 
-**Format-matching invariant.** Before the pipeline is built, the backend reads each selected
-input's `{domain}/{uuid}.mxl-flow/flow_def.json` and verifies that `frame_width`,
-`frame_height`, `grain_rate`, and `interlace_mode` all match. If any selected input differs,
-the `/pipeline/start` call is rejected with HTTP 400 and the UI displays a banner showing each
-slot's detected format. This guarantee is what allows `input-selector` to switch without
-re-negotiating downstream caps mid-stream.
-
-**MXL input branches** — `mxlsrc → capsfilter(v210) → queue → input-selector.sink_N`
-The `mxlsrc` `video-flow-id` property identifies the input flow inside the MXL domain.
-The explicit `capsfilter(format=v210)` is mandatory: without it, auto-negotiation can land on a
-different pixel format that the selector and downstream `mxlsink` will refuse.
-
-**Black-fill slots** — `videotestsrc pattern=2 is-live=true → videoconvert → capsfilter(v210, W×H @ num/den, interlace) → queue → input-selector.sink_N`
-Slots left as "None" in the UI are filled with a synthetic black source whose caps are cloned
-from the validated common input format. `is-live=true` is required so that `videotestsrc`
-matches the timing model of the real `mxlsrc` branches; without it the live and non-live
-buffers cannot share a single selector. At least one slot must be a real MXL input — if all
-three were black-fill, the output format would be undefined and the Start request is rejected.
-
-> ⚠️ **Switching the live output to a black-fill slot is disabled in the UI.** In practice the
-> clock-domain difference between `mxlsrc` (live MXL clock) and `videotestsrc` (pipeline clock),
-> together with caps fields the format-validation invariant does not pin down (`colorimetry`,
-> `chroma-site`, `pixel-aspect-ratio`), causes `input-selector` to emit "Internal data stream
-> error" at the moment of switch. Tuning `sync-streams`, `sync-mode`, `cache-buffers`, and
-> inserting a downstream `videoconvert` did not eliminate the problem, so the simpler approach
-> taken here is to gate the switch at the UI: the Active-Input button for a black-fill slot is
-> rendered greyed-out and is not clickable. The black-fill branch remains wired into the pipeline
-> so that the slot layout and format-validation invariant stay uniform regardless of which slots
-> the user populates with real MXL flows.
-
-**Output branch** — `input-selector.src → capsfilter(v210) → queue → mxlsink(flow-id, domain)`
-The output flow UUID is **deterministic** (UUID v5 from the user-provided group hint), so
-restarting the pipeline with the same group hint reuses the same MXL flow directory.
-After the pipeline reaches PLAYING, a background thread polls for the newly written
-`flow_def.json` and patches its `grouphint`, `description`, `label`, and
-`tags["urn:x-nmos:tag:grouphint/v1.0"]` fields with the values entered in the Setup form.
+**Output flow.** The output UUID is **deterministic** (UUIDv5 from the user's group hint, same
+namespace as before), so restarting reuses the same flow directory. The output `flow_def` is
+derived from the first selected input's def (inheriting raster / grain_rate / colorspace /
+components / media_type), with `id`, `description`, `label`, `grouphint`, and
+`tags["urn:x-nmos:tag:grouphint/v1.0"]` set from the Setup form. It is written at flow creation
+and re-asserted on disk immediately afterward (no polling needed).
 
 ### Diagram
 
 ```mermaid
 flowchart LR
-    subgraph slot1["Input 1 (MXL)"]
-        s1["mxlsrc\nvideo-flow-id=slot1\ndomain=/mxl-domain/…"]
-        c1["capsfilter\nformat=v210"]
-        q1["queue"]
-        s1 --> c1 --> q1
+    subgraph readers["MXL readers (one per MXL slot, pre-opened)"]
+        r1["GrainReader slot 0"]
+        r2["GrainReader slot 1"]
+        rN["GrainReader slot N…"]
     end
-    subgraph slot2["Input 2 (MXL)"]
-        s2["mxlsrc\nvideo-flow-id=slot2"]
-        c2["capsfilter\nformat=v210"]
-        q2["queue"]
-        s2 --> c2 --> q2
-    end
-    subgraph slot3["Input 3 (black-fill example)"]
-        b3["videotestsrc\npattern=black\nis-live=true"]
-        bc3["videoconvert"]
-        bcaps3["capsfilter\nv210, W×H, num/den, interlace"]
-        q3["queue"]
-        b3 --> bc3 --> bcaps3 --> q3
-    end
+    blk["v210 black\n(synth, empty slots)"]
 
-    q1 -->|"sink_0"| sel["input-selector\nactive-pad=<live switch>"]
-    q2 -->|"sink_1"| sel
-    q3 -->|"sink_2"| sel
+    r1 --> sw{"active slot\n(AtomicUsize,\nlive switch)"}
+    r2 --> sw
+    rN --> sw
+    blk --> sw
 
-    sel --> ocaps["capsfilter\nformat=v210"] --> oqueue["queue"] --> osink["mxlsink\nflow-id=output\ndomain=/mxl-domain/…"]
+    sw -->|"get_complete_grain(idx)\n→ copy payload"| w["GrainWriter\nopen_grain(idx)\n→ commit(total_slices)"]
+    w --> out["MXL output flow\n(deterministic UUIDv5)"]
+
+    idx["epoch index\n(idx = current − LAG)"] -.-> sw
+    idx -.-> w
 ```
 
 ---

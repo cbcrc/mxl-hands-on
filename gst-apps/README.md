@@ -1,6 +1,6 @@
 # GStreamer MXL Apps — Quick Start
 
-This directory contains six GStreamer-based web applications that produce, inspect, and consume [MXL](../dmf-mxl) flows. Each app runs as a single Docker container: a FastAPI backend (also serving GStreamer pipelines where needed) and a React frontend, both on the same port.
+This directory contains web applications that produce, inspect, and consume [MXL](../dmf-mxl) flows. Each app runs as a single Docker container serving a REST API and a React frontend on the same port. Most use a FastAPI backend driving GStreamer pipelines; the **Input Selector** is a native Rust backend that uses the MXL SDK directly (no GStreamer).
 
 ---
 
@@ -13,7 +13,7 @@ This directory contains six GStreamer-based web applications that produce, inspe
 | [MXL to WebRTC](#3-mxl-to-webrtc) | `mxl2webrtc:latest` | `Depending on Docker compose config` | Reads MXL flows and relays them as a low-latency WebRTC stream in the browser |
 | [File Player](#4-file-player) | `file-player:latest` | `Depending on Docker compose config` | Loops a media file (MP4/TS) and publishes its video and/or audio streams to MXL |
 | [HLS to MXL Gateway](#5-hls-to-mxl-gateway) | `hls2mxl:latest` | `Depending on Docker compose config` | Ingests a live HLS stream and republishes it as MXL video and audio flows |
-| [Input Selector](#6-input-selector) | `input-selector:latest` | `Depending on Docker compose config` | Live-switches between three MXL video inputs and publishes the active one to a single MXL video output |
+| [Input Selector](#6-input-selector) | `input-selector:latest` | `Depending on Docker compose config` | Live-switches between up to `MAX_INPUTS` MXL video inputs (frame-accurate) and publishes the active one to a single MXL video output |
 | [HTML5 Keyer](#7-html5-keyer) | `html5-keyer:latest` | `9605` | Composites an HTML5 graphics overlay (CEF/Chromium) over a live MXL video background and publishes the result as an MXL output flow |
 
 Pre-built images are published to `ghcr.io/cbcrc` — see [Exercise 4](../Exercises/Exercise4.md) to spin up the whole system without compiling anything.
@@ -44,6 +44,7 @@ cp .env.template .env
 | Variable | Used by | Description |
 |----------|---------|-------------|
 | `MEDIA_DEVICE` | `file-player` | Absolute path to a host directory containing the `.mp4` / `.ts` files you want the File Player to loop. Mounted read-only inside the container at `/home/file`. |
+| `INPUT_SELECTOR_MAX_INPUTS` | `input-selector` | Optional. Number of selectable input slots in the Input Selector (UI + router). Defaults to `3` if unset. Raising it is cheap — the router reads only the active input per frame. |
 
 ---
 
@@ -78,7 +79,7 @@ Open the UIs in a browser once the containers are up:
 | MXL to WebRTC | http://localhost:9601 | http://localhost:9601/docs |
 | File Player | http://localhost:9602 | http://localhost:9602/docs |
 | HLS to MXL Gateway | http://localhost:9603 | http://localhost:9603/docs |
-| Input Selector | http://localhost:9604 | http://localhost:9604/docs |
+| Input Selector | http://localhost:9604 | — (deferred; Rust backend) |
 | HTML5 Keyer | http://localhost:9605 | http://localhost:9605/docs |
 
 ---
@@ -230,31 +231,29 @@ For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 4](./g
 
 **Image:** `ghcr.io/cbcrc/input-selector:latest`
 
-A live 3-to-1 MXL video switcher. Reads up to three MXL video flows from the same domain, routes exactly one of them at a time to a single MXL video output flow, and lets the user switch the active input from the UI without rebuilding the pipeline.
+A live N-to-1 MXL video switcher with **frame-accurate, glitch-free** switching. Reads up to `MAX_INPUTS` MXL video flows from a domain, routes exactly one at a time to a single MXL video output flow, and lets the user switch the active input from the UI.
+
+> **Native Rust backend (no GStreamer).** Unlike the other apps, the Input Selector's engine is a native Rust backend (axum + the MXL Rust SDK), not a GStreamer pipeline. The number of input slots is configurable via `INPUT_SELECTOR_MAX_INPUTS` (default 3).
 
 **How it works:**
 
-```
-mxlsrc (input 1) → capsfilter(v210) → queue ┐
-mxlsrc (input 2) → capsfilter(v210) → queue ┼→ input-selector ─→ capsfilter(v210) → queue → mxlsink (output)
-mxlsrc (input 3) → capsfilter(v210) → queue ┘
-```
+MXL grain indices are absolute (epoch/TAI), so all same-rate flows share one index timeline. A router thread copies output grain *N* from the active source's grain *N* and commits it whole. Switching is just changing which source the next grain is copied from — because each output grain comes entirely from one source, the switch always lands on a frame boundary and is **clean by construction** (no caps renegotiation, no clock-domain race). Only the active input is read each frame, so cost is O(1) regardless of how many inputs exist.
 
-All three input branches stay in `PLAYING` at all times. Switching the live output is a property change on the `input-selector` element (`active-pad`) — sub-frame, no pipeline rebuild. This works only when every selected input shares the same raster, frame rate, and interlace mode, so the backend reads each input's `flow_def.json` at Start time and rejects mismatches with a per-slot error banner.
+All selected inputs must share the same raster, frame rate, and interlace mode (the output has one fixed grain size and payloads are copied byte-for-byte), so the backend reads each input's `flow_def.json` at Start and rejects mismatches with a per-slot error banner.
 
-**Setup panel** (before starting the pipeline):
-- Select the MXL domain. The same domain is used for the three inputs and the output.
-- Pick an MXL video flow for **Input 1**, **Input 2**, and **Input 3**. Any slot left as **"None — black fill"** is wired to a synthetic black `videotestsrc` cloned from the validated common format (so the slot is structurally present but black). At least one slot must be a real MXL flow — the output format is derived from the selected inputs.
+**Setup panel** (before starting):
+- Select the MXL domain (shared by all inputs and the output).
+- Pick an MXL video flow for each of the `MAX_INPUTS` slots. Any slot left as **"None — black fill"** is filled with a synthesised v210 black frame on the same index timeline. At least one slot must be a real MXL flow — the output format is derived from it.
 - Set the output **Group Hint** (default `Input-Selector`), **Description** (default `selector-out-1`), and **Label** (default `input-selector-video`). The output flow UUID is **deterministic** (UUID v5 from the group hint), so restarting with the same group hint reuses the same flow directory.
 - Format mismatches between selected inputs are displayed as a dismissible red banner listing each slot's detected `WxH @ num/den` and what differs.
 
 **Operation panel** (while running):
-- A three-button **Active Input** switcher — click a button to make that input the live output. The active button is highlighted in green.
-- **Black-fill slots are visible but disabled** in the switcher (greyed out with a tooltip) because switching the live output between a live MXL clock and the synthetic `videotestsrc` clock domain trips `input-selector`'s caps/timing invariants. Switching among real MXL slots of identical format works flawlessly.
+- An **Active Input** switcher with one button per slot — click to make that input the live output. The active button is highlighted in green.
+- **Black-fill slots are fully switchable live** — because the black frames are synthesised on the same absolute index timeline as the MXL sources, switching to/from black is just as clean as switching between MXL flows (this was not possible in the old GStreamer version).
 - The **Input Status** row shows each slot's source kind (MXL flow / black fill), its UUID, and a presence dot for the currently routed source.
 - The **Output Flow** panel shows the deterministic UUID written to the domain and the active raster / frame rate / interlace mode.
 
-For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 5](./gstreamer-pipeline.md#5-input-selector-gst_selectorpy).
+For the architecture and diagram see [gstreamer-pipeline.md — Section 5](./gstreamer-pipeline.md#5-input-selector-native-rust-grain-router--no-gstreamer).
 
 ---
 
