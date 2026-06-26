@@ -7,7 +7,7 @@ volumes:
       o: "bind,nosuid,strictatime"
 services:
   writer-media-function:
-    image: ghcr.io/cbcrc/mxl-writer:mxl-ff0ece6
+    image: ghcr.io/cbcrc/mxl-writer:latest
     platform: linux/amd64
     user: "1000:1000"
     restart: unless-stopped
@@ -16,7 +16,7 @@ services:
         source: mxl-domain
         target: /domain  
   reader-media-function:
-    image: ghcr.io/cbcrc/mxl-reader:mxl-ff0ece6
+    image: ghcr.io/cbcrc/mxl-reader:latest
     platform: linux/amd64
     user: "1000:1000"
     restart: unless-stopped

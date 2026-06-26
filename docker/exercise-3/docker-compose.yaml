@@ -7,7 +7,7 @@ volumes:
       o: "bind,nosuid,strictatime"
 services:
   writer-media-function:
-    image: ghcr.io/cbcrc/mxl-writer:mxl-ff0ece6
+    image: ghcr.io/cbcrc/mxl-writer:latest
     platform: linux/amd64
     user: 1000:1000
     restart: unless-stopped
@@ -18,7 +18,7 @@ services:
     command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-g", "demo-app-writer", "-v", "/app/v210_flow.json", "-t", "Original Flow"]
   
   clip-player-function:
-    image: ghcr.io/cbcrc/mxl-clip-player:mxl-ff0ece6
+    image: ghcr.io/cbcrc/mxl-clip-player:latest
     platform: linux/amd64
     user: 1000:1000
     restart: unless-stopped
@@ -30,7 +30,7 @@ services:
     command: ["/app/mxl-gst-looping-filesrc", "-d", "/domain", "-i", "/app/sizzle.ts"]
   
   reader-media-function:
-    image: ghcr.io/cbcrc/mxl-reader:mxl-ff0ece6
+    image: ghcr.io/cbcrc/mxl-reader:latest
     platform: linux/amd64
     user: 1000:1000
     restart: unless-stopped
