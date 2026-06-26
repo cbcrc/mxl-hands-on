@@ -26,13 +26,25 @@ COPY ${FULL_BUILD_PATH} /tmp/build/
 
 # Move only necessary files from the temp directory to /app and clean up
 RUN mv /tmp/build/lib/*.so* /app/ \
-    && mv /tmp/build/lib/internal/libmxl-common.* /app/ \
     && mv /tmp/build/lib/tests/data/*.json /app/ \
     && mv /tmp/build/tools/mxl-gst/mxl-gst-testsrc /app/ \
     # Clean up the temp directory
     && rm -rf /tmp/build
 
+# Replace the placeholders in the flow JSON files baked into this image.
+# NOTE: the grouphint tag is NOT set here. mxl-gst-testsrc overwrites it at
+# runtime from the -g/--group-hint option, appending ":audio"/":video" itself
+# (see the CMD below), so editing it in the JSON would have no effect.
+RUN sed -i \
+        -e 's|___CHANGE ME___ Long description of the audio flow|demo-app-writer-audio-flow|' \
+        -e 's|___CHANGE ME___ Short description of the audio flow|stereo-tone|' \
+        /app/audio_flow.json \
+    && sed -i \
+        -e 's|___CHANGE ME___ Long description of the video flow|demo-app-writer-video-flow|' \
+        -e 's|___CHANGE ME___ Short description of the video flow|colour-bar|' \
+        /app/v210_flow.json
+
 # Set rpath for the executable
 RUN patchelf --set-rpath /app mxl-gst-testsrc
 
-CMD ["/app/mxl-gst-testsrc", "-d", "/domain", "-v", "/app/v210_flow.json", "-a", "/app/audio_flow.json"]
+CMD ["/app/mxl-gst-testsrc", "-d", "/domain", "-g", "demo-app-writer", "-v", "/app/v210_flow.json", "-a", "/app/audio_flow.json"]

@@ -24,7 +24,6 @@ COPY ${FULL_BUILD_PATH} /tmp/build/
 
 # Move only necessary files from the temp directory to /app and clean up
 RUN mv /tmp/build/lib/*.so* /app/ \
-    && mv /tmp/build/lib/internal/libmxl-common.* /app/ \
     && mv /tmp/build/tools/mxl-info/mxl-info /app/ \
     # Clean up the temp directory
     && rm -rf /tmp/build

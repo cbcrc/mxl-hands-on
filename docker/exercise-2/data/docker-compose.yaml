@@ -31,7 +31,7 @@ services:
         source: mxl-domain-2
         target: /domain
       - ./data/v210_flow_2.json:/app/v210_flow_2.json  # Example: Upload specific file into container
-    command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-v", "/app/v210_flow_2.json", "-t", "NEW Flow 2"]
+    command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-g", "demo-app-writer-2", "-v", "/app/v210_flow_2.json", "-t", "NEW Flow 2"]
   reader-media-function:
     image: ghcr.io/cbcrc/mxl-reader:latest
     platform: linux/amd64

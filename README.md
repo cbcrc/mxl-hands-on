@@ -20,7 +20,7 @@ As the media industry transitions from traditional hardware-based setups to virt
 
 ### [Exercise 3 - Add VNC client for GUI and changing the attribute of one of the writer app](./Exercises/Exercise3.md)
 
-### [Exercise 4 - Explore audio and video with the portable references apps.](./Exercises/Exercise4.md)
+### [Exercise 4 - Explore audio and video in a real DMF ecosystem with Gstreamer based mxl applications.](./Exercises/Exercise4.md)
 
 ## TODO
 

@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# Native Rust backend for the MXL Input Selector.
+#
+# Standalone crate (detached `[workspace]`) — not part of the dmf-mxl/rust
+# workspace.  Depends on the MXL Rust SDK via a relative path.
+#
+# Built with the `mxl-not-built` feature: mxl-sys does NOT cmake-build the C
+# library (no ninja needed) — it binds against the prebuilt headers in
+# dmf-mxl/lib/include and dlopen()s libmxl.so at runtime.  `get_mxl_so_path()`
+# resolves to `<dmf-mxl>/build/Linux-Clang-Release/lib/libmxl.so`, baked from
+# this crate's build location at compile time.
+#
+# In Docker the crate is compiled in a builder stage with dmf-mxl mounted/copied
+# at /workspace/mxl, so the baked path is
+# /workspace/mxl/build/Linux-Clang-Release/lib/libmxl.so — which the runtime
+# stage already symlinks to /opt/mxl/lib/libmxl.so.
+
+[package]
+name = "input-selector-router"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[[bin]]
+name = "input-selector-router"
+path = "src/main.rs"
+
+[dependencies]
+mxl = { path = "../../../dmf-mxl/rust/mxl", features = ["mxl-not-built"] }
+
+axum = "0.7"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tower-http = { version = "0.6", features = ["fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+uuid = { version = "1", features = ["v5"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[workspace]

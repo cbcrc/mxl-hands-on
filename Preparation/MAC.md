@@ -25,6 +25,9 @@ In order to run these exercises on a Mac, you need to install Docker and create 
    ```sh
    docker run hello-world
    ```
+1. Some user have reported they had issue using Rosetta with Docker Desktop. If you get an 'invalid instruction' message in your docker logs using our images, you can try to switch to VMM for the docker virtual machine manager in Settings/General/virtual Machine Options.
+
+<img src="./Mac-VM-Options.png" width="800">
 
 ### Installing Xcode Command Line Tools. This will come with git commands.
 

@@ -1,0 +1,14 @@
+{
+  "http_port": 9550,
+  "logging_level": -20,
+  "domain": "local",
+  "label": "mxl2webrtc",
+  "seed_id": "d7e8f9a0-b1c2-4d3e-af60-4b5c6d7e8f9a",
+  "mxl_domain_id": "51ef9b5c-98c1-4f98-9def-1d61ee9a4fdb",
+  "senders": [],
+  "receivers": ["xv", "xa"],
+  "how_many": 1,
+  "activate_senders": true,
+  "registration_port": 80,
+  "registry_address": "nmos-registry"
+}

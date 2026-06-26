@@ -1,0 +1,51 @@
+{
+  "general": {
+    "username": "",
+    "password": "",
+    "hostname": "",
+    "greeting": "",
+    "langfile": "english.json",
+    "loglevel": "info",
+    "launchBrowser": false,
+    "apikey": "",
+    "logfolder": "./LOG",
+    "dataroot": "./DATAROOT",
+    "templatesource": "spx-ip-address",
+    "port": 5660,
+    "disableConfigUI": false,
+    "disableLocalRenderer": false,
+    "disableOpenFolderCommand": false,
+    "disableSeveralControllersWarning": false,
+    "hideRendererCursor": false,
+    "resolution": "AUTO",
+    "preview": "selected",
+    "renderer": "normal",
+    "autoplayLocalRenderer": true,
+    "recents": [
+      "MXL test/test",
+      "MyFirstOgrafProject/MyFirstOgrafRundown"
+    ]
+  },
+  "casparcg": {
+    "servers": []
+  },
+  "osc": {
+    "enable": false,
+    "port": 57121
+  },
+  "mos": {
+    "odb": "http://localhost:3002"
+  },
+  "globalExtras": {
+    "customscript": "/ExtraFunctions/demoFunctions.js",
+    "CustomControls": []
+  },
+  "tcp": {
+    "enable": true,
+    "port": 5661,
+    "parser": "default"
+  },
+  "warning": "Modifications done in the SPX will overwrite this file.",
+  "copyright": "(c) 2020- SPX Graphics (https://spx.graphics)",
+  "updated": "2026-05-27T19:04:06.290Z"
+}

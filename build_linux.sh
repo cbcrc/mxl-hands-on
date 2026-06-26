@@ -82,3 +82,54 @@ echo "=================================================================="
 echo "All Linux builds completed!"
 echo "Build artifacts can be found in ${MXL_PROJECT_PATH}/build/ and ${MXL_PROJECT_PATH}/install_*"
 echo "=================================================================="
+
+# ==============================================================================
+# Rust bindings + GStreamer plugin (depends on Linux-Clang-Release C build)
+# ==============================================================================
+RUST_PRESET="Linux-Clang-Release"
+RUST_BUILD_DIR="${MXL_PROJECT_PATH}/build/${RUST_PRESET}"
+
+if [ ! -d "${RUST_BUILD_DIR}" ]; then
+    echo "WARNING: ${RUST_BUILD_DIR} not found — skipping Rust build."
+    echo "Make sure the C library built successfully for ${RUST_PRESET}."
+    exit 0
+fi
+
+echo "=================================================================="
+echo "Building Rust bindings and GStreamer plugin"
+echo "=================================================================="
+
+# 1. Build Rust Docker image (context is repo root so Dockerfile can copy devcontainer scripts)
+docker build \
+  --build-arg BASE_IMAGE_VERSION=24.04 \
+  --build-arg USER_UID=${USER_UID} \
+  --build-arg USER_GID=${USER_GID} \
+  -t mxl_rust_build_container \
+  -f Dockerfile.rust-build \
+  .
+
+if [ $? -ne 0 ]; then
+    echo "ERROR: Rust Docker image build failed."
+    exit 1
+fi
+
+# 2. Build Rust crates (mxl-sys, mxl, gst-mxl-rs)
+echo "--- Building Rust crates ---"
+docker run \
+  --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
+  -u ${USER_UID}:${USER_GID} \
+  -e CARGO_HOME=/workspace/mxl/rust/.cargo-docker \
+  -e LD_LIBRARY_PATH=/workspace/mxl/build/${RUST_PRESET}/lib:/workspace/mxl/build/${RUST_PRESET}/lib/internal \
+  -w /workspace/mxl/rust \
+  -i mxl_rust_build_container \
+  bash -c "cargo build --release --features mxl-sys/mxl-not-built,mxl/mxl-not-built"
+
+if [ $? -ne 0 ]; then
+    echo "ERROR: Rust build failed."
+    exit 1
+fi
+
+echo "=================================================================="
+echo "Rust build completed!"
+echo "Build artifacts can be found in ${MXL_PROJECT_PATH}/rust/target/release/"
+echo "=================================================================="

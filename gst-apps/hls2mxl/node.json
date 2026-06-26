@@ -1,0 +1,14 @@
+{
+  "http_port": 9520,
+  "logging_level": -20,
+  "domain": "local",
+  "label": "hls2mxl",
+  "seed_id": "c5d6e7f8-a9b0-4c1d-ae5f-3a4b5c6d7e8f",
+  "mxl_domain_id": "51ef9b5c-98c1-4f98-9def-1d61ee9a4fdb",
+  "senders": ["xv", "xa"],
+  "receivers": [],
+  "how_many": 1,
+  "activate_senders": false,
+  "registration_port": 80,
+  "registry_address": "nmos-registry"
+}

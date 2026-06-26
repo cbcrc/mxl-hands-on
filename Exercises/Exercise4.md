@@ -1,120 +1,171 @@
-## Exercise 4 - Exploring portable mxl reference apps in a simple setup.
+## Exercise 5 - Full open source DMF
 
 ### Synopsis
 
-In Exercise 4, we will set up one Docker containers: one MXL writer container to generate a video flow and an audio flow. We will then use the portables apps to consume both flows and generate an extra flow. The portable apps will be used directly in CLI.
-
-This leverage all other concepts learned in previous exercises.
-
-### Audio does not work well with type 2 hypervisors.
+In this exercise, we will compile the latest commit of the MXL SDK including rust bindings and the rust Gstreamer plugins. Then we will build a full stream augmentation workflow supported by various open source project. A full list is found at the end of this document.
 
 ```mermaid
-   graph
-      direction LR
-         subgraph Node/Host
-            subgraph docker_writer [docker]
-                  direction LR
-                  gstreamer_writer[Gstreamer writer]
-                  mxl_sdk_writer[MXL SDK]
-                  gstreamer_writer --> mxl_sdk_writer
+    flowchart LR
+        subgraph HostNode [Host / Compute Node]
+            direction LR
+
+            %% --- Stage 1: Sources ---
+            subgraph Sources [Sources]
+                direction TB
+                HLS2MXL[HLS2MXL]
+                LoopPlayer[File Player]
+                TestGen[Test Generator]
+                WebRTC2MXL[WebRTC2MXL]
             end
 
-            subgraph Host_writer [CLI]
-                direction LR
-                gstreamer_loop_player[Gstreamer Loop player]
-                mxl_sdk_writer_2[MXL SDK]
-                gstreamer_loop_player --> mxl_sdk_writer_2
+            %% --- Stage 2: Processing ---
+            subgraph Processing [Processing]
+                direction TB
+                AudioMix[Audio Mix]
+                HTML5Keyer[HTML5 Keyer]
+                SPXGraphics[SPX Graphics]
             end
+
+            %% --- Stage 3: Output ---
+            MXL2WebRTC[MXL2WebRTC]
+
+            %% =========================================
+            %% CONNECTIONS
+            %% =========================================
+
+            %% --- Solid Video (blue) Connections (Indices 0 to 4) ---
+            %% Video Sources to Input selector
+            HLS2MXL -- IN 1 --> InputSel
+            LoopPlayer -- IN 2--> InputSel
+            TestGen -- IN 3 --> InputSel
             
-            subgraph Host_reader [CLI]
-                  direction LR
-                  gstreamer_reader[Gstreamer Reader]
-                  mxl_sdk_reader[MXL SDK]
-                  mxl_sdk_reader --> gstreamer_reader
-            end
 
-            tmpfs([tmpfs<br>/Volumes/mxl/domain_1])
+            %% Input Selector to Processing
+            InputSel --> HTML5Keyer
+            
+            %% Processing to Output
+            HTML5Keyer --> MXL2WebRTC
 
-            mxl_sdk_writer --> tmpfs
-            mxl_sdk_writer_2 --> tmpfs
-            tmpfs --> mxl_sdk_reader
-         end
+            %% --- Solid Audio (green) Connection (Indices 5 to 7) ---
+            %% Audio Sources to Audio Mixer
+            WebRTC2MXL -- IN 2 --> AudioMix
+            HLS2MXL -- IN 1 --> AudioMix
 
-         %% Styling
-         linkStyle default stroke:black,stroke-width:2px
-         style docker_writer fill:#cce6ff,color:black,stroke:#333,stroke-width:3px
-         style Host_reader fill:#cce6ff,color:black,stroke:#333,stroke-width:3px
-         style Host_writer fill:#cce6ff,color:black,stroke:#333,stroke-width:3px
-         style gstreamer_writer fill:#66b3ff,color:black,stroke:#333,stroke-width:2px
-         style gstreamer_reader fill:#66b3ff,color:black,stroke:#333,stroke-width:2px
-         style gstreamer_loop_player fill:#66b3ff,color:black,stroke:#333,stroke-width:2px
-         style mxl_sdk_writer fill:#007bff,color:black,stroke:#333,stroke-width:2px,color:#fff
-         style mxl_sdk_reader fill:#007bff,color:black,stroke:#333,stroke-width:2px,color:#fff
-         style mxl_sdk_writer_2 fill:#007bff,color:black,stroke:#333,stroke-width:2px,color:#fff
-         style tmpfs fill:#ffe0b3,color:black,stroke:#333,stroke-width:2px
+            %% Audio Processing to/From MXL
+            AudioMix --> MXL2WebRTC
+
+        end
+
+        %% --- Legend (Outside the Compute Node) (Indices 8 to 10) ---
+    subgraph Legend [Diagram Key]
+        direction LR
+        k1[Gstreamer</br>based app] -- MXL Video flow --> kt1[Gstreamer</br>based app]
+        k2[Gstreamer</br>based app] -- MXL Audio flow --> kt2[Gstreamer</br>based app]
+        k4[HTML 5 Graphic</br>engine]
+        k5[Future Apps]
+    end
+
+    %% Positioning the legend below the main node
+    HostNode ~~~ Legend
+
+        %% ===========================================
+        %% STYLING
+        %% ===========================================
+
+        %% Node Styling
+        classDef gstreamer fill:#66b3ff,color:black,stroke:#333,stroke-width:2px;
+        classDef control fill:#007bff,color:#fff,stroke:#333,stroke-width:2px;
+        classDef other fill:#cce6ff,color:black,stroke:#333,stroke-width:2px;
+        classDef future fill:#ffcccc,color:black,stroke:#cc0000,stroke-width:2px,stroke-dasharray:5 5
+
+        class HLS2MXL,LoopPlayer,TestGen,InputSel,HTML5Keyer,MXL2WebRTC,k1,kt1,k2,kt2,k3 gstreamer
+        class WebRTC2MXL,AudioMix,k5 future
+        class NmosRegistry,DummyNmosNode,NmosController,kt3 control
+        class SPXGraphics,k4 other
+
+        %% Link Styling
+        %% Solid blue for video connections
+        linkStyle 0,1,2,3,4,8 stroke:blue,stroke-width:2px
+
+        %% Solid green for audio connections
+        linkStyle 5,6,7,9 stroke:green,stroke-width:2px
+
 ```
 
 ### Steps
 
-1. Go to exercise 4 folder  
-   ```sh
-   cd ~/mxl-hands-on/docker/exercise-4
-   ```
-1. Inspect the content of the docker-compose.yaml. By looking at it, you should be able to deduct how many flows and where they will be created.  
-   ```sh
-   cat docker-compose.yaml
-   ```
-1. Start the container with the provided .yaml file  
-   ```sh
-   docker compose up -d
-   ```
-1. Make sure the container is running correctly.  
-   ```sh
-   docker container ls
-   ```
-1. Verify that both flows are present in the domain.
+1. Navigate to exercise 5 working directory
     ```sh
-    ls /Volumes/mxl/domain_1
-    ```
-1. OPTIONAL, if you started straight from exercise 4 without doing the previous exercises, create the two local variables for the flows unique IDs.
-    ```sh
-    FLOW1V_ID=5fbec3b1-1b0f-417d-9059-8b94a47197ed
-    FLOW1A_ID=b3bb5be7-9fe9-4324-a5bb-4c70e1084449
+        cd ~/mxl-hands-on/docker/exercise-4
     ```
 1. If you did **NOT** do the preparations steps for either WLS or MacOS, make sure you have a /Volumes/mxl mounted in *tmpfs* or *ram*.
    ```sh
-   mount -t tmpfs -o size=512m tmpfs /Volumes/mxl # on WSL linux
+   sudo mount -t tmpfs -o size=512m,uid=1000,gid=1000,mode=0755 tmpfs /Volumes/mxl # on WSL linux
+   sudo mkdir -p /Volumes/mxl/domain_1
+   sudo chown 1000:1000 /Volumes/mxl/domain_1
    ```
    ```sh
    diskutil erasevolume HFS+ mxl $(hdiutil attach -nomount ram://1048576) # on MacOS
+   sudo mkdir -p /Volumes/mxl/domain_1
+   sudo chown 1000:1000 /Volumes/mxl/domain_1
    ```
-1. Download the mxl portable reference sink app from the following link: https://github.com/cbcrc/mxl-hands-on/releases/download/v1.0.0-rc1/portable-mxl-reader-x86_64.tar.gz and uncompress it in your current folder.
+1. Making sure we have at least one for our clip player application (you can add more of your own, .mp4 or .ts)
+   ```sh
+   cp ~/mxl-hands-on/build-images/sizzle.ts data/Clips
+   ```
+1. Start the system with the start script.
     ```sh
-    curl -L -O https://github.com/cbcrc/mxl-hands-on/releases/download/v1.0.0-rc1/portable-mxl-reader-x86_64.tar.gz
-    tar -xzvf portable-mxl-reader-x86_64.tar.gz
-    ```
-1. Have a look at the README-sink to check the usage and requirements.
-    ```sh
-    cat README-sink
-    ```
-1. Install the Gstreamer requirements.
-    ```sh
-    sudo apt-get install -y gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-x
-    ```
-1. Use the sink to visualize and listen to the video and audio flow generated by you writer running in your container.
-    ```sh
-    ./mxl-gst-sink -d /Volumes/mxl/domain_1 -v $FLOW1V_ID -a $FLOW1A_ID
-    ```
-1. You can experiment with the other 2 reference apps by downloading them here:
-    ```sh
-    # For the portable writer
-    curl -L -O https://github.com/cbcrc/mxl-hands-on/releases/download/v1.0.0-rc1/portable-mxl-writer-x86_64.tar.gz
-    tar -xzvf portable-mxl-writer-x86_64.tar.gz
+        ./start.sh # For linux based machine
     ```
     ```sh
-    # For the portable loop player (video only)
-    curl -L -O https://github.com/cbcrc/mxl-hands-on/releases/download/v1.0.0-rc1/portable-mxl-loop-player-x86_64.tar.gz
-    tar -xzvf portable-mxl-loop-player-x86_64.tar.gz
+        ./start-mac.sh # For mac based machine
     ```
+1. Use the application and try to reproduce the workflow above. You have more documentation on application usage [here](../gst-apps/README.md)
 
-### [Back to main page](../README.md)
+| App | URL | API Swagger Page |
+|-----|-----|-----|
+| Test Generator | http://localhost:9600 | http://localhost:9600/docs |
+| MXL Info GUI | http://localhost:9699 | http://localhost:9699/docs |
+| MXL to WebRTC | http://localhost:9601 | http://localhost:9601/docs |
+| File Player | http://localhost:9602 | http://localhost:9602/docs |
+| HLS to MXL Gateway | http://localhost:9603 | http://localhost:9603/docs |
+| Input Selector | http://localhost:9604 | http://localhost:9604/docs |
+| HTML5 Keyer | http://localhost:9605 | http://localhost:9605/docs |
+| SPX server | http://localhost:5660 | none |
+
+Reference HLS stream that are 1920x1080p60
+```sh
+    https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8
+```
+```sh
+    https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
+```
+
+### Open Source Components
+
+| Component | Category | License | Test Gen | Info GUI | MXL2WebRTC | File Player | HLS2MXL | Input Sel | HTML5 Keyer |
+|-----------|----------|---------|:--------:|:--------:|:----------:|:-----------:|:-------:|:---------:|:-----------:|
+| [React](https://github.com/facebook/react) | Frontend | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [React DOM](https://github.com/facebook/react) | Frontend | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [Vite](https://github.com/vitejs/vite) | Frontend | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react) | Frontend | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [MXL](https://github.com/dmf-mxl/mxl) | MXL | Apache-2.0 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [FastAPI](https://github.com/tiangolo/fastapi) | Python 3 | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [Uvicorn](https://github.com/encode/uvicorn) | Python 3 | BSD-3-Clause | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [aiofiles](https://github.com/Tinche/aiofiles) | Python 3 | Apache-2.0 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [Pydantic](https://github.com/pydantic/pydantic) | Python 3 | MIT | — | — | ✓ | — | ✓ | ✓ | ✓ |
+| [python-multipart](https://github.com/Kludex/python-multipart) | Python 3 | Apache-2.0 | ✓ | ✓ | — | ✓ | ✓ | — | — |
+| [Requests](https://github.com/psf/requests) | Python 3 | Apache-2.0 | ✓ | — | — | — | ✓ | — | — |
+| [PyGObject](https://gitlab.gnome.org/GNOME/pygobject) | GStreamer | LGPL-2.1+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [GStreamer](https://gstreamer.freedesktop.org) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [GStreamer plugins-base](https://gstreamer.freedesktop.org/modules/gst-plugins-base.html) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [GStreamer plugins-good](https://gstreamer.freedesktop.org/modules/gst-plugins-good.html) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [GStreamer plugins-bad](https://gstreamer.freedesktop.org/modules/gst-plugins-bad.html) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [GStreamer plugins-ugly](https://gstreamer.freedesktop.org/modules/gst-plugins-ugly.html) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [GStreamer libav](https://gstreamer.freedesktop.org/modules/gst-libav.html) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [GStreamer nice (libnice)](https://libnice.freedesktop.org) | GStreamer | LGPL-2.1 | — | — | ✓ | — | — | — | — |
+| [gstcefsrc](https://github.com/centricular/gstcefsrc) | GStreamer | LGPL-2.0+ | — | — | — | — | — | — | ✓ |
+| [CEF (Chromium Embedded Framework)](https://bitbucket.org/chromiumembedded/cef) | Browser Engine | BSD-3-Clause | — | — | — | — | — | — | ✓ |
+| [MediaMTX](https://github.com/bluenviron/mediamtx) | Infrastructure | MIT | — | — | ✓ | — | — | — | — |
+| [Ubuntu 24.04](https://ubuntu.com) | Base Image | Various | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [Node.js 18](https://nodejs.org) | Build | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |

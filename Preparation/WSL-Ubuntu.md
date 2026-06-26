@@ -18,9 +18,7 @@ These commands work in WSL
 ## Installing WSL on Windows 11
 
 ### Steps
-1. Make sure you are using Windows Terminal. To lunch Windows Terminal do Window+R and type wt.
-
-1. Open an Admin Command Prompt or Powershell window.
+1. Make sure you are using Windows Terminal. To lunch Windows Terminal in admin mode, do `Window Key + R`, type `wt`, and then press `Ctrl + Shift + Enter` (instead of just enter). Click **YES** on the user Account Control (UAC) prompt that appears.
 
 1. Check if WSL is installed
 

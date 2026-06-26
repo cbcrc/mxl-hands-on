@@ -1,0 +1,41 @@
+# macOS Docker Desktop override.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.mac.yml up
+#
+# On macOS, network_mode: host shares the Docker Desktop Linux VM's network,
+# not the Mac host.  Two problems arise:
+#
+#  1. WHIP connection refused: mxl2webrtc uses host.docker.internal which on
+#     Mac resolves to the Mac host, but mediamtx is on the VM's host network
+#     and its ports are not forwarded to the Mac.
+#
+#  2. WebRTC ICE failure: if mediamtx and mxl2webrtc land on different Docker
+#     bridge networks (compose network vs. docker0), iptables isolates them and
+#     ICE connectivity checks fail silently — WHIP returns 201 but no media
+#     ever reaches mediamtx, so WHEP returns 404.
+#
+# Fix: switch both mediamtx and mxl2webrtc to docker0 (network_mode: bridge).
+# They share the same subnet, so ICE candidate IPs are directly reachable
+# between the containers.  Docker's userspace proxy listens on the docker0
+# gateway for the published ports, so host.docker.internal:8889 (used for
+# WHIP) reaches mediamtx regardless of which /etc/hosts entry wins.
+# MTX_WEBRTCADDITIONALHOSTS tells mediamtx to advertise the Mac host IP in
+# WHEP answers so the browser's ICE traffic is forwarded by Docker Desktop
+# through the published port 8189/udp.
+
+services:
+  mediamtx:
+    network_mode: bridge          # docker0; allows port publishing and shared subnet with mxl2webrtc
+    ports:
+      - "8554:8554"               # RTSP
+      - "8889:8889"               # WebRTC HTTP (WHIP / WHEP)
+      - "8189:8189/udp"           # WebRTC ICE media
+    environment:
+      - MTX_WEBRTCADDITIONALHOSTS=host.docker.internal   # Mac host IP → browser ICE via published port
+
+  mxl2webrtc:
+    network_mode: bridge          # same docker0 subnet as mediamtx → ICE works
+    environment:
+      # Docker's userspace proxy listens on the docker0 gateway (= host.docker.internal)
+      # for port 8889, forwarding to the mediamtx container.
+      - MEDIAMTX_WHIP_URL=http://host.docker.internal:8889/mxl2webrtc/whip
+      - MEDIAMTX_WEBRTC_URL=http://localhost:8889
