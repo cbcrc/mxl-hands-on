@@ -550,7 +550,8 @@ class GstReceiver:
         """Pad probe on the raw ST 2038 grain: parse each grain's ANC packets and act
         on a SCTE-104 packet (DID 0x41 / SDID 0x07). The muxed flow carries caption
         ANC every frame, so we can't treat 'non-empty grain' as a trigger — we must
-        parse. Debounced (the marker rides a single grain)."""
+        parse. The producer marks ONE grain per trigger; the 1s debounce below is
+        only defensive (e.g. a duplicate read), not burst-coalescing."""
         buf = info.get_buffer()
         if buf is None or buf.get_size() == 0:
             return Gst.PadProbeReturn.OK

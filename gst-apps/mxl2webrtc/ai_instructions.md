@@ -36,15 +36,17 @@ The signalling calls run in a FastAPI **threadpool** (`run_in_threadpool`) so th
 
 If the user selects an **Ancillary Data** flow (produced by the Test Generator over one `video/smpte291` data flow carrying both caption ANC and SCTE-104 ANC), `start()` builds **one side pipeline** — independent of the WebRTC pipeline(s) and shared by all viewers — that decodes both for the UI. Stored in `self._data_pipelines`; errors are recorded in `self._data_error` and surfaced via `GET /data-status`.
 
-The grains are **tee'd** to a caption decoder and to a raw appsink that scans the ANC for SCTE-104:
+It is **one linear caption pipeline** plus a **pad probe** for SCTE — *not* a `tee` (a tee with a second branch stalled `cea608tott` and blocked all decode):
 
 ```
-mxlsrc(ancillary) → meta/x-st-2038,framerate=<rate> → tee ─┬→ queue → st2038anctocc → ccconverter → cea-608 → cea608tott → text → appsink (ccsink)
-                                                           └→ queue → appsink (sctesink)   # parse ANC for SCTE-104
+mxlsrc(ancillary) → meta/x-st-2038,framerate=<rate> (capsfilter "anccaps")
+    → st2038anctocc → ccconverter → cea-608 → cea608tott → text → appsink (ccsink)
+                              ▲
+        pad probe on anccaps src pad (_scte_grain_probe): parse each raw grain for SCTE-104
 ```
 
 - **Caption decode (ccsink):** the `new-sample` callback stores the latest decoded text + a timestamp (ignoring the producer's blank keep-alive rows).
-- **SCTE-104 detect (sctesink):** the muxed flow carries caption ANC *every* frame, so "non-empty grain" is **not** a trigger. The callback parses the ST 2038 ANC packets (`parse_st2038_packets`), finds the SCTE-104 packet (DID `0x41` / SDID `0x07`), and decodes the SCTE-104 `multiple_operation_message` (`parse_scte104` → `opID`, `splice_event_id`, `splice_insert_type`). Debounced 1 s.
+- **SCTE-104 detect (`_scte_grain_probe`):** a `Gst.PadProbeType.BUFFER` probe on the `anccaps` src pad reads each raw ST 2038 grain (read-only map). The muxed flow carries caption ANC *every* frame, so "non-empty grain" is **not** a trigger. The probe parses the ANC packets (`parse_st2038_packets`), finds the SCTE-104 packet (DID `0x41` / SDID `0x07`), and decodes the SCTE-104 `multiple_operation_message` (`parse_scte104` → `opID`, `splice_event_id`, `splice_insert_type`). The producer marks **one grain per trigger**, so the 1 s debounce is only defensive (e.g. a duplicate read), not burst-coalescing.
 
 ⚠ **Two non-obvious requirements:**
 - **Build with `Gst.parse_launch`, not programmatic `Element.link()`.** `st2038anctocc → ccconverter` negotiate caps dynamically and a static `Element.link()` fails (`Failed to link st2038anctocc → ccconv`), even though the exact chain works under `gst-launch`. `parse_launch` does the delayed pad linking.

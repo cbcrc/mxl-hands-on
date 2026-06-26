@@ -15,6 +15,7 @@ the group hint produces a different set.
 
 from __future__ import annotations
 
+import collections
 import json
 import logging
 import os
@@ -125,11 +126,12 @@ SCTE_SDID = 0x07
 # readable scroll speed.
 CAPTION_PUSH_MS = 2000
 
-# A SCTE trigger repeats its ANC packet for ~this long. mxlsrc samples the MXL ring
-# at the head and does NOT read every grain, so a single-frame marker is usually
-# skipped — repeating for ~0.5s guarantees the reader samples it. The consumer
-# debounces (1s), so a burst still registers as ONE event.
-SCTE_BURST_SEC = 0.5
+# A SCTE trigger rides exactly ONE grain. mxlsrc's data path reads grains
+# sequentially (create_data: frame_counter+1 each call, get_complete_grain blocks),
+# so on a host that keeps up it reads every grain and a single-frame marker round-trips
+# and parses reliably — verified end-to-end through mxlsink→MXL→mxlsrc. (It only skips
+# grains if the consumer falls behind the wall-clock head, which doesn't happen for
+# cheap ANC data on a capable host.) The consumer still debounces (1s) defensively.
 
 
 class _BitWriter:
@@ -298,7 +300,7 @@ class GstGenerator:
         self._scte_count = 0          # number of triggers fired this run (for status)
         self._scte_last_ts: Optional[float] = None  # epoch seconds of last trigger
         self._scte_event_id = 0       # SCTE-104 splice_event_id, incremented per trigger
-        self._fn, self._fd = 30, 1    # framerate, set per start (for SCTE pacing)
+        self._fn, self._fd = 30, 1    # framerate, set per start
 
         # Element refs for live property changes
         self._vsrc = None
@@ -309,8 +311,15 @@ class GstGenerator:
         self._caption_pts = 0         # ns, monotonic per-push timestamp (text appsrc)
         self._anc_pts = 0             # ns, monotonic per-grain timestamp (output appsrc)
         self._caption_dur_ns = 0      # ns, frame-locked caption buffer duration (set per start)
-        self._scte_repeat = 0         # frames remaining to append the SCTE packet for
-        self._scte_burst_event_id = 0 # event_id of the in-progress SCTE burst
+        self._scte_pending_event_id: Optional[int] = None  # event_id to append to the NEXT grain (one-shot)
+        # Frame-paced ANC playout (decouples SCTE injection from the bursty caption
+        # harvest). The harvest callback APPENDS caption-ANC bytes to this FIFO; a
+        # playout thread pops ONE grain per frame and pushes it (appending a pending
+        # SCTE marker), so a trigger rides the next grain (~1 frame) instead of waiting
+        # for the next ~CAPTION_PUSH_MS harvest burst. See _anc_playout.
+        self._anc_fifo: collections.deque = collections.deque()
+        self._anc_last_cc: Optional[bytes] = None  # last grain bytes, repeated on (rare) underflow
+        self._anc_cushion = 0         # grains to buffer before steady playout (one burst; set per start)
 
         self._glib_loop = GLib.MainLoop()
         threading.Thread(target=self._glib_loop.run, daemon=True).start()
@@ -336,8 +345,9 @@ class GstGenerator:
             self._scte_event_id = 0
             self._caption_pts = 0
             self._anc_pts = 0
-            self._scte_repeat = 0
-            self._scte_burst_event_id = 0
+            self._scte_pending_event_id = None
+            self._anc_fifo.clear()
+            self._anc_last_cc = None
             self._gen += 1
             gen = self._gen
             self._flow_uuids = self._generate_uuids(config)
@@ -393,15 +403,14 @@ class GstGenerator:
         with self._lock:
             if not self._ancillary_active or self._ccsrc is None:
                 raise RuntimeError("Ancillary Data flow is not active")
-            # One user trigger = one event (count/id bump here, once) sent as a burst
-            # of frames so the sampling reader can't miss it.
+            # One user trigger = one event = ONE grain. The reader reads every grain,
+            # so a single-frame marker is sufficient (verified end-to-end).
             self._scte_count += 1
             self._scte_event_id += 1
             self._scte_last_ts = time.time()
-            self._scte_burst_event_id = self._scte_event_id
-            self._scte_repeat = max(1, round(SCTE_BURST_SEC * self._fn / self._fd))
-            log.info("SCTE-104 trigger queued (event_id=%d, %d-frame burst) on flow %s",
-                     self._scte_event_id, self._scte_repeat, self._flow_uuids.get("ancillary"))
+            self._scte_pending_event_id = self._scte_event_id
+            log.info("SCTE-104 trigger queued (event_id=%d, single grain) on flow %s",
+                     self._scte_event_id, self._flow_uuids.get("ancillary"))
 
     def set_audio_pattern(self, flow: int, pattern: str) -> None:
         if pattern not in AUDIO_PATTERNS:
@@ -621,6 +630,10 @@ class GstGenerator:
             frames = max(1, round(CAPTION_PUSH_MS / 1000 * self._fn / self._fd))
             self._caption_dur_ns = round(frames * Gst.SECOND * self._fd / self._fn)
             interval_ms = max(1, round(self._caption_dur_ns / Gst.MSECOND))
+            # The harvest emits each text buffer's `frames` grains in an instant burst;
+            # the playout drains at frame rate, so it must buffer one full burst before
+            # starting or it underflows at the trough before the next burst.
+            self._anc_cushion = frames
 
             hp, op = self._build_ancillary_pipelines(self._flow_uuids["ancillary"], domain)
             self._connect_data_bus(hp)
@@ -629,7 +642,10 @@ class GstGenerator:
             op.set_state(Gst.State.PLAYING)
             hp.set_state(Gst.State.PLAYING)
             GLib.timeout_add(interval_ms, self._push_caption, gen)
-            log.info("Started ancillary-data pipelines (captions harvest + output)")
+            # Frame-paced playout of the harvested ANC grains (see _anc_playout). Runs
+            # on its own thread, tied to `gen` so a restart/stop cancels it.
+            threading.Thread(target=self._anc_playout, args=(gen,), daemon=True).start()
+            log.info("Started ancillary-data pipelines (captions harvest + paced output)")
 
     def _connect_data_bus(self, pipeline: Gst.Pipeline) -> None:
         bus = pipeline.get_bus()
@@ -716,6 +732,10 @@ class GstGenerator:
 
         ccsink = Gst.ElementFactory.make("appsink", "ccsink")
         ccsink.set_property("emit-signals", True)
+        # sync=false: the harvest delivers each text buffer's `frames` caption grains in
+        # an instant BURST (appsink sync=true does NOT pace this chain — tttocea608's
+        # output timestamps don't gate the sink). De-bursting is done instead by the
+        # frame-paced playout thread (_anc_playout), which reclocks the FIFO to frame rate.
         ccsink.set_property("sync", False)
         # Deliver EVERY caption grain in order (no drop) — dropping frames corrupts
         # the per-frame CEA-608 control-code stream.
@@ -781,10 +801,11 @@ class GstGenerator:
         return True
 
     def _on_caption_to_anc(self, appsink: "Gst.Element") -> "Gst.FlowReturn":
-        """harvest appsink → output appsrc bridge (cross-pipeline). Forward each
-        per-frame caption ANC grain's bytes to ancsrc, appending a SCTE-104 ANC
-        packet on a triggered frame. Output grain is built fresh from bytes (no
-        in-flight buffer surgery — that fails in this PyGObject)."""
+        """harvest appsink → FIFO. tttocea608 emits each text buffer's `frames` caption
+        ANC grains in an instant burst; we just queue their BYTES here (in order). The
+        frame-paced _anc_playout thread reclocks them to frame rate and pushes to ancsrc,
+        appending a pending SCTE marker at emit time — so a trigger rides the next grain
+        (~1 frame) instead of waiting for the next harvest burst (~CAPTION_PUSH_MS)."""
         sample = appsink.emit("pull-sample")
         if sample is None:
             return Gst.FlowReturn.OK
@@ -796,27 +817,64 @@ class GstGenerator:
             cc_bytes = bytes(minfo.data)
         finally:
             buf.unmap(minfo)
-        event_id = None
         with self._lock:
-            ancsrc = self._ancsrc
-            if ancsrc is None:
-                return Gst.FlowReturn.OK
-            # Output uses its OWN monotonic per-grain PTS (one frame period each), not
-            # the harvested grain's PTS (which can be invalid early → mxlsink epoch).
-            frame_ns = round(Gst.SECOND * self._fd / self._fn)
-            pts = self._anc_pts
-            self._anc_pts += frame_ns
-            if self._scte_repeat > 0:
-                # Append the SCTE-104 packet to this grain (one frame of the burst).
-                self._scte_repeat -= 1
-                event_id = self._scte_burst_event_id
-        out = cc_bytes + build_scte104_anc_packet(event_id) if event_id is not None else cc_bytes
-        obuf = Gst.Buffer.new_allocate(None, len(out), None)
-        obuf.fill(0, out)
-        obuf.pts = pts
-        obuf.duration = frame_ns
-        ancsrc.emit("push-buffer", obuf)
+            # Bounded (leaky): if playout ever lags production the oldest grain is dropped,
+            # capping caption latency. With frame-locked rates this never fills.
+            if len(self._anc_fifo) >= 2 * max(1, self._anc_cushion):
+                self._anc_fifo.popleft()
+            self._anc_fifo.append(cc_bytes)
         return Gst.FlowReturn.OK
+
+    def _anc_playout(self, gen: int) -> None:
+        """Frame-paced playout of harvested ANC grains → ancsrc → mxlsink.
+
+        Pops ONE grain per frame at a monotonic cadence (independent of the bursty
+        harvest and of any GStreamer clock sync), appending a pending SCTE-104 packet at
+        emit time. A startup cushion of one harvest burst keeps the FIFO from underflowing
+        at the trough before the next burst; on a (rare) underflow the last grain is
+        repeated and PTS still advances, so mxlsink never ratchets latency. The output
+        grain carries its OWN monotonic per-grain PTS (the harvested PTS can be invalid
+        early → mxlsink epoch)."""
+        frame_s = self._fd / self._fn
+        frame_ns = round(Gst.SECOND * self._fd / self._fn)
+        # Wait for the cushion to fill (or a stop/restart) before steady playout.
+        while self._gen == gen:
+            with self._lock:
+                ready = len(self._anc_fifo) >= max(1, self._anc_cushion)
+            if ready:
+                break
+            time.sleep(0.005)
+        next_t = time.monotonic()
+        while self._gen == gen:
+            event_id = None
+            with self._lock:
+                ancsrc = self._ancsrc
+                if ancsrc is None:
+                    break
+                if self._anc_fifo:
+                    cc_bytes = self._anc_fifo.popleft()
+                    self._anc_last_cc = cc_bytes
+                else:
+                    cc_bytes = self._anc_last_cc  # underflow: repeat last (usually padding)
+                if cc_bytes is not None:
+                    pts = self._anc_pts
+                    self._anc_pts += frame_ns
+                    if self._scte_pending_event_id is not None:
+                        event_id = self._scte_pending_event_id
+                        self._scte_pending_event_id = None
+            if cc_bytes is not None:
+                out = cc_bytes + build_scte104_anc_packet(event_id) if event_id is not None else cc_bytes
+                obuf = Gst.Buffer.new_allocate(None, len(out), None)
+                obuf.fill(0, out)
+                obuf.pts = pts
+                obuf.duration = frame_ns
+                ancsrc.emit("push-buffer", obuf)
+            next_t += frame_s
+            dt = next_t - time.monotonic()
+            if dt > 0:
+                time.sleep(dt)
+            elif dt < -0.5:
+                next_t = time.monotonic()  # fell far behind (e.g. scheduling stall); resync
 
     def _patch_flow_defs(self, config: dict, uuids: dict, gen: int) -> None:
         domain = config["domain"]
