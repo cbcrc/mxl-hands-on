@@ -82,6 +82,8 @@ services:
         target: /mxl-domain
     environment:
       - MXL_DOMAIN=/mxl-domain
+      # Number of selectable input slots (UI + router). Override per deployment.
+      - MAX_INPUTS=${INPUT_SELECTOR_MAX_INPUTS:-3}
 
   # MediaMTX must use host networking so WebRTC ICE candidates reflect the real
   # host IP.  All ports (8554 RTSP, 8889 WebRTC) are bound directly on the host.
