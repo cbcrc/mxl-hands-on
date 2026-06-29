@@ -373,4 +373,110 @@ exec python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 9600
 | `http://localhost:5660/renderer/` fails from inside the container (connection refused) | Inside Docker, `localhost` refers to the container itself, not the host machine | Use `http://host.docker.internal:5660/renderer/` — the `html5-keyer` service has `extra_hosts: - "host.docker.internal:host-gateway"` in `docker-compose.yml` to make this hostname resolve |
 | GPU-mixed variants (`glvideomixer`) struggle on commodity hosts | GPU compositing requires `glupload`/`gldownload` round-trips and a GPU that the target hardware may not have | Use the CPU-based `compositor` element — this is a deliberate design choice for portability and is not negotiable |
 
+## Teleprompter (Prompting) Mode
+
+A second, **toggleable mode** turns the same app into a studio **teleprompter**. The mode is
+chosen in the UI before Start; **keying mode is unchanged**. The two modes share one
+`GstKeyer` instance, one output `mxlsink`, the deterministic output-UUID scheme, and the
+`identity` PTS-fix → v210 → `mxlsink` output branch.
+
+### What prompt mode does differently
+1. **No MXL video input.** The background is a synthetic **black picture** at an
+   operator-chosen **resolution/framerate preset** (`videotestsrc pattern=2 is-live=true` →
+   `capsfilter(BGRA, WxH, num/den, interlace-mode=progressive)`). Geometry comes from the
+   preset, not from `read_flow_format`.
+2. **The overlay is the teleprompter graphic**, hosted by this app and loaded into CEF, with
+   the CEF compositor pad's **`alpha` fixed at 1.0** (always visible — there is no Key toggle
+   in prompt mode; `set_key` raises if called).
+3. **An optional MXL audio flow** drives voice tracking via server-side speech-to-text.
+
+### OGraf graphic + host page (`prompter/`, served by FastAPI, copied to `/app/prompter`)
+The teleprompter is the OGraf template from `ograph-template/teleprompter.{js,ograf.json}`.
+`cefsrc` is one-way (it only takes a `url` and has **no JS-injection channel**), so the page
+must be driven from the page side:
+- **`prompter/index.html`** — an OGraf host page. It imports `./teleprompter.js`, registers
+  it as a custom element, mounts it **empty** (no baked-in script), and opens a WebSocket to
+  `/prompter-ws`. Inbound messages are dispatched to the element's OGraf methods:
+  `{type:"update",data}` → `updateAction({data})`; `play`/`stop` → `playAction`/`stopAction`;
+  `{type:"action",action}` → `customAction(action)`; `{type:"transcript",text}` →
+  `pushTranscript(text)`.
+- **`prompter/teleprompter.js`** — the template **plus one minimal addition**: a
+  `pushTranscript(text)` method that sets `voiceTrackingActive = true` and calls the existing
+  `matchTranscriptToScript(text)`. The browser Web Speech path is left intact (it is a
+  harmless no-op in headless CEF, where `window.SpeechRecognition` is undefined), so the
+  template still works in a desktop-browser preview.
+- `cefsrc.url` in prompt mode is the **internal** URL `http://localhost:9600/prompter/`
+  (FastAPI serves it on the same in-container port). Do **not** use `host.docker.internal`
+  here — the page is local to the container.
+
+> ⚠️ **Script text is never baked in.** The prompter content is supplied at runtime only, via
+> `POST /prompter-api/update` (the UI paste window **or** an automation system). The
+> `scriptText` default in `teleprompter.ograf.json` is inert and must not be relied on.
+
+### Control channel & API (OGraf control points)
+A `PrompterHub` keeps the set of connected `/prompter-ws` sockets, retains the latest
+`update` data and play/stop state, and **replays that state on connect** (so a script set
+before CEF finished loading still lands). It exposes a thread-safe `broadcast()` so both the
+REST endpoints and the voice tracker can push to the page from any thread. The control
+endpoints map 1:1 to `teleprompter.ograf.json`:
+
+| Method | Path | Maps to |
+|--------|------|---------|
+| `GET`  | `/prompter-api/presets` | resolution/framerate preset list (single source of truth, frontend mirrors it) |
+| `POST` | `/prompter-api/update`  | `updateAction(data)` — any subset of `scriptText`, `scrollSpeed`, `mirrored`, `enableVoiceTracking`, `voiceLanguage`, `fontSize`, `enableCountdown`, `showStatusBar` |
+| `POST` | `/prompter-api/play`    | `playAction` |
+| `POST` | `/prompter-api/stop`    | `stopAction` |
+| `POST` | `/prompter-api/action`  | `customAction` — body `{action: "pause"\|"resume"\|"speedUp"\|"speedDown"}` |
+| `WS`   | `/prompter-ws`          | the CEF host page connects here for commands + transcripts |
+
+`enableVoiceTracking`/`voiceLanguage` in `/update` also toggle/configure the voice tracker.
+Routes and the `/prompter-ws` socket are registered **before** the `/prompter` static mount
+and the catch-all `/` mount; their distinct prefixes mean the `Mount("/prompter")` regex
+never shadows `/prompter-api` or `/prompter-ws`.
+
+### Voice tracking — server-side Vosk (`backend/voice_tracker.py`)
+The template's voice tracking relies on the browser Web Speech API, which **cannot run in the
+headless CEF render** (no microphone device, no Google cloud speech backend). Instead:
+- The pipeline adds an **audio branch** when an audio flow is selected:
+  `mxlsrc(audio-flow-id) → audioconvert → audioresample → capsfilter(audio/x-raw,
+  format=S16LE,channels=1,rate=16000) → appsink(emit-signals, sync=false, drop, max-buffers)`.
+  It is independent — **not** linked to the compositor/mxlsink — and `sync=false` keeps the
+  live MXL audio clock from stalling the video output. `mxlsrc` already supports
+  `audio-flow-id` (caps `audio/x-raw,F32LE`); no plugin change.
+- The appsink `new-sample` callback feeds raw PCM to a `VoiceTracker` whose worker thread runs
+  **Vosk** (offline). It loads the model for the selected language lazily
+  (`en-US` → `/opt/vosk/en`, `fr-CA` → `/opt/vosk/fr`), reloads on language change, and only
+  transcribes while voice tracking is enabled. Partial + final transcripts are broadcast as
+  `{type:"transcript",text}` to the prompter page, which feeds them into `pushTranscript`.
+
+### Backend wiring (`gst_keyer.py`, `main.py`)
+- `gst_keyer.start_prompt(domain_path, audio_flow_uuid|None, W, H, num, den, html5_url,
+  grouphint, description, label, audio_cb)` builds `_build_prompt_pipeline()`. The delicate
+  output / CEF / compositor / start blocks are factored into shared helpers
+  (`_add_output_branch`, `_add_cef_branch`, `_make_compositor`, `_start_pipeline`) reused by
+  both key and prompt builds, so the proven epoch/clock behaviour is identical. `get_status()`
+  adds `mode` and `audio_flow_uuid`; `main.py`'s status merges `voice_tracking`/`voice_language`.
+- `StartConfig` gains `mode` (`"key"`|`"prompt"`), `audio_flow_uuid`, `resolution_preset`, and
+  `voice_language`. `/pipeline/start` branches on `mode`: prompt mode validates the preset
+  (resolves to W,H,num,den), resets the hub + voice tracker, and calls `start_prompt` with the
+  internal `PROMPTER_URL`.
+
+### Frontend (`App.jsx`)
+- A **Keying / Teleprompter** mode toggle at the top of Setup (disabled while running).
+- **Prompt Setup:** resolution-preset dropdown, an **optional** MXL Audio Input dropdown
+  (flows filtered to a role containing "audio" — `isAudioFlow`), and group hint / description /
+  label. No HTML5 URL field.
+- **Prompt Operation** (a `PrompterControls` panel): a script **paste window** + "Load Script",
+  scroll speed / font size, mirror / countdown / status-bar checkboxes, voice-language dropdown,
+  an **Enable Voice Tracking** checkbox, and **Play / Stop / Pause / Resume / Speed −/+** — all
+  calling `/prompter-api/*`. No Key ON/OFF in this mode.
+
+### Docker
+- A `vosk-models` stage downloads the small en-US and fr models into `/opt/vosk/{en,fr}` and
+  the runtime copies them in; `vosk` is added to `requirements.txt`.
+- `prompter/` is copied to `/app/prompter/`. `videotestsrc`, `appsink`, `audioconvert`, and
+  `audioresample` are already present in the installed GStreamer plugin sets.
+
+---
+
 Please write the necessary Dockerfile, Python backend scripts, React components, and integration code following these guidelines at `./gst-apps/HTML5-keyer`, modifying content already present.

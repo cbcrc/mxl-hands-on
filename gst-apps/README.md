@@ -14,7 +14,7 @@ This directory contains web applications that produce, inspect, and consume [MXL
 | [File Player](#4-file-player) | `file-player:latest` | `Depending on Docker compose config` | Loops a media file (MP4/TS) and publishes its video and/or audio streams to MXL |
 | [HLS to MXL Gateway](#5-hls-to-mxl-gateway) | `hls2mxl:latest` | `Depending on Docker compose config` | Ingests a live HLS stream and republishes it as MXL video and audio flows |
 | [Input Selector](#6-input-selector) | `input-selector:latest` | `Depending on Docker compose config` | Live-switches between up to `MAX_INPUTS` MXL video inputs (frame-accurate) and publishes the active one to a single MXL video output |
-| [HTML5 Keyer](#7-html5-keyer) | `html5-keyer:latest` | `9605` | Composites an HTML5 graphics overlay (CEF/Chromium) over a live MXL video background and publishes the result as an MXL output flow |
+| [HTML5 Keyer](#7-html5-keyer) | `html5-keyer:latest` | `9605` | Keying mode: composites an HTML5 graphics overlay (CEF/Chromium) over a live MXL video background → MXL output. Teleprompter mode: keys an app-hosted OGraf teleprompter over a black picture, with optional MXL-audio voice tracking |
 
 Pre-built images are published to `ghcr.io/cbcrc` — see [Exercise 4](../Exercises/Exercise4.md) to spin up the whole system without compiling anything.
 
@@ -261,9 +261,11 @@ For the architecture and diagram see [gstreamer-pipeline.md — Section 5](./gst
 
 **Image:** `html5-keyer:latest` (build from source — not yet published to GHCR)
 
-Composites an HTML5 graphics page rendered by an embedded Chromium/CEF browser as an alpha-keyed overlay over a live MXL video background, and publishes the composited result as a single MXL video output flow.
+A two-mode app, chosen with a **Keying / Teleprompter** toggle in the UI before Start. Both modes composite over a single CPU `compositor` and publish one deterministic MXL video output flow; keying mode is unchanged.
 
-**How it works:**
+### Keying mode
+
+Composites an HTML5 graphics page rendered by an embedded Chromium/CEF browser as an alpha-keyed overlay over a live MXL video background.
 
 ```
 mxlsrc (input) → videoconvert → BGRA capsfilter → queue ─────────────────────────────────┐
@@ -282,7 +284,31 @@ cefsrc (URL)   → BGRA capsfilter → videorate → BGRA capsfilter → queue  
 - **Key ON / OFF** — a large toggle button. The pipeline starts with the key **OFF** (overlay hidden, `compositor.sink_1.alpha = 0.0`). Clicking **Key OFF** switches to **Key ON** (`alpha = 1.0`), compositing the HTML5 graphic over the background. Toggling is live — no pipeline rebuild.
 - Status panel shows the input flow UUID (first 8 chars), overlay URL, output flow UUID, format (`WxH @ num/den fps`), and a **● PUBLISHING** badge.
 
-For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 6](./gstreamer-pipeline.md#6-html5-keyer-gst_keyerpy).
+### Teleprompter mode
+
+Keys an **app-hosted OGraf teleprompter** graphic over a black picture and publishes the result as the MXL output. There is no MXL video input — the output raster/frame rate come from a chosen preset — and the teleprompter is always visible (alpha fixed). The graphic is served by the app itself and loaded into CEF; it is driven live over a WebSocket from new control endpoints that map to the OGraf control points (`/prompter-api/{update,play,stop,action}`). An optional MXL **audio** flow drives **voice tracking**: because the template's browser Web Speech API can't run in headless CEF, the app transcribes the audio server-side with **Vosk** (en-US / fr-CA) and auto-scrolls the prompter to the spoken word.
+
+```
+videotestsrc (black, preset WxH/fps) → BGRA capsfilter → queue ─────────────────────────────┐
+                                                                                              ├→ compositor (CPU) → identity (PTS fix) → videoconvert → v210 capsfilter → queue → mxlsink (output)
+cefsrc (http://localhost:9600/prompter/) → BGRA capsfilter → videorate → BGRA capsfilter → queue ─┘
+                                                        (compositor.sink_1: sync=false, alpha=1.0)
+
+mxlsrc (audio-flow, optional) → audioconvert → audioresample → S16LE/16k/mono → appsink → Vosk → (transcript over WebSocket) → prompter
+```
+
+**Setup panel** (before starting):
+- Select the MXL domain and an **output resolution & frame rate** preset (the prompter is keyed over a black picture at this raster).
+- Optionally select an **MXL Audio Input** flow for voice tracking (speech on it is transcribed to auto-scroll the prompter). Leave as **none** for manual scrolling only.
+- Set the output **Group Hint** / **Description** / **Label** (same deterministic UUID scheme as keying mode).
+
+**Operation panel** (while running):
+- A **script paste window** + **Load Script** — the only source of prompter copy (the same `POST /prompter-api/update` endpoint can be driven by an automation system at/after start; nothing is baked into the graphic).
+- **Manual scroll speed** and **font size**, and **Mirror / 3-second countdown / status-bar** toggles.
+- **Voice-tracking language** (English US / French CA) and an **Enable Voice Tracking** checkbox.
+- Transport buttons: **Play / Stop / Pause / Resume / Speed − / Speed +**.
+
+For the GStreamer pipeline details (both modes) see [gstreamer-pipeline.md — Section 6](./gstreamer-pipeline.md#6-html5-keyer-gst_keyerpy).
 
 ---
 
