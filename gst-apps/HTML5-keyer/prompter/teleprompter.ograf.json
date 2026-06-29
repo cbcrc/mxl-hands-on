@@ -1,0 +1,94 @@
+{
+  "$schema": "https://ograf.ebu.io/v1/specification/json-schemas/graphics/schema.json",
+  "id": "com.yourdomain.teleprompter",
+  "version": "1.0.0",
+  "name": "Studio Teleprompter",
+  "description": "A smooth-scrolling teleprompter with mirror support.",
+  "author": {
+    "name": "Your Name",
+    "email": "developer@yourdomain.com"
+  },
+  "main": "./teleprompter.js",
+  "supportsRealTime": true,
+  "supportsNonRealTime": false,
+"customActions": [
+    {
+      "id": "pause",
+      "name": "Pause Scrolling",
+      "description": "Temporarily stops the text from moving."
+    },
+    {
+      "id": "resume",
+      "name": "Resume Scrolling",
+      "description": "Restarts the upward movement."
+    },
+    {
+      "id": "speedUp",
+      "name": "Increase Speed",
+      "description": "Makes the text scroll faster."
+    },
+    {
+      "id": "speedDown",
+      "name": "Decrease Speed",
+      "description": "Makes the text scroll slower."
+    }
+  ],
+"schema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+      "scriptText": {
+        "type": "string",
+        "title": "Prompter Script",
+        "description": "Enter the text to be read.",
+        "default": "WELCOME TO THE FUTURE OF PROFESSIONAL BROADCASTING.\n\nFOR DECADES, OUR INDUSTRY RELIED ON HEAVY, PURPOSE-BUILT HARDWARE. MASSIVE SWITCHERS, DEDICATED GRAPHICS ENGINES, AND MILES OF S.D.I. CABLES DEFINED THE STUDIO.\n\nBUT TODAY, WE ARE WITNESSING A MONUMENTAL SHIFT. THE TRANSITION TO SOFTWARE-DEFINED WORKFLOWS IS COMPLETELY REWRITING THE RULES OF LIVE PRODUCTION.\n\nBY MOVING FROM RIGID HARDWARE TO FLEXIBLE, I.P. BASED SOFTWARE ENVIRONMENTS, BROADCASTERS CAN NOW SPIN UP ENTIRE CONTROL ROOMS IN THE CLOUD.\n\nWE ARE UNLOCKING UNPRECEDENTED SCALABILITY, ALLOWING REMOTE TEAMS TO COLLABORATE IN REAL-TIME FROM ANYWHERE IN THE WORLD.\n\nOPEN STANDARDS AND WEB-BASED GRAPHICS, LIKE THE NEW O-GRAF SPECIFICATION, ARE TEARING DOWN PROPRIETARY WALLS. THIS MEANS FASTER UPDATES, DEEPER INTEGRATIONS WITH A.I. TOOLS, AND THE FREEDOM TO INNOVATE AT THE SPEED OF SOFTWARE.\n\nTHE CONTROL ROOM OF TOMORROW ISN'T A ROOM AT ALL... IT IS A COMPLETELY VIRTUALIZED ECOSYSTEM. AND IT IS HAPPENING RIGHT NOW."
+      },
+      "scrollSpeed": {
+        "type": "number",
+        "title": "Manual Scroll Speed",
+        "default": 2
+      },
+      "mirrored": {
+        "type": "boolean",
+        "title": "Mirror Output for Glass",
+        "default": false
+      },
+      "enableVoiceTracking": {
+        "type": "boolean",
+        "title": "Enable Voice Tracking",
+        "description": "Actively listens to the speaker and automatically scrolls to keep the current word at the cue marker.",
+        "default": false
+      },
+"voiceLanguage": {
+        "type": "string",
+        "title": "Voice Tracking Language",
+        "description": "Select the language the talent is speaking.",
+        "oneOf": [
+          { "const": "en-US", "title": "English (US)" },
+          { "const": "fr-CA", "title": "French (Canada)" }  
+        ],
+        "default": "en-US"
+      },
+      "fontSize": {
+        "type": "number",
+        "title": "Font Size (vw)",
+        "description": "Adjust the size of the text relative to screen width. Default is 6.",
+        "default": 5,
+        "minimum": 2,
+        "maximum": 20
+      },
+      "enableCountdown": {
+        "type": "boolean",
+        "title": "Enable 3-Second Countdown",
+        "description": "Displays a visual 3-2-1 countdown before the scrolling begins.",
+        "default": true
+      },
+      "showStatusBar": {
+        "type": "boolean",
+        "title": "Show Status Bar",
+        "description": "Displays the elapsed reading time at the top of the screen.",
+        "default": true
+      }
+    }
+  }
+}

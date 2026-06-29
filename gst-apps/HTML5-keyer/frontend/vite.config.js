@@ -6,10 +6,13 @@ export default defineConfig({
   build: { outDir: "dist" },
   server: {
     proxy: {
-      "/get-domains": "http://localhost:9600",
-      "/domains":     "http://localhost:9600",
-      "/scan-domain": "http://localhost:9600",
-      "/pipeline":    "http://localhost:9600",
+      "/get-domains":  "http://localhost:9600",
+      "/domains":      "http://localhost:9600",
+      "/scan-domain":  "http://localhost:9600",
+      "/pipeline":     "http://localhost:9600",
+      "/prompter-api": "http://localhost:9600",
+      "/prompter":     "http://localhost:9600",
+      "/prompter-ws":  { target: "ws://localhost:9600", ws: true },
     },
   },
 });
