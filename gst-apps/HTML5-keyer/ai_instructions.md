@@ -414,6 +414,27 @@ must be driven from the page side:
 > `POST /prompter-api/update` (the UI paste window **or** an automation system). The
 > `scriptText` default in `teleprompter.ograf.json` is inert and must not be relied on.
 
+### Prompter scroll engine (`teleprompter.js`)
+Automatic scrolling and voice-tracking follow share **one** `requestAnimationFrame` loop. A few
+non-obvious properties are required for smooth motion on the captured MXL output:
+- **Time-based motion, not per-callback.** Each frame advances by `speed × (Δt / frameMs)`
+  (auto-scroll) or eases toward the voice target by a `Δt`-scaled factor, with `Δt` clamped to
+  100 ms. rAF in headless CEF occasionally fires late/coalesced; moving a fixed step per callback
+  turned those into visible judder, so the step is scaled by elapsed wall-clock time instead.
+- **Compositor-layer promotion.** The scroll container is given `will-change: transform` and the
+  offset is written as `translate3d(0, y, 0)`, so scrolling is a cheap GPU/compositor translate
+  instead of re-rasterizing the whole large-font text block every frame. That per-frame repaint
+  was the main remaining cause of intermittent stutter (in **both** auto-scroll and voice modes).
+- **Voice tracking drives the scroll on its own.** There is no Play press in voice mode, so the
+  loop runs whenever `voiceTrackingActive` is set — a transcript arriving via `pushTranscript`
+  calls `ensureAnimating()` — independent of `isPlaying`. Without this the matcher highlighted the
+  spoken word in yellow but never scrolled, so the operator got stuck once the highlight reached
+  the bottom of the visible text. A single guarded loop (`ensureAnimating` / `scrollLoopRunning`)
+  prevents Play + voice from starting two rAF chains (which would double the scroll speed).
+- **Velocity-capped follow.** `matchTranscriptToScript` moves the target in discrete, sometimes
+  multi-word leaps (a Vosk final can advance several words at once). The per-frame follow step is
+  clamped to `maxFollowPx` so a big leap scrolls smoothly to the word instead of snapping forward.
+
 ### Control channel & API (OGraf control points)
 A `PrompterHub` keeps the set of connected `/prompter-ws` sockets, retains the latest
 `update` data and play/stop state, and **replays that state on connect** (so a script set

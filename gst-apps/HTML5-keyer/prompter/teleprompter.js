@@ -3,6 +3,16 @@ export default class TeleprompterGraphic extends HTMLElement {
     super();
     this.attachShadow({ mode: 'open' });
     this.animationFrame = null;
+    this.scrollLoopRunning = false;
+    this.lastFrameTime = 0;
+    // Scrolling is time-based: motion per rAF tick is scaled by the elapsed time
+    // against this nominal frame duration, so an occasional late/dropped rAF
+    // callback no longer surfaces as a stutter on the captured MXL output.
+    this.frameMs = 1000 / 60;
+    // Voice tracking moves the target in discrete word-sized leaps (a Vosk final
+    // can advance several words at once). Cap how fast we chase it — px per
+    // nominal frame — so a big leap becomes a steady scroll instead of a snap.
+    this.maxFollowPx = 6;
     this.currentScroll = 0;
     this.targetScroll = 0;
     this.speed = 2;
@@ -71,6 +81,12 @@ export default class TeleprompterGraphic extends HTMLElement {
           line-height: 1.4;
           overflow-wrap: break-word;
           word-wrap: break-word;
+          /* Promote to its own compositor layer so scrolling is a cheap GPU
+             translate instead of re-rasterizing the whole text block every
+             frame — that per-frame repaint is what made the scroll stutter
+             intermittently on the captured output. */
+          will-change: transform;
+          backface-visibility: hidden;
         }
 
         .cue-marker {
@@ -182,6 +198,7 @@ export default class TeleprompterGraphic extends HTMLElement {
       this.isPlaying = false;
       this.clearCountdown();
       if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
+      this.scrollLoopRunning = false;
       clearInterval(this.timerInterval);
       this.timerInterval = null;
       this.playStartTime = 0;
@@ -276,6 +293,11 @@ export default class TeleprompterGraphic extends HTMLElement {
   }
 
   matchTranscriptToScript(transcript) {
+    // Voice tracking drives the scroll on its own — there is no Play press in
+    // this mode — so make sure the animation loop is running to follow the
+    // target the matcher sets below.
+    if (this.voiceTrackingActive) this.ensureAnimating();
+
     const rawSpokenTokens = transcript.split(/\s+/);
     const spokenWords = [];
 
@@ -322,7 +344,7 @@ export default class TeleprompterGraphic extends HTMLElement {
         this.isPlaying = true;
         if (!this.playStartTime) this.playStartTime = Date.now(); // Record actual start time
         this.startTimerInterval();
-        this.animateScroll();
+        this.ensureAnimating();
       }
     }, 1000);
   }
@@ -347,7 +369,7 @@ export default class TeleprompterGraphic extends HTMLElement {
         this.isPlaying = true;
         if (!this.playStartTime) this.playStartTime = Date.now();
         this.startTimerInterval();
-        this.animateScroll();
+        this.ensureAnimating();
       }
     }
     return { statusCode: 200 };
@@ -357,6 +379,7 @@ export default class TeleprompterGraphic extends HTMLElement {
     this.clearCountdown();
     this.isPlaying = false;
     if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
+    this.scrollLoopRunning = false;
 
     // Hard Reset on Timer & Scrolling
     clearInterval(this.timerInterval);
@@ -388,6 +411,7 @@ export default class TeleprompterGraphic extends HTMLElement {
       this.clearCountdown();
       this.isPlaying = false;
       if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
+      this.scrollLoopRunning = false;
       // NOTE: Timer is deliberately NOT cleared here!
       return { statusCode: 200 };
     }
@@ -395,7 +419,7 @@ export default class TeleprompterGraphic extends HTMLElement {
     if (isResume) {
       if (!this.isPlaying) {
         this.isPlaying = true;
-        this.animateScroll();
+        this.ensureAnimating();
       }
       return { statusCode: 200 };
     }
@@ -412,25 +436,60 @@ export default class TeleprompterGraphic extends HTMLElement {
     this.stopVoiceTracking();
     this.isPlaying = false;
     if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
+    this.scrollLoopRunning = false;
     this.shadowRoot.innerHTML = '';
     return { statusCode: 200 };
   }
 
 // --- ANIMATION LOOP --- //
-  animateScroll() {
-    if (!this.isPlaying) return;
+  // Start the rAF loop if it isn't already running. Auto-scroll (Play) and voice
+  // tracking share one loop, so this guards against two chains running at once
+  // (which would otherwise double the scroll speed).
+  ensureAnimating() {
+    if (this.scrollLoopRunning) return;
+    this.scrollLoopRunning = true;
+    this.lastFrameTime = 0;
+    this.animationFrame = requestAnimationFrame((t) => this.animateScroll(t));
+  }
+
+  animateScroll(now) {
+    // Run while auto-scrolling OR while voice tracking is steering the scroll.
+    if ((!this.isPlaying && !this.voiceTrackingActive) || !this.shadowRoot.getElementById('content')) {
+      this.scrollLoopRunning = false;
+      this.animationFrame = null;
+      return;
+    }
 
     const content = this.shadowRoot.getElementById('content');
-    if (!content) return;
+
+    if (typeof now !== 'number') now = performance.now();
+    let dt = this.lastFrameTime ? now - this.lastFrameTime : this.frameMs;
+    this.lastFrameTime = now;
+    // Clamp so a long stall (GC, hidden page) catches up in one bounded step
+    // instead of leaping across the whole script.
+    if (!(dt > 0)) dt = this.frameMs;
+    if (dt > 100) dt = 100;
+    const frames = dt / this.frameMs;
 
     if (this.voiceTrackingActive) {
-       this.currentScroll += (this.targetScroll - this.currentScroll) * 0.05;
+       // Frame-rate-independent exponential smoothing toward the voice target,
+       // with a velocity cap so a multi-word leap scrolls smoothly rather than
+       // snapping forward.
+       const k = 1 - Math.pow(1 - 0.05, frames);
+       const maxStep = this.maxFollowPx * frames;
+       let step = (this.targetScroll - this.currentScroll) * k;
+       if (step > maxStep) step = maxStep;
+       else if (step < -maxStep) step = -maxStep;
+       this.currentScroll += step;
     } else {
-       this.currentScroll -= this.speed;
+       // Time-based constant velocity: rAF jitter no longer judders the output.
+       this.currentScroll -= this.speed * frames;
        this.targetScroll = this.currentScroll;
     }
 
-    content.style.transform = `translateY(${this.currentScroll}px)`;
-    this.animationFrame = requestAnimationFrame(() => this.animateScroll());
+    // translate3d keeps the element on the GPU/compositor layer (paired with
+    // will-change: transform) so each frame is a translate, not a repaint.
+    content.style.transform = `translate3d(0, ${this.currentScroll}px, 0)`;
+    this.animationFrame = requestAnimationFrame((t) => this.animateScroll(t));
   }
 } // <-- THIS CLOSING BRACKET IS CRUCIAL
