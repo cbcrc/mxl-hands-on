@@ -285,6 +285,7 @@ The pipeline is built programmatically (not via `parse_launch`) and uses the GSt
 | `POST` | `/pipeline/stop` | Stop and tear down the pipeline |
 | `GET`  | `/pipeline/status` | Return `{"running": bool, "domain_path": str\|null, "input_flow_uuid": str\|null, "html5_url": str\|null, "output_flow_uuid": str\|null, "format": {...}\|null, "key_on": bool, "error": str\|null}` |
 | `POST` | `/pipeline/key` | Body `{"on": bool}`. Only valid while running. Calls `set_key(on)` on the running pipeline and updates the cached key state. Returns the new status. |
+| `GET`  | `/config` | UI bootstrap config: `{"default_mode": "key"\|"prompt"}`, read from the `KEYER_DEFAULT_MODE` env var (validated; defaults to `key`). The static React bundle can't read env at runtime, so it fetches this on load to decide which mode the UI opens in. |
 
 - Serve the React static files as the last statement:
   ```python
@@ -423,7 +424,7 @@ endpoints map 1:1 to `teleprompter.ograf.json`:
 | Method | Path | Maps to |
 |--------|------|---------|
 | `GET`  | `/prompter-api/presets` | resolution/framerate preset list (single source of truth, frontend mirrors it) |
-| `POST` | `/prompter-api/update`  | `updateAction(data)` — any subset of `scriptText`, `scrollSpeed`, `mirrored`, `enableVoiceTracking`, `voiceLanguage`, `fontSize`, `enableCountdown`, `showStatusBar` |
+| `POST` | `/prompter-api/update`  | `updateAction(data)` — any subset of `scriptText`, `scrollSpeed`, `mirrored`, `enableVoiceTracking`, `voiceLanguage`, `fontSize`, `enableCountdown`, `showStatusBar`. A new `scriptText` is applied **live** (no pipeline restart): `updateAction` rebuilds the copy and resets the prompter to a clean, **paused, scrolled-to-top** state (stops the scroll, cancels the countdown, resets the timer and `playStartTime` so the next `play` re-runs the countdown). Without this reset the container keeps the prior `translateY()` offset and `isPlaying` state, so a script loaded after `play` renders off-screen and looks like it never arrived. |
 | `POST` | `/prompter-api/play`    | `playAction` |
 | `POST` | `/prompter-api/stop`    | `stopAction` |
 | `POST` | `/prompter-api/action`  | `customAction` — body `{action: "pause"\|"resume"\|"speedUp"\|"speedDown"}` |
@@ -463,6 +464,11 @@ headless CEF render** (no microphone device, no Google cloud speech backend). In
 
 ### Frontend (`App.jsx`)
 - A **Keying / Teleprompter** mode toggle at the top of Setup (disabled while running).
+  Switching modes applies that mode's **output-identity defaults** from a `MODE_DEFAULTS`
+  map (`applyMode`): Keying → `HTML5-Keyer` / `keyer-out-1` / `html5-keyer-video`;
+  Teleprompter → `HTML5-Teleprompter` / `teleprompter-out-1` / `teleprompter-video`.
+- On load the app fetches `GET /config` and, if `default_mode === "prompt"`, calls
+  `applyMode("prompt")` so the UI opens in the env-configured mode (see `KEYER_DEFAULT_MODE`).
 - **Prompt Setup:** resolution-preset dropdown, an **optional** MXL Audio Input dropdown
   (flows filtered to a role containing "audio" — `isAudioFlow`), and group hint / description /
   label. No HTML5 URL field.
@@ -476,6 +482,9 @@ headless CEF render** (no microphone device, no Google cloud speech backend). In
   the runtime copies them in; `vosk` is added to `requirements.txt`.
 - `prompter/` is copied to `/app/prompter/`. `videotestsrc`, `appsink`, `audioconvert`, and
   `audioresample` are already present in the installed GStreamer plugin sets.
+- `KEYER_DEFAULT_MODE` (`key` | `prompt`, default `key`) in the service `environment:` block
+  selects the mode the UI opens in. It only feeds the `GET /config` bootstrap, so changing it
+  is a container restart, not an image rebuild.
 
 ---
 

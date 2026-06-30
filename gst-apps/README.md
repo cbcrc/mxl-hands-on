@@ -300,13 +300,15 @@ mxlsrc (audio-flow, optional) → audioconvert → audioresample → S16LE/16k/m
 **Setup panel** (before starting):
 - Select the MXL domain and an **output resolution & frame rate** preset (the prompter is keyed over a black picture at this raster).
 - Optionally select an **MXL Audio Input** flow for voice tracking (speech on it is transcribed to auto-scroll the prompter). Leave as **none** for manual scrolling only.
-- Set the output **Group Hint** / **Description** / **Label** (same deterministic UUID scheme as keying mode).
+- Set the output **Group Hint** (default `HTML5-Teleprompter`), **Description** (default `teleprompter-out-1`), and **Label** (default `teleprompter-video`) — selecting the **Teleprompter** mode pre-fills these (Keying mode uses `HTML5-Keyer` / `keyer-out-1` / `html5-keyer-video`). Same deterministic UUID scheme as keying mode.
 
 **Operation panel** (while running):
-- A **script paste window** + **Load Script** — the only source of prompter copy (the same `POST /prompter-api/update` endpoint can be driven by an automation system at/after start; nothing is baked into the graphic).
+- A **script paste window** + **Load Script** — the only source of prompter copy (the same `POST /prompter-api/update` endpoint can be driven by an automation system at/after start; nothing is baked into the graphic). Loading a new script (UI button **or** API) is applied **live, without restarting the pipeline**: the prompter re-anchors to the top and pauses, ready to **Play**.
 - **Manual scroll speed** and **font size**, and **Mirror / 3-second countdown / status-bar** toggles.
 - **Voice-tracking language** (English US / French CA) and an **Enable Voice Tracking** checkbox.
 - Transport buttons: **Play / Stop / Pause / Resume / Speed − / Speed +**.
+
+> **Starting in a chosen mode:** the UI opens in Keying mode by default. Set `KEYER_DEFAULT_MODE=prompt` in the `html5-keyer` service `environment:` block of `docker-compose.yml` to have the UI boot straight into Teleprompter mode (`key` | `prompt`; defaults to `key`). The backend serves this to the frontend via `GET /config`, so flipping it only needs a container restart — no image rebuild.
 
 For the GStreamer pipeline details (both modes) see [gstreamer-pipeline.md — Section 6](./gstreamer-pipeline.md#6-html5-keyer-gst_keyerpy).
 

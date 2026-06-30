@@ -173,7 +173,23 @@ export default class TeleprompterGraphic extends HTMLElement {
       });
 
       content.innerHTML = html;
+
+      // Loading a new script returns the prompter to a clean, paused-at-top
+      // state (UI "Load Script" or POST /prompter-api/update).  Without this the
+      // container keeps the translateY() offset and isPlaying state from a prior
+      // run, so the new script either keeps scrolling or renders off-screen —
+      // looking like the text never arrived and forcing a pipeline restart.
+      this.isPlaying = false;
+      this.clearCountdown();
+      if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
+      clearInterval(this.timerInterval);
+      this.timerInterval = null;
+      this.playStartTime = 0;
+      this.updateTimerUI(0);
+      this.currentScroll = 0;
+      this.targetScroll = 0;
       this.currentWordIndex = 0;
+      content.style.transform = 'translateY(0px)';
     }
 
     if (data.scrollSpeed !== undefined) this.speed = data.scrollSpeed;

@@ -2,6 +2,12 @@ import React, { useCallback, useEffect, useState } from "react";
 
 const API = "";
 
+// Output-flow identity defaults per mode.
+const MODE_DEFAULTS = {
+  key:    { grouphint: "HTML5-Keyer",        description: "keyer-out-1",       label: "html5-keyer-video" },
+  prompt: { grouphint: "HTML5-Teleprompter", description: "teleprompter-out-1", label: "teleprompter-video" },
+};
+
 // ── Styles ────────────────────────────────────────────────────────────────────
 
 const S = {
@@ -159,9 +165,9 @@ export default function App() {
   const [html5Url,    setHtml5Url]    = useState("");
   const [resolution,  setResolution]  = useState("");
   const [audioFlow,   setAudioFlow]   = useState("");
-  const [grouphint,   setGrouphint]   = useState("HTML5-Keyer");
-  const [description, setDescription] = useState("keyer-out-1");
-  const [label,       setLabel]       = useState("html5-keyer-video");
+  const [grouphint,   setGrouphint]   = useState(MODE_DEFAULTS.key.grouphint);
+  const [description, setDescription] = useState(MODE_DEFAULTS.key.description);
+  const [label,       setLabel]       = useState(MODE_DEFAULTS.key.label);
 
   // Prompter control state (prompt mode operation)
   const [pScript,  setPScript]  = useState("");
@@ -219,12 +225,24 @@ export default function App() {
       .then(r => r.json())
       .then(d => setPresets(Array.isArray(d) ? d : []))
       .catch(() => {});
+    fetch(`${API}/config`)
+      .then(r => r.json())
+      .then(d => { if (d?.default_mode === "prompt") applyMode("prompt"); })
+      .catch(() => {});
     fetchStatus();
     const id = setInterval(fetchStatus, 2000);
     return () => clearInterval(id);
   }, [fetchStatus, loadFlows]);
 
   // ── Handlers ───────────────────────────────────────────────────────────────
+
+  const applyMode = (m) => {
+    setMode(m);
+    const d = MODE_DEFAULTS[m];
+    setGrouphint(d.grouphint);
+    setDescription(d.description);
+    setLabel(d.label);
+  };
 
   const handleDomainChange = (path) => {
     setSelectedDomain(path);
@@ -370,8 +388,8 @@ export default function App() {
 
         {/* Mode toggle */}
         <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem", ...disabledOverlay(running) }}>
-          <button style={modeTab(mode === "key")}    onClick={() => setMode("key")}    disabled={running}>Keying</button>
-          <button style={modeTab(mode === "prompt")} onClick={() => setMode("prompt")} disabled={running}>Teleprompter</button>
+          <button style={modeTab(mode === "key")}    onClick={() => applyMode("key")}    disabled={running}>Keying</button>
+          <button style={modeTab(mode === "prompt")} onClick={() => applyMode("prompt")} disabled={running}>Teleprompter</button>
         </div>
 
         <div style={disabledOverlay(running)}>

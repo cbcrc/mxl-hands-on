@@ -119,6 +119,8 @@ services:
         target: /mxl-domain
     environment:
       - MXL_DOMAIN=/mxl-domain
+      # UI opens in this mode on load: "key" (default) or "prompt" (teleprompter).
+      - KEYER_DEFAULT_MODE=key
     # CEF/Chromium launches multiple helper processes; bump shared memory so it
     # does not crash on the default 64 MB /dev/shm.
     shm_size: "1gb"

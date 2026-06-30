@@ -3,6 +3,7 @@ FastAPI backend for the MXL HTML5 Keyer.
 
 Endpoints
 ---------
+GET  /config          – UI bootstrap config (default mode)
 POST /get-domains     – rescan /mxl-domain for domain_def.json files
 GET  /domains         – return cached domain list
 GET  /scan-domain     – list MXL flows in a domain  ?domain_path=<path>
@@ -48,6 +49,13 @@ log = logging.getLogger(__name__)
 
 MXL_INFO_BIN    = "/opt/mxl/tools/mxl-info/mxl-info"
 MXL_DOMAIN_ROOT = os.environ.get("MXL_DOMAIN", "/mxl-domain")
+
+# Mode the UI opens in ("key" | "prompt").  Overridable from docker-compose so a
+# deployment can boot straight into the teleprompter form.  The static React
+# bundle can't read env at runtime, so it fetches this via GET /config.
+KEYER_DEFAULT_MODE = os.environ.get("KEYER_DEFAULT_MODE", "key").strip().lower()
+if KEYER_DEFAULT_MODE not in ("key", "prompt"):
+    KEYER_DEFAULT_MODE = "key"
 
 # Internal URL the CEF browser loads in prompt mode — the OGraf host page is
 # served by this same FastAPI process (see the /prompter static mount below).
@@ -312,6 +320,11 @@ async def api_get_domains() -> list[dict]:
     global _domains
     _domains = _scan_domains()
     return _domains
+
+
+@app.get("/config")
+async def api_config() -> dict:
+    return {"default_mode": KEYER_DEFAULT_MODE}
 
 
 @app.get("/domains")
