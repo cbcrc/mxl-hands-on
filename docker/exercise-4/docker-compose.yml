@@ -138,6 +138,29 @@ services:
     shm_size: "1gb"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+  
+  webrtc2mxl:
+    platform: linux/amd64
+    image: ghcr.io/cbcrc/webrtc2mxl:latest
+    container_name: webrtc2mxl
+    hostname: webrtc2mxl
+    domainname: local
+    ports:
+      - "9606:9600"                  # FastAPI serves both API and React frontend
+    volumes:
+      - type: volume
+        source: mxl-domain
+        target: /mxl-domain
+    environment:
+      - MXL_DOMAIN=/mxl-domain
+      # GStreamer pulls the published stream from mediamtx via WHEP.
+      - MEDIAMTX_WHEP_URL=http://host.docker.internal:8889/webrtc2mxl/whep
+      # Returned to the browser by /config (the browser substitutes its own hostname).
+      - MEDIAMTX_WHIP_URL=http://localhost:8889/webrtc2mxl/whip
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - mediamtx
 
   spx-server:
     image: ghcr.io/cbcrc/spx-server:v1.0.3
