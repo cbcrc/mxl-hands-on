@@ -163,6 +163,7 @@ services:
       - mediamtx
 
   spx-server:
+    platform: linux/amd64
     image: ghcr.io/cbcrc/spx-server:v1.0.3
     container_name: spx-server
     hostname: spx-server
