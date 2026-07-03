@@ -33,8 +33,9 @@
         case "update":     el.updateAction({ data: m.data || {} }); break;
         case "play":       el.playAction(); break;
         case "stop":       el.stopAction(); break;
-        case "action":     el.customAction(m.action); break;
-        case "transcript": el.pushTranscript(m.text); break;
+        case "action":        el.customAction({ action: m.action, param: m.param }); break;
+        case "transcript":    el.pushTranscript(m.text); break;
+        case "voice_command": el.applyVoiceCommand(m.command, m.param); break;
       }
     }
 

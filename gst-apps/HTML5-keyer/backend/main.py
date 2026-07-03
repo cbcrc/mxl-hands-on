@@ -152,15 +152,38 @@ class PrompterHub:
         self._playing = playing
         self.broadcast({"type": "play" if playing else "stop"})
 
-    def send_action(self, action: str) -> None:
-        self.broadcast({"type": "action", "action": action})
+    def send_action(self, action: str, param: Optional[str] = None) -> None:
+        msg = {"type": "action", "action": action}
+        if param is not None:
+            msg["param"] = param
+        self.broadcast(msg)
 
     def send_transcript(self, text: str) -> None:
         self.broadcast({"type": "transcript", "text": text})
 
+    def send_voice_command(self, command: str, param: Optional[str] = None) -> None:
+        msg = {"type": "voice_command", "command": command}
+        if param is not None:
+            msg["param"] = param
+        self.broadcast(msg)
+
+
+# Story markers ([STORY: Name] lines) parsed out of scriptText so the
+# grammar-constrained voice-command recognizer (VoiceTracker.set_story_names)
+# can be rebuilt with today's actual story titles — mirrors the same regex
+# used client-side in teleprompter.js / App.jsx.
+_STORY_MARKER_RE = re.compile(r"^\[STORY:\s*(.+?)\]\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _parse_story_names(script_text: str) -> list[str]:
+    return [m.strip() for m in _STORY_MARKER_RE.findall(script_text)]
+
 
 _hub = PrompterHub()
-_voice = VoiceTracker(broadcast=_hub.send_transcript)
+_voice = VoiceTracker(
+    broadcast=_hub.send_transcript,
+    on_command=lambda cmd: _hub.send_voice_command(cmd["command"], cmd.get("param")),
+)
 
 
 # ── Request models ────────────────────────────────────────────────────────────
@@ -195,10 +218,12 @@ class PrompterUpdate(BaseModel):
     fontSize:            Optional[float] = None
     enableCountdown:     Optional[bool]  = None
     showStatusBar:       Optional[bool]  = None
+    reverseScroll:       Optional[bool]  = None
 
 
 class PrompterAction(BaseModel):
-    action: str   # pause | resume | speedUp | speedDown
+    action: str   # pause | resume | speedUp | speedDown | jumpToStory
+    param:  Optional[str] = None   # story name, for jumpToStory
 
 
 def _full_status() -> dict:
@@ -433,6 +458,8 @@ async def api_prompter_update(body: PrompterUpdate) -> dict:
         _voice.set_language(data["voiceLanguage"])
     if "enableVoiceTracking" in data:
         _voice.set_enabled(bool(data["enableVoiceTracking"]))
+    if "scriptText" in data:
+        _voice.set_story_names(_parse_story_names(data["scriptText"]))
     if data:
         _hub.update_data(data)
     return {"ok": True}
@@ -452,9 +479,9 @@ async def api_prompter_stop() -> dict:
 
 @app.post("/prompter-api/action")
 async def api_prompter_action(body: PrompterAction) -> dict:
-    if body.action not in ("pause", "resume", "speedUp", "speedDown"):
+    if body.action not in ("pause", "resume", "speedUp", "speedDown", "jumpToStory"):
         raise HTTPException(status_code=400, detail="Unknown action")
-    _hub.send_action(body.action)
+    _hub.send_action(body.action, body.param)
     return {"ok": True}
 
 

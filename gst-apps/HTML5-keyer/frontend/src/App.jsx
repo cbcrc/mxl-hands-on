@@ -178,6 +178,8 @@ export default function App() {
   const [pStatusBar, setPStatusBar] = useState(true);
   const [pVoiceLang, setPVoiceLang] = useState("en-US");
   const [pVoice,   setPVoice]   = useState(false);
+  const [pReverse, setPReverse] = useState(false);
+  const [pStoryMarkers, setPStoryMarkers] = useState([]);
 
   const [starting, setStarting]   = useState(false);
   const [keyBusy,  setKeyBusy]    = useState(false);
@@ -318,8 +320,16 @@ export default function App() {
   const promPlay   = () => post("/prompter-api/play").catch(e => setError(e.message));
   const promStop   = () => post("/prompter-api/stop").catch(e => setError(e.message));
   const promAction = (action) => post("/prompter-api/action", { action }).catch(e => setError(e.message));
+  const promActionParam = (action, param) => post("/prompter-api/action", { action, param }).catch(e => setError(e.message));
 
-  const loadScript = () => promUpdate({ scriptText: pScript });
+  const loadScript = () => {
+    promUpdate({ scriptText: pScript });
+    const re = /^\[STORY:\s*(.+?)\]\s*$/gim;
+    const names = [];
+    let m;
+    while ((m = re.exec(pScript))) names.push(m[1]);
+    setPStoryMarkers(names);
+  };
 
   // ── Derived state ──────────────────────────────────────────────────────────
 
@@ -579,7 +589,10 @@ export default function App() {
             pStatusBar={pStatusBar} setPStatusBar={setPStatusBar}
             pVoiceLang={pVoiceLang} setPVoiceLang={setPVoiceLang}
             pVoice={pVoice} setPVoice={setPVoice}
+            pReverse={pReverse} setPReverse={setPReverse}
+            pStoryMarkers={pStoryMarkers}
             promUpdate={promUpdate} promPlay={promPlay} promStop={promStop} promAction={promAction}
+            promActionParam={promActionParam}
             status={status}
           />
         ) : (
@@ -699,7 +712,8 @@ function PrompterControls(props) {
     pSpeed, setPSpeed, pFont, setPFont,
     pMirror, setPMirror, pCountdown, setPCountdown, pStatusBar, setPStatusBar,
     pVoiceLang, setPVoiceLang, pVoice, setPVoice,
-    promUpdate, promPlay, promStop, promAction,
+    pReverse, setPReverse, pStoryMarkers,
+    promUpdate, promPlay, promStop, promAction, promActionParam,
   } = props;
 
   const cb = (checked, set, key) => {
@@ -760,6 +774,7 @@ function PrompterControls(props) {
         <label><input type="checkbox" checked={pMirror} onChange={(e) => cb(e.target.checked, setPMirror, "mirrored")} /> Mirror Output</label>
         <label><input type="checkbox" checked={pCountdown} onChange={(e) => cb(e.target.checked, setPCountdown, "enableCountdown")} /> 3-Second Countdown</label>
         <label><input type="checkbox" checked={pStatusBar} onChange={(e) => cb(e.target.checked, setPStatusBar, "showStatusBar")} /> Show Status Bar</label>
+        <label><input type="checkbox" checked={pReverse} onChange={(e) => cb(e.target.checked, setPReverse, "reverseScroll")} /> Reverse Scroll</label>
       </div>
 
       {/* Voice tracking */}
@@ -791,6 +806,22 @@ function PrompterControls(props) {
         <button style={btn("primary", !running)} onClick={() => promAction("speedDown")} disabled={!running}>− Speed</button>
         <button style={btn("primary", !running)} onClick={() => promAction("speedUp")} disabled={!running}>+ Speed</button>
       </div>
+
+      {/* Story marker jump buttons — parsed from [STORY: Name] lines on Load Script */}
+      {pStoryMarkers.length > 0 && (
+        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
+          {pStoryMarkers.map((name) => (
+            <button
+              key={name}
+              style={btn("primary", !running)}
+              onClick={() => promActionParam("jumpToStory", name)}
+              disabled={!running}
+            >
+              ⏵ {name}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

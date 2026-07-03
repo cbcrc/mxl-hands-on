@@ -434,6 +434,37 @@ non-obvious properties are required for smooth motion on the captured MXL output
 - **Velocity-capped follow.** `matchTranscriptToScript` moves the target in discrete, sometimes
   multi-word leaps (a Vosk final can advance several words at once). The per-frame follow step is
   clamped to `maxFollowPx` so a big leap scrolls smoothly to the word instead of snapping forward.
+- **Reverse scroll.** `reverseScroll` (bool) flips the sign of the non-voice-tracking
+  auto-scroll step (`animateScroll`'s `dir = reverseDirection ? 1 : -1`), so the same speed
+  scrolls backward instead of forward. The on-screen `.cue-marker` triangle gets a `.reversed`
+  class (`transform: scaleX(-1)`) so the direction is visible in the composited output.
+  Note: `.mirrored` output already applies `scaleX(-1)` at the host level, so mirrored +
+  reversed cancels the marker's flip back to pointing right — an expected, rare-combination
+  interaction, not a bug.
+- **Voice keyword commands.** A small `VOICE_COMMANDS` table maps a normalized (diacritic/
+  case/punctuation-stripped, whitespace-joined) trigger phrase to a command name.
+  `checkVoiceCommands()` runs at the top of `matchTranscriptToScript`, before the per-word
+  search, against an **unfiltered** normalized token list (the existing `>3`-char filter used
+  for script-word matching would otherwise silently drop short command words like "go"/"top"/
+  "du"). Today's commands:
+  - **"go top" / "debut du texte"** → `goTop()`: resets scroll/word-index to 0 immediately,
+    without touching `isPlaying`/timer/countdown — a live "quick jump", not a Stop. Meant for
+    an anchor to rehearse from the top during a commercial break, then jump back to their live
+    position with a story-marker voice command below.
+  - **"story &lt;name&gt;"** → `jumpToStory(name)`: looks for the word "story" in the transcript and
+    tries growing 1-3-word windows immediately after it against known `[STORY: Name]` marker
+    names (not just the end of the utterance, since a transcript chunk can include trailing
+    words spoken after the name). Best-effort — Vosk's small offline model may not reliably
+    recognize uncommon proper nouns, so reliable voice-jump favors short, common-word marker
+    names ("weather", "sports") over person/place names.
+- **Story markers ([STORY: Name]).** Parsed out of `scriptText` line-by-line in `updateAction`,
+  before the normal tokenizer runs. A marker line becomes a visible `<div class="story-marker">`
+  heading (small, uppercase, dashed rule — styled to read as a section slug to glance at for
+  positional confidence, not as body copy to speak) and is recorded in `this.storyMarkers` as
+  `{ name, elementId, wordIndex }`. It contributes **no** entries to `scriptWords`/`word-N`
+  spans, so it's never matched as spoken text. `jumpToStory()` scrolls to the marker element's
+  own `offsetTop` (not the next word's), snapping `currentScroll` immediately since the rAF
+  loop may not be running when the jump is triggered manually.
 
 ### Control channel & API (OGraf control points)
 A `PrompterHub` keeps the set of connected `/prompter-ws` sockets, retains the latest
@@ -445,11 +476,11 @@ endpoints map 1:1 to `teleprompter.ograf.json`:
 | Method | Path | Maps to |
 |--------|------|---------|
 | `GET`  | `/prompter-api/presets` | resolution/framerate preset list (single source of truth, frontend mirrors it) |
-| `POST` | `/prompter-api/update`  | `updateAction(data)` — any subset of `scriptText`, `scrollSpeed`, `mirrored`, `enableVoiceTracking`, `voiceLanguage`, `fontSize`, `enableCountdown`, `showStatusBar`. A new `scriptText` is applied **live** (no pipeline restart): `updateAction` rebuilds the copy and resets the prompter to a clean, **paused, scrolled-to-top** state (stops the scroll, cancels the countdown, resets the timer and `playStartTime` so the next `play` re-runs the countdown). Without this reset the container keeps the prior `translateY()` offset and `isPlaying` state, so a script loaded after `play` renders off-screen and looks like it never arrived. |
+| `POST` | `/prompter-api/update`  | `updateAction(data)` — any subset of `scriptText`, `scrollSpeed`, `mirrored`, `reverseScroll`, `enableVoiceTracking`, `voiceLanguage`, `fontSize`, `enableCountdown`, `showStatusBar`. A new `scriptText` is applied **live** (no pipeline restart): `updateAction` rebuilds the copy (parsing out `[STORY: Name]` markers, see above) and resets the prompter to a clean, **paused, scrolled-to-top** state (stops the scroll, cancels the countdown, resets the timer and `playStartTime` so the next `play` re-runs the countdown). Without this reset the container keeps the prior `translateY()` offset and `isPlaying` state, so a script loaded after `play` renders off-screen and looks like it never arrived. |
 | `POST` | `/prompter-api/play`    | `playAction` |
 | `POST` | `/prompter-api/stop`    | `stopAction` |
-| `POST` | `/prompter-api/action`  | `customAction` — body `{action: "pause"\|"resume"\|"speedUp"\|"speedDown"}` |
-| `WS`   | `/prompter-ws`          | the CEF host page connects here for commands + transcripts |
+| `POST` | `/prompter-api/action`  | `customAction` — body `{action: "pause"\|"resume"\|"speedUp"\|"speedDown"\|"jumpToStory", param?: string}`. `param` carries the story name for `jumpToStory`. |
+| `WS`   | `/prompter-ws`          | the CEF host page connects here for commands, dictation transcripts, and grammar-recognizer voice commands (`{type:"voice_command"}`) |
 
 `enableVoiceTracking`/`voiceLanguage` in `/update` also toggle/configure the voice tracker.
 Routes and the `/prompter-ws` socket are registered **before** the `/prompter` static mount
@@ -470,6 +501,32 @@ headless CEF render** (no microphone device, no Google cloud speech backend). In
   (`en-US` → `/opt/vosk/en`, `fr-CA` → `/opt/vosk/fr`), reloads on language change, and only
   transcribes while voice tracking is enabled. Partial + final transcripts are broadcast as
   `{type:"transcript",text}` to the prompter page, which feeds them into `pushTranscript`.
+- **Two recognizers run on the same audio.** Besides the open-vocabulary dictation recognizer
+  above (drives word-follow scrolling), a second, **grammar-constrained** `KaldiRecognizer`
+  (`vosk_recognizer_new_grm`, i.e. `KaldiRecognizer(model, rate, grammar_json)`) is restricted
+  to a small phrase list: **one** fixed keyword phrase for the active language
+  (`_FIXED_COMMAND_PHRASES_BY_LANG`: `"go top"` for `en-US`, `"debut du texte"` for `fr-CA` —
+  only the active language's phrase is compiled in, since including the other language's words
+  would just make Vosk log an "Ignoring word missing in vocabulary" warning for every word not
+  in that lexicon) plus `"story <name>"` for every `[STORY: Name]` marker in the *currently
+  loaded* script. Open-vocabulary decoding across the full ~100k-word vocabulary is a coin flip
+  for short, out-of-sentence command phrases and arbitrary story titles — confirmed live via
+  logging: "go top" was misheard as "go up", and "two" was consistently transcribed as "too".
+  Constraining the decoder to only the phrases that are actually valid *right now* is
+  dramatically more reliable, and — critically for a newsroom prompter where every rundown has
+  different story titles — it needs **no code change** per script: `VoiceTracker.set_story_names()`
+  rebuilds the grammar automatically whenever `/prompter-api/update` receives a new `scriptText`
+  (`main.py` parses `[STORY: Name]` out of it with the same regex used client-side), and
+  `set_language()` rebuilds it again on a language switch so the right fixed phrase is always
+  the one compiled in. The grammar always includes `"[unk]"` so unrelated speech is rejected as
+  unknown instead of being force-matched to the nearest known phrase.
+- A confident **final** result from the command recognizer is dispatched as
+  `{type:"voice_command", command, param?}` — a distinct WS message from `{type:"transcript"}`
+  — straight to `TeleprompterGraphic.applyVoiceCommand()`, bypassing the fuzzy client-side
+  `checkVoiceCommands()` text matching entirely for that hit. `checkVoiceCommands()` still runs
+  on every dictation transcript as a redundant fallback path (either recognizer firing is
+  enough to trigger the command); it is not a per-title special case, so it doesn't need to
+  "know" about story titles beyond what's already in `this.storyMarkers`.
 
 ### Backend wiring (`gst_keyer.py`, `main.py`)
 - `gst_keyer.start_prompt(domain_path, audio_flow_uuid|None, W, H, num, den, html5_url,
@@ -494,9 +551,13 @@ headless CEF render** (no microphone device, no Google cloud speech backend). In
   (flows filtered to a role containing "audio" — `isAudioFlow`), and group hint / description /
   label. No HTML5 URL field.
 - **Prompt Operation** (a `PrompterControls` panel): a script **paste window** + "Load Script",
-  scroll speed / font size, mirror / countdown / status-bar checkboxes, voice-language dropdown,
-  an **Enable Voice Tracking** checkbox, and **Play / Stop / Pause / Resume / Speed −/+** — all
-  calling `/prompter-api/*`. No Key ON/OFF in this mode.
+  scroll speed / font size, mirror / countdown / status-bar / **reverse-scroll** checkboxes,
+  voice-language dropdown, an **Enable Voice Tracking** checkbox, **Play / Stop / Pause /
+  Resume / Speed −/+**, and a row of **"⏵ &lt;name&gt;" story-jump buttons** — all calling
+  `/prompter-api/*`. The story-jump buttons are populated by regexing `[STORY: Name]` lines out
+  of the pasted script on "Load Script" (client-side, mirroring the engine's own marker regex)
+  rather than round-tripping through the one-directional `/prompter-ws` socket. No Key ON/OFF
+  in this mode.
 
 ### Docker
 - A `vosk-models` stage downloads the small en-US and fr models into `/opt/vosk/{en,fr}` and

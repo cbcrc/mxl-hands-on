@@ -1,3 +1,15 @@
+// Voice-activated keyword commands. Keys are the trigger phrase with every
+// word run through normalizeText() and concatenated with no separator, so
+// matching is diacritic/case/punctuation-insensitive like script-word
+// matching already is. Extend this table for future keywords.
+const VOICE_COMMANDS = {
+  gotop: 'goTop',
+  debutdutexte: 'goTop',
+  // Confirmed from live Vosk logs: without a deliberate pause between the two
+  // words, "go top" is sometimes misheard as "go up".
+  goup: 'goTop',
+};
+
 export default class TeleprompterGraphic extends HTMLElement {
   constructor() {
     super();
@@ -12,11 +24,12 @@ export default class TeleprompterGraphic extends HTMLElement {
     // Voice tracking moves the target in discrete word-sized leaps (a Vosk final
     // can advance several words at once). Cap how fast we chase it — px per
     // nominal frame — so a big leap becomes a steady scroll instead of a snap.
-    this.maxFollowPx = 6;
+    this.maxFollowPx = 4;
     this.currentScroll = 0;
     this.targetScroll = 0;
     this.speed = 2;
     this.isPlaying = false;
+    this.reverseDirection = false;
 
     // Voice Tracking State
     this.recognition = null;
@@ -24,6 +37,10 @@ export default class TeleprompterGraphic extends HTMLElement {
     this.scriptWords = [];
     this.currentWordIndex = 0;
     this.voiceLang = 'en-US';
+    // Story markers ([STORY: Name] lines) parsed out of the current script —
+    // each entry is { name, elementId, wordIndex } so both a manual/API jump
+    // and a voice-activated jump ("story <name>") can locate the heading.
+    this.storyMarkers = [];
 
     // Countdown State
     this.useCountdown = true;
@@ -102,6 +119,29 @@ export default class TeleprompterGraphic extends HTMLElement {
           z-index: 10;
         }
 
+        /* Reverse-scroll indicator: flips the cue marker to point left so the
+           scroll direction is visible in the composited output. Note this
+           combines with :host(.mirrored)'s scaleX(-1) — mirrored + reversed
+           cancels out visually, which is expected (rare combination). */
+        .cue-marker.reversed {
+          transform: scaleX(-1) translateY(-50%);
+        }
+
+        /* Story marker ([STORY: Name] lines) — rendered as a visible section
+           slug, styled distinctly from body copy so it reads as a heading to
+           glance at (confirms position) rather than text to speak aloud. */
+        .story-marker {
+          color: #ffcc33;
+          font-weight: 700;
+          font-size: 0.55em;
+          letter-spacing: 0.05em;
+          text-transform: uppercase;
+          opacity: 0.85;
+          border-top: 1px dashed rgba(255, 255, 255, 0.35);
+          padding-top: 0.3em;
+          margin-top: 0.6em;
+        }
+
         .countdown-overlay {
           position: absolute;
           top: 0; left: 0; right: 0; bottom: 0;
@@ -172,20 +212,37 @@ export default class TeleprompterGraphic extends HTMLElement {
     const content = this.shadowRoot.getElementById('content');
 
     if (data.scriptText !== undefined) {
-      const rawTokens = data.scriptText.split(/(\s+)/);
-      let html = '';
+      const storyMarkerRe = /^\[STORY:\s*(.+?)\]\s*$/i;
       this.scriptWords = [];
+      this.storyMarkers = [];
       let wordCounter = 0;
+      let storyIdx = 0;
+      let html = '';
 
-      rawTokens.forEach((token) => {
-        if (/\S/.test(token)) {
-          const cleanText = this.normalizeText(token);
-          this.scriptWords.push(cleanText);
-          html += `<span id="word-${wordCounter}" style="transition: color 0.3s;">${token}</span>`;
-          wordCounter++;
-        } else {
-          html += token.replace(/\n/g, '<br>');
+      data.scriptText.split('\n').forEach((line, lineIdx, lines) => {
+        const m = line.match(storyMarkerRe);
+        if (m) {
+          const name = m[1];
+          const elementId = `story-marker-${storyIdx}`;
+          this.storyMarkers.push({ name, elementId, wordIndex: wordCounter });
+          const escaped = name.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          html += `<div class="story-marker" id="${elementId}">${escaped}</div>`;
+          storyIdx++;
+          return;
         }
+
+        const rawTokens = line.split(/(\s+)/);
+        rawTokens.forEach((token) => {
+          if (/\S/.test(token)) {
+            const cleanText = this.normalizeText(token);
+            this.scriptWords.push(cleanText);
+            html += `<span id="word-${wordCounter}" style="transition: color 0.3s;">${token}</span>`;
+            wordCounter++;
+          } else {
+            html += token;
+          }
+        });
+        if (lineIdx < lines.length - 1) html += '<br>';
       });
 
       content.innerHTML = html;
@@ -212,6 +269,12 @@ export default class TeleprompterGraphic extends HTMLElement {
     if (data.scrollSpeed !== undefined) this.speed = data.scrollSpeed;
     if (data.fontSize !== undefined) this.style.setProperty('--font-size', `${data.fontSize}vw`);
     if (data.enableCountdown !== undefined) this.useCountdown = data.enableCountdown;
+
+    if (data.reverseScroll !== undefined) {
+      this.reverseDirection = data.reverseScroll;
+      const cueMarker = this.shadowRoot.querySelector('.cue-marker');
+      if (cueMarker) cueMarker.classList.toggle('reversed', this.reverseDirection);
+    }
 
     if (data.showStatusBar !== undefined) {
       const statusBar = this.shadowRoot.getElementById('status-bar');
@@ -292,6 +355,84 @@ export default class TeleprompterGraphic extends HTMLElement {
     this.matchTranscriptToScript(text);
   }
 
+  // Reset to the very top of the script — a live "quick jump", not a Stop:
+  // playback/voice tracking keep running. Used by the "go top"/"debut du
+  // texte" voice keyword so the anchor can rehearse from the start during a
+  // break, then voice-jump to a story marker (jumpToStory) to get back live.
+  goTop() {
+    const oldWord = this.shadowRoot.getElementById(`word-${this.currentWordIndex}`);
+    if (oldWord) oldWord.style.color = '#ffffff';
+    this.currentWordIndex = 0;
+    this.currentScroll = 0;
+    this.targetScroll = 0;
+    const content = this.shadowRoot.getElementById('content');
+    if (content) content.style.transform = 'translateY(0px)';
+  }
+
+  // Jump straight to a named [STORY: Name] marker (manual/API or voice
+  // "story <name>"). Scrolls to the marker heading's own position (not the
+  // next word) so the visible slug lands at the cue line, confirming the
+  // anchor is in the right section before the body copy below it.
+  jumpToStory(name) {
+    if (!name) return;
+    const key = this.normalizeText(name);
+    const marker = this.storyMarkers.find(m => this.normalizeText(m.name) === key);
+    if (!marker) return;
+    const oldWord = this.shadowRoot.getElementById(`word-${this.currentWordIndex}`);
+    if (oldWord) oldWord.style.color = '#ffffff';
+    this.currentWordIndex = marker.wordIndex;
+    const markerEl = this.shadowRoot.getElementById(marker.elementId);
+    const content = this.shadowRoot.getElementById('content');
+    if (markerEl && content) {
+      this.targetScroll = -markerEl.offsetTop;
+      this.currentScroll = this.targetScroll; // snap immediately — the rAF loop may not be running
+      content.style.transform = `translate3d(0, ${this.currentScroll}px, 0)`;
+    }
+  }
+
+  // Dispatch from the backend's grammar-constrained command recognizer (see
+  // voice_tracker.py) — a {"type":"voice_command"} WS message, distinct from
+  // the general {"type":"transcript"} path. This is the primary, reliable
+  // route for these two commands (Vosk decoding among a handful of known
+  // phrases rather than guessing across the open vocabulary); the fuzzy
+  // checkVoiceCommands() below still runs on every dictation transcript as a
+  // redundant fallback, so either recognizer firing is enough.
+  applyVoiceCommand(command, param) {
+    if (command === 'goTop') this.goTop();
+    else if (command === 'jumpToStory') this.jumpToStory(param);
+  }
+
+  // Checks a spoken transcript for a keyword command ("go top"/"debut du
+  // texte") or a "story <name>" story-jump phrase. Returns true if a command
+  // fired, so the caller can skip treating the same transcript as a
+  // script-word match.
+  checkVoiceCommands(normalizedTokens) {
+    const joined2 = normalizedTokens.slice(-2).join('');
+    const joined3 = normalizedTokens.slice(-3).join('');
+    if (VOICE_COMMANDS[joined2] === 'goTop' || VOICE_COMMANDS[joined3] === 'goTop') {
+      this.goTop();
+      return true;
+    }
+
+    // Match the words immediately following "story", trying growing windows
+    // (1-3 words) rather than requiring the name to be the end of the
+    // utterance — a transcript chunk can include trailing words spoken after
+    // the story name (e.g. "story sports now").
+    const storyIdx = normalizedTokens.lastIndexOf('story');
+    if (storyIdx !== -1) {
+      for (let span = 1; span <= 3 && storyIdx + span <= normalizedTokens.length; span++) {
+        const nameKey = normalizedTokens.slice(storyIdx + 1, storyIdx + 1 + span).join('');
+        const marker = this.storyMarkers.find(m => this.normalizeText(m.name) === nameKey);
+        if (marker) {
+          this.jumpToStory(marker.name);
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
   matchTranscriptToScript(transcript) {
     // Voice tracking drives the scroll on its own — there is no Play press in
     // this mode — so make sure the animation loop is running to follow the
@@ -300,11 +441,19 @@ export default class TeleprompterGraphic extends HTMLElement {
 
     const rawSpokenTokens = transcript.split(/\s+/);
     const spokenWords = [];
+    // Unfiltered normalized tokens for keyword/command matching — the >3-char
+    // filter below exists to reduce false-positive *script*-word matches, but
+    // it would also silently drop short command words like "go"/"top"/"du".
+    const normalizedTokens = [];
 
     rawSpokenTokens.forEach(word => {
       const cleanWord = this.normalizeText(word);
+      if (!cleanWord) return;
+      normalizedTokens.push(cleanWord);
       if (cleanWord.length > 3) spokenWords.push(cleanWord);
     });
+
+    if (this.voiceTrackingActive && this.checkVoiceCommands(normalizedTokens)) return;
 
     if (spokenWords.length === 0) return;
 
@@ -401,6 +550,11 @@ export default class TeleprompterGraphic extends HTMLElement {
   }
 
   async customAction(params) {
+    if (params && typeof params === 'object' && params.action === 'jumpToStory') {
+      this.jumpToStory(params.param);
+      return { statusCode: 200 };
+    }
+
     const payloadStr = JSON.stringify(params || "");
     const isPause = payloadStr.includes("pause") || params === "pause";
     const isResume = payloadStr.includes("resume") || params === "resume";
@@ -483,7 +637,8 @@ export default class TeleprompterGraphic extends HTMLElement {
        this.currentScroll += step;
     } else {
        // Time-based constant velocity: rAF jitter no longer judders the output.
-       this.currentScroll -= this.speed * frames;
+       const dir = this.reverseDirection ? 1 : -1;
+       this.currentScroll += dir * this.speed * frames;
        this.targetScroll = this.currentScroll;
     }
 

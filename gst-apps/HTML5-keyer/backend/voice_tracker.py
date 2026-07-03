@@ -10,6 +10,18 @@ WebSocket hub; the page feeds it into the graphic's existing matcher.
 Audio arrives as 16 kHz mono S16LE PCM from the GStreamer appsink (see
 gst_keyer._add_audio_branch).  Recognition runs on a dedicated worker thread so
 the GStreamer streaming thread is never blocked.
+
+Two Vosk recognizers run on the same audio:
+  - an open-vocabulary "dictation" recognizer that feeds the general
+    word-follow scroll tracking (unchanged from before).
+  - a grammar-constrained "command" recognizer restricted to a small phrase
+    list (the fixed keywords + "story <name>" for each marker in the
+    currently loaded script). Open-vocabulary decoding across a ~100k-word
+    vocabulary is a coin flip for short, out-of-sentence command phrases and
+    arbitrary story titles (confirmed live: "go top" -> "go up", "two" ->
+    "too"); constraining the decoder to the handful of phrases that are
+    actually valid right now is far more reliable, and it adapts automatically
+    to whatever story titles are in *today's* script without any code change.
 """
 
 from __future__ import annotations
@@ -29,25 +41,48 @@ _MODEL_PATHS = {
 }
 _SAMPLE_RATE = 16000
 
+# Fixed command phrases, per recognition language — only the phrase for the
+# *active* language is compiled into the grammar. Including a foreign-language
+# phrase would be harmless (it just could never match), but Vosk logs an
+# "Ignoring word missing in vocabulary" warning for every word not in the
+# active model's lexicon, so keeping this language-specific avoids the noise.
+_FIXED_COMMAND_PHRASES_BY_LANG = {
+    "en-US": ["go top"],
+    "fr-CA": ["debut du texte"],
+}
+
 
 class VoiceTracker:
     """
-    Long-lived Vosk recognizer fed PCM from the appsink.
+    Long-lived Vosk recognizers fed PCM from the appsink.
 
-    `broadcast` is a thread-safe callable taking the recognized transcript
-    string; the main app wires it to the prompter WebSocket hub.
+    `broadcast` is a thread-safe callable taking the recognized dictation
+    transcript string (feeds the general word-follow matcher); `on_command`
+    is a thread-safe callable taking a dict `{"command": ..., "param": ...}`
+    fired only on a confident grammar-constrained command match.
     """
 
-    def __init__(self, broadcast: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        broadcast: Callable[[str], None],
+        on_command: Callable[[dict], None],
+    ) -> None:
         self._broadcast = broadcast
+        self._on_command = on_command
         self._lock = threading.Lock()
         self._enabled = False
         self._lang = "en-US"
 
         self._model = None
         self._model_lang: Optional[str] = None
-        self._rec = None
+
+        self._rec = None            # open-vocabulary dictation recognizer
         self._last_partial = ""
+
+        self._cmd_rec = None        # grammar-constrained command recognizer
+        self._story_names: list[str] = []
+        self._grammar_phrases: list[str] = list(_FIXED_COMMAND_PHRASES_BY_LANG[self._lang])
+        self._cmd_last_partial = ""
 
         self._q: "queue.Queue[Optional[bytes]]" = queue.Queue(maxsize=50)
         self._worker = threading.Thread(target=self._run, daemon=True)
@@ -63,8 +98,28 @@ class VoiceTracker:
             if lang == self._lang:
                 return
             self._lang = lang
-            # Force the worker to (re)load the model and reset the recognizer.
+            # Force the worker to (re)load the model and both recognizers.
+            self._model = None
             self._rec = None
+            self._cmd_rec = None
+            self._rebuild_grammar_phrases_locked()
+
+    def set_story_names(self, names: list[str]) -> None:
+        """Rebuild the command grammar for the story markers in the current script."""
+        with self._lock:
+            self._story_names = list(names)
+            self._rebuild_grammar_phrases_locked()
+
+    def _rebuild_grammar_phrases_locked(self) -> None:
+        """Recompute self._grammar_phrases from language + story names. Caller must hold self._lock."""
+        phrases = list(_FIXED_COMMAND_PHRASES_BY_LANG.get(self._lang, []))
+        phrases += [f"story {n.strip().lower()}" for n in self._story_names if n.strip()]
+        if phrases == self._grammar_phrases:
+            return
+        self._grammar_phrases = phrases
+        # Force the worker to rebuild the grammar recognizer with the new phrase list.
+        self._cmd_rec = None
+        self._cmd_last_partial = ""
 
     def set_enabled(self, on: bool) -> None:
         with self._lock:
@@ -72,7 +127,9 @@ class VoiceTracker:
             if not on:
                 self._drain()
                 self._rec = None
+                self._cmd_rec = None
                 self._last_partial = ""
+                self._cmd_last_partial = ""
 
     def is_enabled(self) -> bool:
         with self._lock:
@@ -87,8 +144,13 @@ class VoiceTracker:
         with self._lock:
             self._enabled = False
             self._drain()
+            self._model = None
             self._rec = None
+            self._cmd_rec = None
             self._last_partial = ""
+            self._cmd_last_partial = ""
+            self._story_names = []
+            self._grammar_phrases = list(_FIXED_COMMAND_PHRASES_BY_LANG.get(self._lang, []))
 
     def feed(self, pcm: bytes) -> None:
         """Called from the GStreamer appsink thread; enqueue only when enabled."""
@@ -108,15 +170,15 @@ class VoiceTracker:
         except queue.Empty:
             pass
 
-    def _ensure_recognizer(self) -> bool:
-        """Lazily load the model for the current language. Returns True if ready."""
+    def _ensure_model(self) -> bool:
+        """Lazily load the shared Model for the current language."""
         with self._lock:
             lang = self._lang
-            if self._rec is not None and self._model_lang == lang:
+            if self._model is not None and self._model_lang == lang:
                 return True
 
         try:
-            from vosk import Model, KaldiRecognizer, SetLogLevel
+            from vosk import Model, SetLogLevel
             SetLogLevel(-1)  # silence Vosk's own chatter
         except Exception as exc:
             log.error("Vosk is not available: %s", exc)
@@ -126,8 +188,6 @@ class VoiceTracker:
         try:
             log.info("Loading Vosk model for %s from %s …", lang, path)
             model = Model(path)
-            rec = KaldiRecognizer(model, _SAMPLE_RATE)
-            rec.SetWords(False)
         except Exception as exc:
             log.error("Could not load Vosk model %s: %s", path, exc)
             return False
@@ -135,9 +195,52 @@ class VoiceTracker:
         with self._lock:
             self._model = model
             self._model_lang = lang
+            self._rec = None
+            self._cmd_rec = None
+            self._last_partial = ""
+            self._cmd_last_partial = ""
+        log.info("Vosk model for %s ready", lang)
+        return True
+
+    def _ensure_dictation_recognizer(self) -> bool:
+        if not self._ensure_model():
+            return False
+        with self._lock:
+            if self._rec is not None:
+                return True
+            model = self._model
+
+        from vosk import KaldiRecognizer
+        rec = KaldiRecognizer(model, _SAMPLE_RATE)
+        rec.SetWords(False)
+        with self._lock:
             self._rec = rec
             self._last_partial = ""
-        log.info("Vosk model for %s ready", lang)
+        return True
+
+    def _ensure_command_recognizer(self) -> bool:
+        if not self._ensure_model():
+            return False
+        with self._lock:
+            if self._cmd_rec is not None:
+                return True
+            model = self._model
+            phrases = list(self._grammar_phrases)
+
+        from vosk import KaldiRecognizer
+        # "[unk]" is required so audio that doesn't match a known phrase is
+        # rejected as unknown rather than force-matched to the closest one —
+        # without it, every word of normal reading would get mis-recognized
+        # as whichever grammar phrase sounds closest.
+        grammar = json.dumps(phrases + ["[unk]"])
+        try:
+            rec = KaldiRecognizer(model, _SAMPLE_RATE, grammar)
+        except Exception:
+            log.exception("Could not build grammar-constrained command recognizer")
+            return False
+        with self._lock:
+            self._cmd_rec = rec
+            self._cmd_last_partial = ""
         return True
 
     def _run(self) -> None:
@@ -147,27 +250,67 @@ class VoiceTracker:
                 continue
             if not self._enabled:
                 continue
-            if not self._ensure_recognizer():
-                continue
-            rec = self._rec
-            if rec is None:
-                continue
-            try:
-                if rec.AcceptWaveform(pcm):
-                    text = json.loads(rec.Result()).get("text", "")
-                    if text:
-                        self._emit(text)
-                    self._last_partial = ""
-                else:
-                    partial = json.loads(rec.PartialResult()).get("partial", "")
-                    if partial and partial != self._last_partial:
-                        self._last_partial = partial
-                        self._emit(partial)
-            except Exception:
-                log.exception("Vosk recognition failed")
+
+            if self._ensure_dictation_recognizer():
+                self._process_dictation(pcm)
+
+            if self._ensure_command_recognizer():
+                self._process_command(pcm)
+
+    def _process_dictation(self, pcm: bytes) -> None:
+        rec = self._rec
+        if rec is None:
+            return
+        try:
+            if rec.AcceptWaveform(pcm):
+                text = json.loads(rec.Result()).get("text", "")
+                if text:
+                    log.info("Vosk FINAL: %r", text)
+                    self._emit(text)
+                self._last_partial = ""
+            else:
+                partial = json.loads(rec.PartialResult()).get("partial", "")
+                if partial and partial != self._last_partial:
+                    self._last_partial = partial
+                    log.info("Vosk partial: %r", partial)
+                    self._emit(partial)
+        except Exception:
+            log.exception("Vosk dictation recognition failed")
+
+    def _process_command(self, pcm: bytes) -> None:
+        rec = self._cmd_rec
+        if rec is None:
+            return
+        try:
+            # Only act on FINAL command results — partials from a constrained
+            # grammar can still be an incomplete prefix of a longer phrase
+            # (e.g. "story" before the rest of the name has arrived), and a
+            # discrete jump command isn't latency-sensitive the way scroll
+            # following is, so waiting the extra beat for the endpointer is
+            # worth it to avoid firing on a half-heard phrase.
+            if rec.AcceptWaveform(pcm):
+                text = json.loads(rec.Result()).get("text", "")
+                if text and text != "[unk]":
+                    log.info("Vosk command FINAL: %r", text)
+                    self._emit_command(text)
+        except Exception:
+            log.exception("Vosk command recognition failed")
 
     def _emit(self, text: str) -> None:
         try:
             self._broadcast(text)
         except Exception:
             log.exception("transcript broadcast failed")
+
+    def _emit_command(self, text: str) -> None:
+        norm = text.strip().lower()
+        if norm in ("go top", "debut du texte"):
+            cmd = {"command": "goTop"}
+        elif norm.startswith("story "):
+            cmd = {"command": "jumpToStory", "param": norm[len("story "):].strip()}
+        else:
+            return
+        try:
+            self._on_command(cmd)
+        except Exception:
+            log.exception("voice command dispatch failed")

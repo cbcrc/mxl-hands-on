@@ -31,6 +31,11 @@
       "id": "speedDown",
       "name": "Decrease Speed",
       "description": "Makes the text scroll slower."
+    },
+    {
+      "id": "jumpToStory",
+      "name": "Jump to Story",
+      "description": "Scrolls directly to a named [STORY: Name] marker in the script (param: the story name)."
     }
   ],
 "schema": {
@@ -51,6 +56,12 @@
       "mirrored": {
         "type": "boolean",
         "title": "Mirror Output for Glass",
+        "default": false
+      },
+      "reverseScroll": {
+        "type": "boolean",
+        "title": "Reverse Scroll Direction",
+        "description": "Scrolls backward at the current speed; flips the cue-marker triangle to point left.",
         "default": false
       },
       "enableVoiceTracking": {
