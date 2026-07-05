@@ -102,6 +102,9 @@ class GstKeyer:
         self._error_msg: Optional[str] = None
         self._gen = 0
 
+        self._mode: Optional[str] = None           # "key" | "prompt"
+        self._audio_flow_uuid: Optional[str] = None
+        self._audio_cb = None                       # callable(bytes) for prompt audio
         self._domain_path: Optional[str] = None
         self._input_flow_uuid: Optional[str] = None
         self._html5_url: Optional[str] = None
@@ -144,6 +147,9 @@ class GstKeyer:
             self._teardown()
             self._gen += 1
             gen = self._gen
+            self._mode             = "key"
+            self._audio_flow_uuid  = None
+            self._audio_cb         = None
             self._domain_path      = domain_path
             self._input_flow_uuid  = input_flow_uuid
             self._html5_url        = html5_url
@@ -177,9 +183,80 @@ class GstKeyer:
 
         return self.get_status()
 
+    def start_prompt(
+        self,
+        domain_path: str,
+        audio_flow_uuid: Optional[str],
+        width: int,
+        height: int,
+        num: int,
+        den: int,
+        html5_url: str,
+        grouphint: str,
+        description: str,
+        label: str,
+        audio_cb=None,
+    ) -> dict:
+        """
+        Build and start the teleprompter pipeline: a black background at the
+        chosen raster/rate, the internally-hosted teleprompter graphic keyed on
+        top (alpha fixed at 1.0), and an optional MXL audio branch tapped into
+        ``audio_cb`` for server-side voice tracking.  Geometry comes from the
+        caller's preset — there is no input flow to read.
+        """
+        fmt = {
+            "frame_width":    int(width),
+            "frame_height":   int(height),
+            "grain_rate":     {"numerator": int(num), "denominator": int(den)},
+            "interlace_mode": "progressive",
+            "colorspace":     "BT709",
+        }
+
+        with self._lock:
+            self._teardown()
+            self._gen += 1
+            gen = self._gen
+            self._mode             = "prompt"
+            self._domain_path      = domain_path
+            self._input_flow_uuid  = None
+            self._audio_flow_uuid  = audio_flow_uuid or None
+            self._audio_cb         = audio_cb
+            self._html5_url        = html5_url
+            self._format           = fmt
+            self._grouphint        = grouphint
+            self._description      = description
+            self._label            = label
+            self._key_on           = False
+            self._output_flow_uuid = str(
+                uuid.uuid5(_MXL_KEYER_NS, f"{grouphint}:video")
+            )
+            self._error_msg = None
+            try:
+                self._build_prompt_pipeline()
+            except Exception as exc:
+                log.error("Failed to build prompt pipeline: %s", exc, exc_info=True)
+                self._error_msg = str(exc)
+                self._running = False
+                self._teardown()
+                raise RuntimeError(str(exc)) from exc
+
+            output_uuid = self._output_flow_uuid
+            domain = self._domain_path
+
+        threading.Thread(
+            target=self._patch_flow_def,
+            args=(domain, output_uuid, grouphint, description, label, gen),
+            daemon=True,
+        ).start()
+
+        return self.get_status()
+
     def stop(self) -> None:
         with self._lock:
             self._teardown()
+            self._mode             = None
+            self._audio_flow_uuid  = None
+            self._audio_cb         = None
             self._input_flow_uuid  = None
             self._html5_url        = None
             self._format           = None
@@ -193,6 +270,8 @@ class GstKeyer:
         with self._lock:
             if not self._running or self._cef_pad is None:
                 raise RuntimeError("Pipeline is not running")
+            if self._mode == "prompt":
+                raise RuntimeError("Key toggle not available in prompt mode")
             self._cef_pad.set_property("alpha", 1.0 if on else 0.0)
             self._key_on = bool(on)
             log.info("Key set to %s (alpha=%.1f)", "ON" if on else "OFF", 1.0 if on else 0.0)
@@ -201,8 +280,10 @@ class GstKeyer:
         with self._lock:
             return {
                 "running":           self._running,
+                "mode":              self._mode,
                 "domain_path":       self._domain_path,
                 "input_flow_uuid":   self._input_flow_uuid,
+                "audio_flow_uuid":   self._audio_flow_uuid,
                 "html5_url":         self._html5_url,
                 "output_flow_uuid":  self._output_flow_uuid,
                 "format":            self._format,
@@ -216,6 +297,7 @@ class GstKeyer:
     # ── Pipeline construction ─────────────────────────────────────────────────
 
     def _build_pipeline(self) -> None:
+        """Keying mode: live MXL video background + CEF overlay (alpha OFF)."""
         assert self._format is not None
         assert self._output_flow_uuid is not None
         assert self._domain_path is not None
@@ -229,25 +311,129 @@ class GstKeyer:
         interlace = _interlace_mode_to_caps(fmt["interlace_mode"])
         colorimetry = _colorspace_to_colorimetry(fmt.get("colorspace", "BT709"))
 
-        # Compositor BGRA input caps — constrained only on format so the
-        # compositor can accept both branches regardless of geometry extras.
-        bgra_caps_str = "video/x-raw,format=BGRA"
-
-        # Output caps must pin colorimetry so the two CAPS events that the
-        # compositor emits (once before CEF joins, once after) are identical
-        # from mxlsink's perspective.  Without colorimetry, the first event
-        # carries bt709 (from the background branch alone) and the second
-        # carries a composite value after CEF's sRGB mixes in; GstBaseSink
-        # treats them as different caps and calls set_caps twice, which causes
-        # mxlsink's create_flow_writer to return was_created=false on the
-        # second call and abort with "another active writer".
         out_caps_str = (
             f"video/x-raw,format=v210,width={W},height={H},"
             f"framerate={num}/{den},colorimetry={colorimetry}"
         )
 
         pipeline = Gst.Pipeline.new("html5-keyer-pipeline")
+        compositor = self._make_compositor(pipeline)
+        self._add_output_branch(pipeline, compositor, out_caps_str)
 
+        # ── Background branch (compositor.sink_0) ─────────────────────────────
+        # mxlsrc → videoconvert → BGRA → queue → compositor.sink_0
+        #
+        # mxlsrc emits a malformed `interlace-mode` caps field (it includes
+        # JSON quote marks in the string value: `"progressive"` instead of
+        # `progressive`).  videoconvert parses interlace-mode strictly and
+        # rejects the caps with NOT_NEGOTIATED.  We install a pad probe on
+        # mxlsrc.src that rewrites the CAPS event in-place before the next
+        # element ever sees it.  This is more reliable than capssetter, which
+        # we observed silently leaving the malformed field untouched.
+        bg_src = Gst.ElementFactory.make("mxlsrc", "bg_src")
+        if not bg_src:
+            raise RuntimeError("Could not create mxlsrc — is libgstmxl.so installed in the plugin path?")
+        bg_src.set_property("video-flow-id", self._input_flow_uuid)
+        bg_src.set_property("domain", self._domain_path)
+
+        bg_src_pad = bg_src.get_static_pad("src")
+        bg_src_pad.add_probe(
+            Gst.PadProbeType.EVENT_DOWNSTREAM,
+            self._mxlsrc_caps_fix_probe,
+        )
+
+        bg_conv = Gst.ElementFactory.make("videoconvert", "bg_conv")
+
+        bg_bgra_caps = Gst.ElementFactory.make("capsfilter", "bg_bgra_caps")
+        bg_bgra_caps.set_property("caps", Gst.Caps.from_string("video/x-raw,format=BGRA"))
+
+        bg_queue = self._make_leaky_queue("bg_queue")
+
+        for el in (bg_src, bg_conv, bg_bgra_caps, bg_queue):
+            pipeline.add(el)
+        if not bg_src.link(bg_conv):
+            raise RuntimeError("Failed to link bg mxlsrc → videoconvert")
+        if not bg_conv.link(bg_bgra_caps):
+            raise RuntimeError("Failed to link bg videoconvert → BGRA caps")
+        if not bg_bgra_caps.link(bg_queue):
+            raise RuntimeError("Failed to link bg BGRA caps → queue")
+
+        self._link_bg_queue(compositor, bg_queue)
+
+        # CEF overlay — key OFF on start (operator enables explicitly)
+        self._add_cef_branch(pipeline, compositor, self._html5_url, W, H, num, den, 0.0)
+
+        self._start_pipeline(pipeline, compositor)
+        log.info(
+            "Keyer started — input=%s, url=%s, output=%s, format=%dx%d @ %d/%d %s",
+            self._input_flow_uuid, self._html5_url, self._output_flow_uuid,
+            W, H, num, den, interlace,
+        )
+
+    def _build_prompt_pipeline(self) -> None:
+        """Prompt mode: black background + teleprompter overlay (alpha fixed ON)."""
+        assert self._format is not None
+        assert self._output_flow_uuid is not None
+        assert self._domain_path is not None
+        assert self._html5_url is not None
+
+        fmt = self._format
+        gr = fmt["grain_rate"]
+        W, H = fmt["frame_width"], fmt["frame_height"]
+        num, den = gr["numerator"], gr["denominator"]
+
+        out_caps_str = (
+            f"video/x-raw,format=v210,width={W},height={H},"
+            f"framerate={num}/{den},colorimetry=bt709"
+        )
+
+        pipeline = Gst.Pipeline.new("html5-prompter-pipeline")
+        compositor = self._make_compositor(pipeline)
+        self._add_output_branch(pipeline, compositor, out_caps_str)
+
+        # ── Background branch (compositor.sink_0): synthetic black picture ────
+        bg_src = Gst.ElementFactory.make("videotestsrc", "bg_src")
+        if not bg_src:
+            raise RuntimeError("Could not create videotestsrc — is gstreamer1.0-plugins-base installed?")
+        bg_src.set_property("pattern", 2)        # 2 = solid black
+        bg_src.set_property("is-live", True)
+
+        bg_conv = Gst.ElementFactory.make("videoconvert", "bg_conv")
+        bg_caps = Gst.ElementFactory.make("capsfilter", "bg_caps")
+        bg_caps.set_property("caps", Gst.Caps.from_string(
+            f"video/x-raw,format=BGRA,width={W},height={H},"
+            f"framerate={num}/{den},interlace-mode=progressive"
+        ))
+        bg_queue = self._make_leaky_queue("bg_queue")
+
+        for el in (bg_src, bg_conv, bg_caps, bg_queue):
+            pipeline.add(el)
+        if not bg_src.link(bg_conv):
+            raise RuntimeError("Failed to link videotestsrc → videoconvert")
+        if not bg_conv.link(bg_caps):
+            raise RuntimeError("Failed to link bg videoconvert → BGRA caps")
+        if not bg_caps.link(bg_queue):
+            raise RuntimeError("Failed to link bg BGRA caps → queue")
+
+        self._link_bg_queue(compositor, bg_queue)
+
+        # Teleprompter overlay — alpha fixed at 1.0 (always visible).
+        self._add_cef_branch(pipeline, compositor, self._html5_url, W, H, num, den, 1.0)
+
+        # Optional audio branch for server-side voice tracking.
+        if self._audio_flow_uuid:
+            self._add_audio_branch(pipeline, self._audio_flow_uuid, self._domain_path)
+
+        self._start_pipeline(pipeline, compositor)
+        log.info(
+            "Prompter started — audio=%s, url=%s, output=%s, format=%dx%d @ %d/%d",
+            self._audio_flow_uuid, self._html5_url, self._output_flow_uuid,
+            W, H, num, den,
+        )
+
+    # ── Shared pipeline-construction helpers ──────────────────────────────────
+
+    def _make_compositor(self, pipeline: Gst.Pipeline) -> Gst.Element:
         compositor = Gst.ElementFactory.make("compositor", "mixer")
         if not compositor:
             raise RuntimeError(
@@ -261,27 +447,29 @@ class GstKeyer:
         # serialized caps/allocation-query have been consumed, and the aggregate
         # thread then deadlocks on those un-consumed events — the compositor
         # produces no output for the whole session and mxl-info-gui reports the
-        # output flow at the epoch (~56 years).  It is intermittent because it
-        # depends on exactly how far along CEF is when that first aggregate fires.
-        # With the property left at its default (False) the compositor instead
-        # WAITS for CEF's first buffer, and while waiting it consumes CEF's
-        # caps/query — so there is no deadlock.  (The earlier "not-negotiated"
-        # justification for this flag was the malformed interlace-mode caps that
-        # mxlsrc used to emit; that bug is fixed in the plugin, commit 04399b5.)
+        # output flow at the epoch (~56 years).  With the property left at its
+        # default (False) the compositor instead WAITS for CEF's first buffer,
+        # consuming its caps/query while waiting — so there is no deadlock.
         pipeline.add(compositor)
+        return compositor
 
+    def _add_output_branch(
+        self, pipeline: Gst.Pipeline, compositor: Gst.Element, out_caps_str: str
+    ) -> None:
         # ── Output branch: compositor.src → pts_fix → videoconvert → caps(v210) → queue → mxlsink ──
         #
         # The compositor converts all input PTSes to running time (ns elapsed
         # since the pipeline started).  mxlsink's render_video computes the
-        # grain index as:  mxl_pts = buffer.pts + (mxl_now − clock.time())
-        # where both mxl_now and clock.time() are TAI (≈ 1.748e18 ns).  Their
-        # difference is ≈ 0, so mxl_pts ≈ running_time ≈ a few seconds from
-        # epoch → grain index ≈ 0.  mxl-info-gui then shows latency ≈ 56 years.
+        # grain index as:  mxl_pts = buffer.pts + (mxl_now − clock.time()).
+        # Re-adding pipeline.base_time() to each buffer PTS after the compositor
+        # makes buffer.pts an absolute pipeline-clock timestamp again, so
+        # mxl_pts ≈ mxl_now and grains land at the correct TAI index instead of
+        # near the epoch (otherwise mxl-info-gui shows latency ≈ 56 years).
         #
-        # Fix: re-add pipeline.base_time() to each buffer PTS after the
-        # compositor so that downstream elements see absolute TAI timestamps
-        # again, as if the compositor had not normalised them.
+        # The output capsfilter pins colorimetry so the two CAPS events the
+        # compositor emits (before/after CEF joins) are identical from mxlsink's
+        # perspective; otherwise GstBaseSink calls set_caps twice and mxlsink
+        # aborts with "another active writer".
         pts_fix = Gst.ElementFactory.make("identity", "pts_fix")
         if not pts_fix:
             raise RuntimeError("Could not create identity element for PTS fix")
@@ -289,10 +477,6 @@ class GstKeyer:
         pipeline.add(pts_fix)
 
         def _on_pts_fix_handoff(element, buf):
-            # GstIdentity::handoff signal has one argument: buffer.
-            # identity guarantees the buffer is already writable (GstBaseTransform
-            # calls gst_buffer_make_writable before transform_ip / handoff).
-            # Gst.Buffer has no make_writable() in Python GI; direct assignment works.
             base_time = pipeline.get_base_time()
             if not base_time or base_time == Gst.CLOCK_TIME_NONE:
                 return
@@ -330,44 +514,7 @@ class GstKeyer:
         if not out_queue.link(out_sink):
             raise RuntimeError("Failed to link out_queue → mxlsink")
 
-        # ── Background branch (compositor.sink_0) ─────────────────────────────
-        # mxlsrc → videoconvert → BGRA → queue → compositor.sink_0
-        #
-        # mxlsrc emits a malformed `interlace-mode` caps field (it includes
-        # JSON quote marks in the string value: `"progressive"` instead of
-        # `progressive`).  videoconvert parses interlace-mode strictly and
-        # rejects the caps with NOT_NEGOTIATED.  We install a pad probe on
-        # mxlsrc.src that rewrites the CAPS event in-place before the next
-        # element ever sees it.  This is more reliable than capssetter, which
-        # we observed silently leaving the malformed field untouched.
-        bg_src = Gst.ElementFactory.make("mxlsrc", "bg_src")
-        if not bg_src:
-            raise RuntimeError("Could not create mxlsrc — is libgstmxl.so installed in the plugin path?")
-        bg_src.set_property("video-flow-id", self._input_flow_uuid)
-        bg_src.set_property("domain", self._domain_path)
-
-        bg_src_pad = bg_src.get_static_pad("src")
-        bg_src_pad.add_probe(
-            Gst.PadProbeType.EVENT_DOWNSTREAM,
-            self._mxlsrc_caps_fix_probe,
-        )
-
-        bg_conv = Gst.ElementFactory.make("videoconvert", "bg_conv")
-
-        bg_bgra_caps = Gst.ElementFactory.make("capsfilter", "bg_bgra_caps")
-        bg_bgra_caps.set_property("caps", Gst.Caps.from_string(bgra_caps_str))
-
-        bg_queue = self._make_leaky_queue("bg_queue")
-
-        for el in (bg_src, bg_conv, bg_bgra_caps, bg_queue):
-            pipeline.add(el)
-        if not bg_src.link(bg_conv):
-            raise RuntimeError("Failed to link bg mxlsrc → videoconvert")
-        if not bg_conv.link(bg_bgra_caps):
-            raise RuntimeError("Failed to link bg videoconvert → BGRA caps")
-        if not bg_bgra_caps.link(bg_queue):
-            raise RuntimeError("Failed to link bg BGRA caps → queue")
-
+    def _link_bg_queue(self, compositor: Gst.Element, bg_queue: Gst.Element) -> None:
         bg_pad = compositor.request_pad_simple("sink_%u")
         if bg_pad is None:
             raise RuntimeError("Could not request background sink pad on compositor")
@@ -378,21 +525,23 @@ class GstKeyer:
             raise RuntimeError("Failed to link bg queue → compositor.sink_0")
         self._bg_pad = bg_pad
 
+    def _add_cef_branch(
+        self,
+        pipeline: Gst.Pipeline,
+        compositor: Gst.Element,
+        url: str,
+        W: int,
+        H: int,
+        num: int,
+        den: int,
+        alpha: float,
+    ) -> None:
         # ── CEF overlay branch (compositor.sink_1) ────────────────────────────
-        # cefsrc outputs video/x-raw directly — cefdemux is NOT needed and
-        # must NOT be used.  cefdemux's dynamic "video" pad causes the
-        # compositor to re-emit a CAPS event downstream each time it appears,
-        # triggering a second set_caps call on mxlsink.  mxlsink's
-        # create_flow_writer returns was_created=false on the second call
-        # (flow already exists) and aborts with "another active writer".
-        #
-        # Pipeline:
-        #   cefsrc(url) → caps(BGRA, W, H, integer_fps)
-        #               → videorate → caps(BGRA, W, H, num/den)
-        #               → leaky queue → compositor.sink_1
-        #
-        # CEF renders at an integer fps; videorate re-paces it to the exact
-        # MXL grain rate so the mixer always sees a steady cadence.
+        # cefsrc outputs video/x-raw directly — cefdemux is NOT needed and must
+        # NOT be used (its dynamic pad re-emits CAPS downstream, causing a second
+        # set_caps on mxlsink → "another active writer").  cefsrc renders at an
+        # integer fps; videorate re-paces it to the exact MXL grain rate so the
+        # mixer always sees a steady cadence.
         cef_fps = max(1, round(num / den))
 
         cef_src = Gst.ElementFactory.make("cefsrc", "cef_src")
@@ -400,15 +549,14 @@ class GstKeyer:
             raise RuntimeError(
                 "Could not create cefsrc — is gst-plugin-cef (libgstcef.so) installed in the plugin path?"
             )
-        cef_src.set_property("url", self._html5_url)
+        cef_src.set_property("url", url)
 
-        # cefsrc requires an integer framerate on its src caps.
-        cef_src_caps_str = f"video/x-raw,format=BGRA,width={W},height={H},framerate={cef_fps}/1"
         cef_src_caps = Gst.ElementFactory.make("capsfilter", "cef_src_caps")
-        cef_src_caps.set_property("caps", Gst.Caps.from_string(cef_src_caps_str))
+        cef_src_caps.set_property("caps", Gst.Caps.from_string(
+            f"video/x-raw,format=BGRA,width={W},height={H},framerate={cef_fps}/1"
+        ))
 
         cef_rate = Gst.ElementFactory.make("videorate", "cef_rate")
-        # After videorate, pin the exact output framerate matching the MXL flow.
         cef_rate_caps = Gst.ElementFactory.make("capsfilter", "cef_rate_caps")
         cef_rate_caps.set_property(
             "caps", Gst.Caps.from_string(f"video/x-raw,format=BGRA,framerate={num}/{den}")
@@ -418,7 +566,6 @@ class GstKeyer:
 
         for el in (cef_src, cef_src_caps, cef_rate, cef_rate_caps, cef_queue):
             pipeline.add(el)
-
         if not cef_src.link(cef_src_caps):
             raise RuntimeError("Failed to link cefsrc → src caps")
         if not cef_src_caps.link(cef_rate):
@@ -434,7 +581,7 @@ class GstKeyer:
         cef_pad.set_property("zorder", 1)
         cef_pad.set_property("xpos", 0)
         cef_pad.set_property("ypos", 0)
-        cef_pad.set_property("alpha", 0.0)   # key OFF on start
+        cef_pad.set_property("alpha", alpha)
         try:
             cef_pad.set_property("sync", False)   # CEF runs on system clock; MXL on live clock
         except Exception as exc:
@@ -443,7 +590,61 @@ class GstKeyer:
             raise RuntimeError("Failed to link cef queue → compositor.sink_1")
         self._cef_pad = cef_pad
 
-        # Bus watch
+    def _add_audio_branch(self, pipeline: Gst.Pipeline, flow_uuid: str, domain: str) -> None:
+        # mxlsrc(audio-flow-id) → audioconvert → audioresample
+        #   → caps(S16LE, mono, 16 kHz) → appsink   (Vosk wants 16k mono PCM)
+        # Independent branch — no link to compositor/mxlsink.  appsink runs with
+        # sync=false so the live MXL audio clock never stalls the video output.
+        a_src = Gst.ElementFactory.make("mxlsrc", "audio_src")
+        if not a_src:
+            raise RuntimeError("Could not create mxlsrc for audio")
+        a_src.set_property("audio-flow-id", flow_uuid)
+        a_src.set_property("domain", domain)
+
+        a_conv = Gst.ElementFactory.make("audioconvert",  "audio_conv")
+        a_res  = Gst.ElementFactory.make("audioresample", "audio_resample")
+        a_caps = Gst.ElementFactory.make("capsfilter",    "audio_caps")
+        a_caps.set_property("caps", Gst.Caps.from_string(
+            "audio/x-raw,format=S16LE,channels=1,rate=16000"
+        ))
+        a_sink = Gst.ElementFactory.make("appsink", "audio_sink")
+        if not a_sink:
+            raise RuntimeError("Could not create appsink — is gstreamer1.0-plugins-base installed?")
+        a_sink.set_property("emit-signals", True)
+        a_sink.set_property("sync", False)
+        a_sink.set_property("max-buffers", 10)
+        a_sink.set_property("drop", True)
+        a_sink.connect("new-sample", self._on_audio_sample)
+
+        for el in (a_src, a_conv, a_res, a_caps, a_sink):
+            pipeline.add(el)
+        if not a_src.link(a_conv):
+            raise RuntimeError("Failed to link audio mxlsrc → audioconvert")
+        if not a_conv.link(a_res):
+            raise RuntimeError("Failed to link audioconvert → audioresample")
+        if not a_res.link(a_caps):
+            raise RuntimeError("Failed to link audioresample → caps")
+        if not a_caps.link(a_sink):
+            raise RuntimeError("Failed to link audio caps → appsink")
+
+    def _on_audio_sample(self, sink) -> int:
+        sample = sink.emit("pull-sample")
+        if sample is None:
+            return Gst.FlowReturn.OK
+        buf = sample.get_buffer()
+        ok, mapinfo = buf.map(Gst.MapFlags.READ)
+        if ok:
+            try:
+                cb = self._audio_cb
+                if cb is not None:
+                    cb(bytes(mapinfo.data))
+            except Exception:
+                log.exception("audio sample callback failed")
+            finally:
+                buf.unmap(mapinfo)
+        return Gst.FlowReturn.OK
+
+    def _start_pipeline(self, pipeline: Gst.Pipeline, compositor: Gst.Element) -> None:
         bus = pipeline.get_bus()
         bus.add_signal_watch()
         bus.connect("message::error",   self._on_error)
@@ -457,13 +658,7 @@ class GstKeyer:
             pipeline.set_state(Gst.State.NULL)
             raise RuntimeError("Pipeline failed to reach PLAYING state")
         pipeline.get_state(10 * Gst.SECOND)
-
         self._running = True
-        log.info(
-            "Pipeline started — input=%s, url=%s, output=%s, format=%dx%d @ %d/%d %s",
-            self._input_flow_uuid, self._html5_url, self._output_flow_uuid,
-            W, H, num, den, interlace,
-        )
 
     @staticmethod
     def _mxlsrc_caps_fix_probe(pad: Gst.Pad, info: Gst.PadProbeInfo) -> int:

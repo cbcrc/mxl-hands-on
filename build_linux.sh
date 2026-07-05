@@ -23,6 +23,13 @@ fi
 USER_UID=$(id -u)
 USER_GID=$(id -g)
 
+# On macOS the default primary group is "staff" (GID 20), which collides with
+# Ubuntu's built-in "dialout" group (also GID 20) and breaks groupadd in the
+# container. Fall back to GID == UID, which is unused and avoids the collision.
+if [ "$(uname)" = "Darwin" ]; then
+    USER_GID=${USER_UID}
+fi
+
 for COMP in "${COMPILERS[@]}"; do
     echo "=================================================================="
     echo "Building with compiler: ${COMP}"
@@ -33,7 +40,11 @@ for COMP in "${COMPILERS[@]}"; do
     
     # 1. Build Docker image
     # Note: The backslash below fixes the line continuation error from the original script.
+    # --platform linux/amd64 pins the SDK build to x86_64, matching the hardcoded
+    # x86_64-linux-gnu paths in the gst-apps Dockerfiles and their linux/amd64 containers
+    # (see gst-apps/docker-compose.yml), regardless of the host's native architecture.
     docker build \
+      --platform linux/amd64 \
       --build-arg BASE_IMAGE_VERSION=24.04 \
       --build-arg USER_UID=${USER_UID} \
       --build-arg USER_GID=${USER_GID} \
@@ -46,10 +57,10 @@ for COMP in "${COMPILERS[@]}"; do
         echo "ERROR: Docker image build failed for ${COMP}."
         continue
     fi
-    
+
     # 2. Configure CMake
     echo "--- Configuring CMake ---"
-    docker run --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
+    docker run --platform linux/amd64 --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
       -e VCPKG_BINARY_SOURCES="clear;files,/workspace/mxl/vcpkg_cache,readwrite" \
       -i mxl_build_container_${COMP_LOWER} \
       bash -c "
@@ -57,18 +68,18 @@ for COMP in "${COMPILERS[@]}"; do
           --preset ${COMP} \
           -DCMAKE_INSTALL_PREFIX=/workspace/mxl/install
       "
-    
+
     # 3. Build Project
     echo "--- Building Project ---"
-    docker run --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
+    docker run --platform linux/amd64 --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
       -i mxl_build_container_${COMP_LOWER} \
       bash -c "
         cmake --build /workspace/mxl/build/${COMP} -t all doc install package
       "
-    
+
     # 4. Run Tests
     echo "--- Running Tests ---"
-    docker run --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
+    docker run --platform linux/amd64 --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
       -i mxl_build_container_${COMP_LOWER} \
       bash -c "
         cd /workspace/mxl/build/${COMP} && \
@@ -101,6 +112,7 @@ echo "=================================================================="
 
 # 1. Build Rust Docker image (context is repo root so Dockerfile can copy devcontainer scripts)
 docker build \
+  --platform linux/amd64 \
   --build-arg BASE_IMAGE_VERSION=24.04 \
   --build-arg USER_UID=${USER_UID} \
   --build-arg USER_GID=${USER_GID} \
@@ -116,6 +128,7 @@ fi
 # 2. Build Rust crates (mxl-sys, mxl, gst-mxl-rs)
 echo "--- Building Rust crates ---"
 docker run \
+  --platform linux/amd64 \
   --mount src=$(pwd)/${MXL_PROJECT_PATH},target=/workspace/mxl,type=bind \
   -u ${USER_UID}:${USER_GID} \
   -e CARGO_HOME=/workspace/mxl/rust/.cargo-docker \

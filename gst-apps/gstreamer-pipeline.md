@@ -891,4 +891,116 @@ flowchart LR
     mixer --> pts_fix --> out_conv --> out_caps --> out_q --> out_sink
 ```
 
+### Prompt mode (Teleprompter)
+
+A second, toggleable mode of the same app. The MXL **video** background is replaced by a black
+picture at an operator-chosen resolution/frame rate, and the overlay is an OGraf teleprompter
+graphic **hosted by the app itself** and loaded into CEF (the compositor's CEF pad `alpha` is
+fixed at `1.0` — always visible, no Key toggle). The output branch (`identity` PTS-fix → v210 →
+`mxlsink`) is byte-for-byte the same as keying mode. An optional MXL **audio** flow is tapped
+into an `appsink` and transcribed server-side (Vosk) to drive voice tracking.
+
+#### `gst-launch-1.0` command
+
+```bash
+gst-launch-1.0 \
+  compositor name=mixer \
+  videotestsrc pattern=2 is-live=true \
+       ! videoconvert \
+       ! "video/x-raw,format=BGRA,width=1920,height=1080,framerate=50/1,interlace-mode=progressive" \
+       ! queue leaky=2 max-size-buffers=2 max-size-time=0 max-size-bytes=0 \
+       ! mixer.sink_0 \
+  cefsrc url="http://localhost:9600/prompter/" \
+       ! "video/x-raw,format=BGRA,width=1920,height=1080,framerate=50/1" \
+       ! videorate \
+       ! "video/x-raw,format=BGRA,framerate=50/1" \
+       ! queue leaky=2 max-size-buffers=2 max-size-time=0 max-size-bytes=0 \
+       ! mixer.sink_1 \
+  mixer. ! videoconvert \
+       ! "video/x-raw,format=v210,width=1920,height=1080,framerate=50/1,colorimetry=bt709" \
+       ! queue leaky=2 max-size-buffers=2 \
+       ! mxlsink flow-id="<output-flow-id>" domain="/mxl-domain" sync=false \
+  mxlsrc audio-flow-id="<audio-flow-id>" domain="/mxl-domain" \
+       ! audioconvert ! audioresample \
+       ! "audio/x-raw,format=S16LE,channels=1,rate=16000" \
+       ! appsink name=audio_sink emit-signals=true sync=false max-buffers=10 drop=true
+```
+
+> **`pattern=2`** is solid black. The CEF pad's `alpha` is set to `1.0` programmatically (always
+> on). The audio branch is **independent** — it does not feed the compositor or `mxlsink`; its
+> `appsink` hands 16 kHz mono PCM to the Python Vosk recognizer. The `identity` PTS-fix,
+> `colorimetry=bt709`, the leaky queues, and `sync=false` on `mxlsink` are all required for the
+> same reasons as keying mode (see above). `cefsrc.url` is the app's **internal** OGraf host page
+> on the in-container port `9600` — not `host.docker.internal`.
+
+#### Explanation
+
+**Background branch** — `videotestsrc(black) → videoconvert → capsfilter(BGRA, WxH, num/den) →
+queue(leaky) → compositor.sink_0`. Geometry comes from the chosen preset (no input flow to read).
+
+**Teleprompter overlay** — identical to the keying CEF branch, except the URL points at the
+app-hosted OGraf page (`/prompter/`) and the pad `alpha` is fixed at `1.0`. `cefsrc` is one-way
+(no JS-injection), so the page is driven from the page side: `prompter/index.html` mounts the
+graphic, opens a WebSocket to `/prompter-ws`, and applies the OGraf commands the backend
+broadcasts (`updateAction`/`playAction`/`stopAction`/`customAction`) plus transcript pushes. The
+control REST endpoints (`/prompter-api/{presets,update,play,stop,action}`) map 1:1 to
+`teleprompter.ograf.json`; script text is supplied at runtime (never baked in).
+
+**Audio / voice tracking** — when an audio flow is selected, `mxlsrc(audio-flow-id) →
+audioconvert → audioresample → capsfilter(S16LE, mono, 16 kHz) → appsink` runs as an independent
+branch. The browser Web Speech API the template ships with cannot run in headless CEF (no mic, no
+cloud backend), so the appsink PCM is transcribed by **Vosk** (offline, en-US/fr-CA) on a worker
+thread and the transcript is pushed over the WebSocket into the graphic's existing matcher.
+`sync=false` on the appsink keeps the live MXL audio clock from stalling the video output.
+
+**Output branch** — unchanged from keying mode (`identity` base-time PTS-fix → `videoconvert` →
+`capsfilter(v210, colorimetry=bt709)` → leaky queue → `mxlsink(sync=false)`). Because the
+compositor still waits for CEF's first buffer (`ignore-inactive-pads` not set) and the PTS-fix is
+clock-agnostic, grains land at the correct TAI index just as in keying mode.
+
+#### Diagram
+
+```mermaid
+flowchart LR
+    subgraph bg_branch["Background branch (black)"]
+        bg["videotestsrc\npattern=black\nis-live=true"]
+        bg_conv["videoconvert"]
+        bg_caps["capsfilter\nBGRA, WxH, num/den"]
+        bg_q["queue\nleaky=drop-oldest, max=2"]
+        bg --> bg_conv --> bg_caps --> bg_q
+    end
+
+    subgraph cef_branch["Teleprompter overlay branch"]
+        cef["cefsrc\nurl=http://localhost:9600/prompter/"]
+        cef_caps1["capsfilter\nBGRA, W×H, integer fps"]
+        cef_rate["videorate"]
+        cef_caps2["capsfilter\nBGRA, num/den fps"]
+        cef_q["queue\nleaky=drop-oldest, max=2"]
+        cef --> cef_caps1 --> cef_rate --> cef_caps2 --> cef_q
+    end
+
+    subgraph audio_branch["Audio branch (voice tracking, optional)"]
+        asrc["mxlsrc\naudio-flow-id"]
+        aconv["audioconvert"]
+        ares["audioresample"]
+        acaps["capsfilter\nS16LE, mono, 16 kHz"]
+        asink["appsink\nemit-signals, sync=false"]
+        asrc --> aconv --> ares --> acaps --> asink
+    end
+
+    mixer["compositor\nignore-inactive-pads NOT set\n(CPU composite)"]
+    pts_fix["identity\nsignal-handoffs=true\n(add base_time to PTS)"]
+    out_conv["videoconvert\nBGRA → v210"]
+    out_caps["capsfilter\nv210, W×H, num/den\ncolorimetry=bt709"]
+    out_q["queue\nleaky=drop-oldest, max=2"]
+    out_sink["mxlsink\nflow-id=output\nsync=false"]
+
+    bg_q  -->|"sink_0\nzorder=0"| mixer
+    cef_q -->|"sink_1\nsync=false\nzorder=1\nalpha=1.0"| mixer
+    mixer --> pts_fix --> out_conv --> out_caps --> out_q --> out_sink
+
+    asink -. "PCM → Vosk (worker thread)" .-> vosk["VoiceTracker\n(en-US / fr-CA)"]
+    vosk  -. "transcript over /prompter-ws" .-> page["OGraf host page (CEF)\npushTranscript → matcher"]
+```
+
 

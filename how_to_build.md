@@ -99,6 +99,7 @@ Let's push the freshly built images with the $TAG_TOOLS tag `v1.0.0-rc2..` and p
    docker tag input-selector:latest ghcr.io/cbcrc/input-selector:$TAG_APP
    docker tag html5-keyer:latest ghcr.io/cbcrc/html5-keyer:$TAG_APP
    docker tag hls2mxl:latest ghcr.io/cbcrc/hls2mxl:$TAG_APP
+   docker tag webrtc2mxl:latest ghcr.io/cbcrc/webrtc2mxl:$TAG_APP
    docker push ghcr.io/cbcrc/mxl-writer:$TAG_TOOLS
    docker push ghcr.io/cbcrc/mxl-reader:$TAG_TOOLS
    docker push ghcr.io/cbcrc/mxl-clip-player:$TAG_TOOLS
@@ -109,6 +110,7 @@ Let's push the freshly built images with the $TAG_TOOLS tag `v1.0.0-rc2..` and p
    docker push ghcr.io/cbcrc/input-selector:$TAG_APP
    docker push ghcr.io/cbcrc/html5-keyer:$TAG_APP
    docker push ghcr.io/cbcrc/hls2mxl:$TAG_APP
+   docker push ghcr.io/cbcrc/webrtc2mxl:$TAG_APP
 ```
 
 Let's consider this versions as the **latest stable** version of mxl that we want to deploy by default.
@@ -125,6 +127,7 @@ Let's attach the moving tag `latest` and push.
    docker tag input-selector:latest ghcr.io/cbcrc/input-selector:latest
    docker tag html5-keyer:latest ghcr.io/cbcrc/html5-keyer:latest
    docker tag hls2mxl:latest ghcr.io/cbcrc/hls2mxl:latest
+   docker tag webrtc2mxl:latest ghcr.io/cbcrc/webrtc2mxl:latest
    docker push ghcr.io/cbcrc/mxl-writer:latest
    docker push ghcr.io/cbcrc/mxl-reader:latest
    docker push ghcr.io/cbcrc/mxl-clip-player:latest
@@ -135,6 +138,7 @@ Let's attach the moving tag `latest` and push.
    docker push ghcr.io/cbcrc/input-selector:latest
    docker push ghcr.io/cbcrc/html5-keyer:latest
    docker push ghcr.io/cbcrc/hls2mxl:latest
+   docker push ghcr.io/cbcrc/webrtc2mxl:latest
 ```
 
 ## Step 5 Test with Exercises

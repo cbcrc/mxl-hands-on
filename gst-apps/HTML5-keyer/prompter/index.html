@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Teleprompter</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      height: 100vh;
+      background: #000000;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <!--
+    OGraf host page.  This is the renderer the CEF browser loads in prompt mode.
+    It mounts the teleprompter graphic and applies commands pushed by the backend
+    over the WebSocket.  The prompter starts EMPTY — script text only ever
+    arrives via /prompter-api/update (UI paste window or an automation system).
+  -->
+  <script type="module">
+    import Teleprompter from "./teleprompter.js";
+
+    customElements.define("ograf-teleprompter", Teleprompter);
+    const el = document.createElement("ograf-teleprompter");
+    document.body.appendChild(el);
+
+    function applyMessage(m) {
+      switch (m.type) {
+        case "update":     el.updateAction({ data: m.data || {} }); break;
+        case "play":       el.playAction(); break;
+        case "stop":       el.stopAction(); break;
+        case "action":        el.customAction({ action: m.action, param: m.param }); break;
+        case "transcript":    el.pushTranscript(m.text); break;
+        case "voice_command": el.applyVoiceCommand(m.command, m.param); break;
+      }
+    }
+
+    function connect() {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(`${proto}://${location.host}/prompter-ws`);
+      ws.onmessage = (ev) => {
+        let m;
+        try { m = JSON.parse(ev.data); } catch { return; }
+        applyMessage(m);
+      };
+      // CEF stays open for the pipeline lifetime; reconnect if the socket drops.
+      ws.onclose = () => setTimeout(connect, 1000);
+      ws.onerror = () => { try { ws.close(); } catch (e) {} };
+    }
+
+    (async () => {
+      await el.load({});   // mount empty — no baked-in script
+      connect();
+    })();
+  </script>
+</body>
+</html>

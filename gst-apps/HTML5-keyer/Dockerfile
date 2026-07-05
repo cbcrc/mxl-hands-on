@@ -72,6 +72,23 @@ RUN set -eux \
  && ls -la /opt/cef | head -40
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Stage 2b — Download Vosk speech models (offline STT for prompt-mode voice tracking)
+# ─────────────────────────────────────────────────────────────────────────────
+FROM ubuntu:24.04 AS vosk-models
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl ca-certificates unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /dl
+RUN curl -L --fail -o en.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip \
+ && unzip -q en.zip && mkdir -p /opt/vosk && mv vosk-model-small-en-us-0.15 /opt/vosk/en && rm en.zip
+RUN curl -L --fail -o fr.zip https://alphacephei.com/vosk/models/vosk-model-small-fr-0.22.zip \
+ && unzip -q fr.zip && mv vosk-model-small-fr-0.22 /opt/vosk/fr && rm fr.zip
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Stage 3 — Runtime on Ubuntu 24.04
 # ─────────────────────────────────────────────────────────────────────────────
 FROM ubuntu:24.04
@@ -138,9 +155,14 @@ ENV GST_PLUGIN_PATH=/opt/cef
 # and disable GPU so Chromium uses its software rasterizer.
 ENV GST_CEF_CHROME_EXTRA_FLAGS="no-sandbox,disable-component-update,disable-gpu,disable-gpu-compositing"
 
+# ── Vosk speech models (prompt-mode voice tracking) ───────────────────────────
+COPY --from=vosk-models /opt/vosk /opt/vosk
+
 # ── Application code ──────────────────────────────────────────────────────────
 COPY gst-apps/HTML5-keyer/backend/ /app/backend/
 COPY --from=frontend-builder /build/dist /app/frontend/dist
+# OGraf teleprompter host page + graphic, served by FastAPI and loaded by CEF.
+COPY gst-apps/HTML5-keyer/prompter/ /app/prompter/
 
 COPY gst-apps/HTML5-keyer/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

@@ -285,6 +285,7 @@ The pipeline is built programmatically (not via `parse_launch`) and uses the GSt
 | `POST` | `/pipeline/stop` | Stop and tear down the pipeline |
 | `GET`  | `/pipeline/status` | Return `{"running": bool, "domain_path": str\|null, "input_flow_uuid": str\|null, "html5_url": str\|null, "output_flow_uuid": str\|null, "format": {...}\|null, "key_on": bool, "error": str\|null}` |
 | `POST` | `/pipeline/key` | Body `{"on": bool}`. Only valid while running. Calls `set_key(on)` on the running pipeline and updates the cached key state. Returns the new status. |
+| `GET`  | `/config` | UI bootstrap config: `{"default_mode": "key"\|"prompt"}`, read from the `KEYER_DEFAULT_MODE` env var (validated; defaults to `key`). The static React bundle can't read env at runtime, so it fetches this on load to decide which mode the UI opens in. |
 
 - Serve the React static files as the last statement:
   ```python
@@ -372,5 +373,201 @@ exec python3 -m uvicorn backend.main:app --host 0.0.0.0 --port 9600
 | `compositor.sink_N has no property 'sync'` | Some GStreamer versions do not expose `sync` on compositor pads | Wrap `cef_pad.set_property("sync", False)` in a `try/except` and log a warning — the pipeline still works without it in most configurations |
 | `http://localhost:5660/renderer/` fails from inside the container (connection refused) | Inside Docker, `localhost` refers to the container itself, not the host machine | Use `http://host.docker.internal:5660/renderer/` — the `html5-keyer` service has `extra_hosts: - "host.docker.internal:host-gateway"` in `docker-compose.yml` to make this hostname resolve |
 | GPU-mixed variants (`glvideomixer`) struggle on commodity hosts | GPU compositing requires `glupload`/`gldownload` round-trips and a GPU that the target hardware may not have | Use the CPU-based `compositor` element — this is a deliberate design choice for portability and is not negotiable |
+
+## Teleprompter (Prompting) Mode
+
+A second, **toggleable mode** turns the same app into a studio **teleprompter**. The mode is
+chosen in the UI before Start; **keying mode is unchanged**. The two modes share one
+`GstKeyer` instance, one output `mxlsink`, the deterministic output-UUID scheme, and the
+`identity` PTS-fix → v210 → `mxlsink` output branch.
+
+### What prompt mode does differently
+1. **No MXL video input.** The background is a synthetic **black picture** at an
+   operator-chosen **resolution/framerate preset** (`videotestsrc pattern=2 is-live=true` →
+   `capsfilter(BGRA, WxH, num/den, interlace-mode=progressive)`). Geometry comes from the
+   preset, not from `read_flow_format`.
+2. **The overlay is the teleprompter graphic**, hosted by this app and loaded into CEF, with
+   the CEF compositor pad's **`alpha` fixed at 1.0** (always visible — there is no Key toggle
+   in prompt mode; `set_key` raises if called).
+3. **An optional MXL audio flow** drives voice tracking via server-side speech-to-text.
+
+### OGraf graphic + host page (`prompter/`, served by FastAPI, copied to `/app/prompter`)
+The teleprompter is the OGraf template from `ograph-template/teleprompter.{js,ograf.json}`.
+`cefsrc` is one-way (it only takes a `url` and has **no JS-injection channel**), so the page
+must be driven from the page side:
+- **`prompter/index.html`** — an OGraf host page. It imports `./teleprompter.js`, registers
+  it as a custom element, mounts it **empty** (no baked-in script), and opens a WebSocket to
+  `/prompter-ws`. Inbound messages are dispatched to the element's OGraf methods:
+  `{type:"update",data}` → `updateAction({data})`; `play`/`stop` → `playAction`/`stopAction`;
+  `{type:"action",action}` → `customAction(action)`; `{type:"transcript",text}` →
+  `pushTranscript(text)`.
+- **`prompter/teleprompter.js`** — the template **plus one minimal addition**: a
+  `pushTranscript(text)` method that sets `voiceTrackingActive = true` and calls the existing
+  `matchTranscriptToScript(text)`. The browser Web Speech path is left intact (it is a
+  harmless no-op in headless CEF, where `window.SpeechRecognition` is undefined), so the
+  template still works in a desktop-browser preview.
+- `cefsrc.url` in prompt mode is the **internal** URL `http://localhost:9600/prompter/`
+  (FastAPI serves it on the same in-container port). Do **not** use `host.docker.internal`
+  here — the page is local to the container.
+
+> ⚠️ **Script text is never baked in.** The prompter content is supplied at runtime only, via
+> `POST /prompter-api/update` (the UI paste window **or** an automation system). The
+> `scriptText` default in `teleprompter.ograf.json` is inert and must not be relied on.
+
+### Prompter scroll engine (`teleprompter.js`)
+Automatic scrolling and voice-tracking follow share **one** `requestAnimationFrame` loop. A few
+non-obvious properties are required for smooth motion on the captured MXL output:
+- **Time-based motion, not per-callback.** Each frame advances by `speed × (Δt / frameMs)`
+  (auto-scroll) or eases toward the voice target by a `Δt`-scaled factor, with `Δt` clamped to
+  100 ms. rAF in headless CEF occasionally fires late/coalesced; moving a fixed step per callback
+  turned those into visible judder, so the step is scaled by elapsed wall-clock time instead.
+- **Compositor-layer promotion.** The scroll container is given `will-change: transform` and the
+  offset is written as `translate3d(0, y, 0)`, so scrolling is a cheap GPU/compositor translate
+  instead of re-rasterizing the whole large-font text block every frame. That per-frame repaint
+  was the main remaining cause of intermittent stutter (in **both** auto-scroll and voice modes).
+- **Voice tracking drives the scroll on its own.** There is no Play press in voice mode, so the
+  loop runs whenever `voiceTrackingActive` is set — a transcript arriving via `pushTranscript`
+  calls `ensureAnimating()` — independent of `isPlaying`. Without this the matcher highlighted the
+  spoken word in yellow but never scrolled, so the operator got stuck once the highlight reached
+  the bottom of the visible text. A single guarded loop (`ensureAnimating` / `scrollLoopRunning`)
+  prevents Play + voice from starting two rAF chains (which would double the scroll speed).
+- **Velocity-capped follow.** `matchTranscriptToScript` moves the target in discrete, sometimes
+  multi-word leaps (a Vosk final can advance several words at once). The per-frame follow step is
+  clamped to `maxFollowPx` so a big leap scrolls smoothly to the word instead of snapping forward.
+- **Reverse scroll.** `reverseScroll` (bool) flips the sign of the non-voice-tracking
+  auto-scroll step (`animateScroll`'s `dir = reverseDirection ? 1 : -1`), so the same speed
+  scrolls backward instead of forward. The on-screen `.cue-marker` triangle gets a `.reversed`
+  class (`transform: scaleX(-1)`) so the direction is visible in the composited output.
+  Note: `.mirrored` output already applies `scaleX(-1)` at the host level, so mirrored +
+  reversed cancels the marker's flip back to pointing right — an expected, rare-combination
+  interaction, not a bug.
+- **Voice keyword commands.** A small `VOICE_COMMANDS` table maps a normalized (diacritic/
+  case/punctuation-stripped, whitespace-joined) trigger phrase to a command name.
+  `checkVoiceCommands()` runs at the top of `matchTranscriptToScript`, before the per-word
+  search, against an **unfiltered** normalized token list (the existing `>3`-char filter used
+  for script-word matching would otherwise silently drop short command words like "go"/"top"/
+  "du"). Today's commands:
+  - **"go top" / "debut du texte"** → `goTop()`: resets scroll/word-index to 0 immediately,
+    without touching `isPlaying`/timer/countdown — a live "quick jump", not a Stop. Meant for
+    an anchor to rehearse from the top during a commercial break, then jump back to their live
+    position with a story-marker voice command below.
+  - **"story &lt;name&gt;"** → `jumpToStory(name)`: looks for the word "story" in the transcript and
+    tries growing 1-3-word windows immediately after it against known `[STORY: Name]` marker
+    names (not just the end of the utterance, since a transcript chunk can include trailing
+    words spoken after the name). Best-effort — Vosk's small offline model may not reliably
+    recognize uncommon proper nouns, so reliable voice-jump favors short, common-word marker
+    names ("weather", "sports") over person/place names.
+- **Story markers ([STORY: Name]).** Parsed out of `scriptText` line-by-line in `updateAction`,
+  before the normal tokenizer runs. A marker line becomes a visible `<div class="story-marker">`
+  heading (small, uppercase, dashed rule — styled to read as a section slug to glance at for
+  positional confidence, not as body copy to speak) and is recorded in `this.storyMarkers` as
+  `{ name, elementId, wordIndex }`. It contributes **no** entries to `scriptWords`/`word-N`
+  spans, so it's never matched as spoken text. `jumpToStory()` scrolls to the marker element's
+  own `offsetTop` (not the next word's), snapping `currentScroll` immediately since the rAF
+  loop may not be running when the jump is triggered manually.
+
+### Control channel & API (OGraf control points)
+A `PrompterHub` keeps the set of connected `/prompter-ws` sockets, retains the latest
+`update` data and play/stop state, and **replays that state on connect** (so a script set
+before CEF finished loading still lands). It exposes a thread-safe `broadcast()` so both the
+REST endpoints and the voice tracker can push to the page from any thread. The control
+endpoints map 1:1 to `teleprompter.ograf.json`:
+
+| Method | Path | Maps to |
+|--------|------|---------|
+| `GET`  | `/prompter-api/presets` | resolution/framerate preset list (single source of truth, frontend mirrors it) |
+| `POST` | `/prompter-api/update`  | `updateAction(data)` — any subset of `scriptText`, `scrollSpeed`, `mirrored`, `reverseScroll`, `enableVoiceTracking`, `voiceLanguage`, `fontSize`, `enableCountdown`, `showStatusBar`. A new `scriptText` is applied **live** (no pipeline restart): `updateAction` rebuilds the copy (parsing out `[STORY: Name]` markers, see above) and resets the prompter to a clean, **paused, scrolled-to-top** state (stops the scroll, cancels the countdown, resets the timer and `playStartTime` so the next `play` re-runs the countdown). Without this reset the container keeps the prior `translateY()` offset and `isPlaying` state, so a script loaded after `play` renders off-screen and looks like it never arrived. |
+| `POST` | `/prompter-api/play`    | `playAction` |
+| `POST` | `/prompter-api/stop`    | `stopAction` |
+| `POST` | `/prompter-api/action`  | `customAction` — body `{action: "pause"\|"resume"\|"speedUp"\|"speedDown"\|"jumpToStory", param?: string}`. `param` carries the story name for `jumpToStory`. |
+| `WS`   | `/prompter-ws`          | the CEF host page connects here for commands, dictation transcripts, and grammar-recognizer voice commands (`{type:"voice_command"}`) |
+
+`enableVoiceTracking`/`voiceLanguage` in `/update` also toggle/configure the voice tracker.
+Routes and the `/prompter-ws` socket are registered **before** the `/prompter` static mount
+and the catch-all `/` mount; their distinct prefixes mean the `Mount("/prompter")` regex
+never shadows `/prompter-api` or `/prompter-ws`.
+
+### Voice tracking — server-side Vosk (`backend/voice_tracker.py`)
+The template's voice tracking relies on the browser Web Speech API, which **cannot run in the
+headless CEF render** (no microphone device, no Google cloud speech backend). Instead:
+- The pipeline adds an **audio branch** when an audio flow is selected:
+  `mxlsrc(audio-flow-id) → audioconvert → audioresample → capsfilter(audio/x-raw,
+  format=S16LE,channels=1,rate=16000) → appsink(emit-signals, sync=false, drop, max-buffers)`.
+  It is independent — **not** linked to the compositor/mxlsink — and `sync=false` keeps the
+  live MXL audio clock from stalling the video output. `mxlsrc` already supports
+  `audio-flow-id` (caps `audio/x-raw,F32LE`); no plugin change.
+- The appsink `new-sample` callback feeds raw PCM to a `VoiceTracker` whose worker thread runs
+  **Vosk** (offline). It loads the model for the selected language lazily
+  (`en-US` → `/opt/vosk/en`, `fr-CA` → `/opt/vosk/fr`), reloads on language change, and only
+  transcribes while voice tracking is enabled. Partial + final transcripts are broadcast as
+  `{type:"transcript",text}` to the prompter page, which feeds them into `pushTranscript`.
+- **Two recognizers run on the same audio.** Besides the open-vocabulary dictation recognizer
+  above (drives word-follow scrolling), a second, **grammar-constrained** `KaldiRecognizer`
+  (`vosk_recognizer_new_grm`, i.e. `KaldiRecognizer(model, rate, grammar_json)`) is restricted
+  to a small phrase list: **one** fixed keyword phrase for the active language
+  (`_FIXED_COMMAND_PHRASES_BY_LANG`: `"go top"` for `en-US`, `"debut du texte"` for `fr-CA` —
+  only the active language's phrase is compiled in, since including the other language's words
+  would just make Vosk log an "Ignoring word missing in vocabulary" warning for every word not
+  in that lexicon) plus `"story <name>"` for every `[STORY: Name]` marker in the *currently
+  loaded* script. Open-vocabulary decoding across the full ~100k-word vocabulary is a coin flip
+  for short, out-of-sentence command phrases and arbitrary story titles — confirmed live via
+  logging: "go top" was misheard as "go up", and "two" was consistently transcribed as "too".
+  Constraining the decoder to only the phrases that are actually valid *right now* is
+  dramatically more reliable, and — critically for a newsroom prompter where every rundown has
+  different story titles — it needs **no code change** per script: `VoiceTracker.set_story_names()`
+  rebuilds the grammar automatically whenever `/prompter-api/update` receives a new `scriptText`
+  (`main.py` parses `[STORY: Name]` out of it with the same regex used client-side), and
+  `set_language()` rebuilds it again on a language switch so the right fixed phrase is always
+  the one compiled in. The grammar always includes `"[unk]"` so unrelated speech is rejected as
+  unknown instead of being force-matched to the nearest known phrase.
+- A confident **final** result from the command recognizer is dispatched as
+  `{type:"voice_command", command, param?}` — a distinct WS message from `{type:"transcript"}`
+  — straight to `TeleprompterGraphic.applyVoiceCommand()`, bypassing the fuzzy client-side
+  `checkVoiceCommands()` text matching entirely for that hit. `checkVoiceCommands()` still runs
+  on every dictation transcript as a redundant fallback path (either recognizer firing is
+  enough to trigger the command); it is not a per-title special case, so it doesn't need to
+  "know" about story titles beyond what's already in `this.storyMarkers`.
+
+### Backend wiring (`gst_keyer.py`, `main.py`)
+- `gst_keyer.start_prompt(domain_path, audio_flow_uuid|None, W, H, num, den, html5_url,
+  grouphint, description, label, audio_cb)` builds `_build_prompt_pipeline()`. The delicate
+  output / CEF / compositor / start blocks are factored into shared helpers
+  (`_add_output_branch`, `_add_cef_branch`, `_make_compositor`, `_start_pipeline`) reused by
+  both key and prompt builds, so the proven epoch/clock behaviour is identical. `get_status()`
+  adds `mode` and `audio_flow_uuid`; `main.py`'s status merges `voice_tracking`/`voice_language`.
+- `StartConfig` gains `mode` (`"key"`|`"prompt"`), `audio_flow_uuid`, `resolution_preset`, and
+  `voice_language`. `/pipeline/start` branches on `mode`: prompt mode validates the preset
+  (resolves to W,H,num,den), resets the hub + voice tracker, and calls `start_prompt` with the
+  internal `PROMPTER_URL`.
+
+### Frontend (`App.jsx`)
+- A **Keying / Teleprompter** mode toggle at the top of Setup (disabled while running).
+  Switching modes applies that mode's **output-identity defaults** from a `MODE_DEFAULTS`
+  map (`applyMode`): Keying → `HTML5-Keyer` / `keyer-out-1` / `html5-keyer-video`;
+  Teleprompter → `HTML5-Teleprompter` / `teleprompter-out-1` / `teleprompter-video`.
+- On load the app fetches `GET /config` and, if `default_mode === "prompt"`, calls
+  `applyMode("prompt")` so the UI opens in the env-configured mode (see `KEYER_DEFAULT_MODE`).
+- **Prompt Setup:** resolution-preset dropdown, an **optional** MXL Audio Input dropdown
+  (flows filtered to a role containing "audio" — `isAudioFlow`), and group hint / description /
+  label. No HTML5 URL field.
+- **Prompt Operation** (a `PrompterControls` panel): a script **paste window** + "Load Script",
+  scroll speed / font size, mirror / countdown / status-bar / **reverse-scroll** checkboxes,
+  voice-language dropdown, an **Enable Voice Tracking** checkbox, **Play / Stop / Pause /
+  Resume / Speed −/+**, and a row of **"⏵ &lt;name&gt;" story-jump buttons** — all calling
+  `/prompter-api/*`. The story-jump buttons are populated by regexing `[STORY: Name]` lines out
+  of the pasted script on "Load Script" (client-side, mirroring the engine's own marker regex)
+  rather than round-tripping through the one-directional `/prompter-ws` socket. No Key ON/OFF
+  in this mode.
+
+### Docker
+- A `vosk-models` stage downloads the small en-US and fr models into `/opt/vosk/{en,fr}` and
+  the runtime copies them in; `vosk` is added to `requirements.txt`.
+- `prompter/` is copied to `/app/prompter/`. `videotestsrc`, `appsink`, `audioconvert`, and
+  `audioresample` are already present in the installed GStreamer plugin sets.
+- `KEYER_DEFAULT_MODE` (`key` | `prompt`, default `key`) in the service `environment:` block
+  selects the mode the UI opens in. It only feeds the `GET /config` bootstrap, so changing it
+  is a container restart, not an image rebuild.
+
+---
 
 Please write the necessary Dockerfile, Python backend scripts, React components, and integration code following these guidelines at `./gst-apps/HTML5-keyer`, modifying content already present.

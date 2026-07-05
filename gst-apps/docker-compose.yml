@@ -119,6 +119,8 @@ services:
         target: /mxl-domain
     environment:
       - MXL_DOMAIN=/mxl-domain
+      # UI opens in this mode on load: "key" (default) or "prompt" (teleprompter).
+      - KEYER_DEFAULT_MODE=key
     # CEF/Chromium launches multiple helper processes; bump shared memory so it
     # does not crash on the default 64 MB /dev/shm.
     shm_size: "1gb"
@@ -171,6 +173,37 @@ services:
       # Direct-mode ICE: pin the UDP ports to the published range above (one per viewer).
       - WEBRTC_ICE_PORT_MIN=8200
       - WEBRTC_ICE_PORT_MAX=8210
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - mediamtx
+
+  # ── webrtc2mxl ────────────────────────────────────────────────────────────
+  # Reverse of mxl2webrtc: captures the browser microphone, publishes it to the
+  # (host-networked) mediamtx service over WHIP, then pulls it back via WHEP and
+  # writes an MXL audio flow with mxlsink. The app only dials OUT to mediamtx, so
+  # no inbound UDP port range is needed.
+  webrtc2mxl:
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: gst-apps/webrtc2mxl/Dockerfile
+    image: webrtc2mxl:latest
+    container_name: webrtc2mxl
+    hostname: webrtc2mxl
+    domainname: local
+    ports:
+      - "9606:9600"                  # FastAPI serves both API and React frontend
+    volumes:
+      - type: volume
+        source: mxl-domain
+        target: /mxl-domain
+    environment:
+      - MXL_DOMAIN=/mxl-domain
+      # GStreamer pulls the published stream from mediamtx via WHEP.
+      - MEDIAMTX_WHEP_URL=http://host.docker.internal:8889/webrtc2mxl/whep
+      # Returned to the browser by /config (the browser substitutes its own hostname).
+      - MEDIAMTX_WHIP_URL=http://localhost:8889/webrtc2mxl/whip
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

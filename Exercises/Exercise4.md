@@ -78,8 +78,8 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
         classDef other fill:#cce6ff,color:black,stroke:#333,stroke-width:2px;
         classDef future fill:#ffcccc,color:black,stroke:#cc0000,stroke-width:2px,stroke-dasharray:5 5
 
-        class HLS2MXL,LoopPlayer,TestGen,InputSel,HTML5Keyer,MXL2WebRTC,k1,kt1,k2,kt2,k3 gstreamer
-        class WebRTC2MXL,AudioMix,k5 future
+        class HLS2MXL,LoopPlayer,TestGen,InputSel,HTML5Keyer,MXL2WebRTC,WebRTC2MXL,k1,kt1,k2,kt2,k3 gstreamer
+        class AudioMix,k5 future
         class NmosRegistry,DummyNmosNode,NmosController,kt3 control
         class SPXGraphics,k4 other
 

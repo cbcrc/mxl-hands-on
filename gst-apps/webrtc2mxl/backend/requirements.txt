@@ -2,4 +2,3 @@ fastapi
 uvicorn[standard]
 pydantic
 aiofiles>=23.0.0
-vosk
