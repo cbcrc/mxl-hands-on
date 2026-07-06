@@ -24,7 +24,7 @@ The **container images** built from `gst-apps/` and published under `ghcr.io/cbc
 | Component | License | In images | Source |
 |---|---|---|---|
 | gst-plugins-rs `closedcaption` plugin (`libgstrsclosedcaption.so`, built from tag 0.14.5) | MPL-2.0 | **test-generator**, **mxl2webrtc** | [gst-plugins-rs 0.14.5](https://gitlab.freedesktop.org/gstreamer/gst-plugins-rs/-/tree/0.14.5) |
-| gstcefsrc GStreamer plugin | **No published license** (see legal checklist below) | **HTML5-keyer** | [centricular/gstcefsrc](https://github.com/centricular/gstcefsrc) |
+| gstcefsrc GStreamer plugin | LGPL-2.0-or-later (per the `gstcef.cc` source header, confirmed by the maintainer in [issue #43](https://github.com/centricular/gstcefsrc/issues/43); a LICENSE file was proposed upstream in [PR #109](https://github.com/centricular/gstcefsrc/pull/109)) | **HTML5-keyer** | [centricular/gstcefsrc](https://github.com/centricular/gstcefsrc) |
 | CEF (Chromium Embedded Framework) binary distribution + Chromium components | BSD-3-Clause (CEF) + various Chromium licenses; official Spotify CDN builds **exclude** patent-encumbered codecs (H.264, AAC) | **HTML5-keyer** (`/opt/cef`) | [CEF builds](https://cef-builds.spotifycdn.com/index.html); license/credits files are kept inside the image under `/opt/cef` |
 | Vosk speech recognition runtime (`vosk` Python package) | Apache-2.0 | **HTML5-keyer** | [alphacep/vosk-api](https://github.com/alphacep/vosk-api) |
 | Vosk models `vosk-model-small-en-us-0.15`, `vosk-model-small-fr-0.22` | Apache-2.0 (per [alphacephei.com/vosk/models](https://alphacephei.com/vosk/models)) | **HTML5-keyer** (`/opt/vosk`) | same page |
@@ -51,4 +51,4 @@ docker buildx imagetools inspect ghcr.io/cbcrc/<image>:latest --format '{{ json 
 
 This section is a checklist for CBC/Radio-Canada legal/OSPO review; nothing in this file is legal advice.
 
-1. **gstcefsrc has no license file or license headers** in its upstream repository. Redistributing a compiled binary of it (in the HTML5-keyer image) has no explicit license grant. Options: ask upstream (Centricular) to add a license, obtain written permission, or stop redistributing the plugin (build it at deploy time).
+1. **gstcefsrc has no LICENSE file** in its upstream repository, though the `gstcef.cc` source header grants LGPL-2.0-or-later and the maintainer confirmed "LGPL v2+" in [issue #43](https://github.com/centricular/gstcefsrc/issues/43) — so a license grant exists; only the license text file is missing. [PR #109](https://github.com/centricular/gstcefsrc/pull/109) adds it upstream; once merged, this item can be closed.
