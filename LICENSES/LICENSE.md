@@ -18,3 +18,11 @@ All documentation and media files are licensed under the Creative Commons Attrib
 - Image files and videos (`.jpg`, `.png`, `.ts`, etc.)
 
 A full copy of this license is available in the `LICENSES/CC-BY-4.0.txt` file.
+
+## Submodule
+
+The `dmf-mxl` git submodule is a separate work licensed under its own Apache License, Version 2.0 (see `dmf-mxl/LICENSE.txt`). Its license is unchanged by this repository.
+
+## Third-Party Components in Container Images
+
+The container images built from this repository bundle third-party open-source components (GStreamer, FFmpeg, CEF, Vosk models, etc.) under their own licenses. See the top-level `THIRD-PARTY-NOTICES.md` file for details.

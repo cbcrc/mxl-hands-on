@@ -175,10 +175,11 @@ RUN npm run build
   python3 python3-pip python3-gi python3-gi-cairo
   gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gir1.2-gst-plugins-bad-1.0
   gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
-  gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+  gstreamer1.0-plugins-bad
   gstreamer1.0-nice gstreamer1.0-x curl
   ```
   > ⚠️ `gir1.2-gst-plugins-bad-1.0` is required for `GstWebRTC` and `GstSdp` Python typelibs used by the `webrtcbin` WHIP handshake.
+  > ⚠️ `gstreamer1.0-plugins-ugly` (provides `x264enc`) is deliberately **not** installed in the image — it is GPL-licensed and patent-encumbered, so it must not be redistributed in the published image. `entrypoint.sh` installs it from the Ubuntu archive at container start if `x264enc` is missing (requires network access on first start). See the repo-level `THIRD-PARTY-NOTICES.md`.
 - Install Python backend dependencies globally:
   ```dockerfile
   RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt

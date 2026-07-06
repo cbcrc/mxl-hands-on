@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2025 Contributors to the Media eXchange Layer project.
+# SPDX-License-Identifier: Apache-2.0
+#
 # Multi-stage Dockerfile for the MXL HTML5 Keyer.
 # Build context: repository root (two levels above this file's directory).
 #
@@ -66,9 +69,15 @@ RUN mkdir build \
 RUN set -eux \
  && mkdir -p /opt/cef \
  && cp -a /build/gstcefsrc/build/Release/. /opt/cef/ \
- && CEF_DIR="$(ls -d /build/gstcefsrc/build/third_party/cef/cef_binary_* | head -1)" \
+ # CEF extracts to <source>/third_party/cef (see gstcefsrc cmake/DownloadCEF.cmake);
+ # find keeps this robust if upstream master moves it again
+ && CEF_DIR="$(find /build/gstcefsrc -maxdepth 4 -type d -name 'cef_binary_*' -print -quit)" \
+ && test -n "$CEF_DIR" \
  && if [ -d "$CEF_DIR/Resources" ]; then cp -a "$CEF_DIR/Resources/." /opt/cef/ ; fi \
  && if [ -d "$CEF_DIR/Release" ];  then cp -a "$CEF_DIR/Release/."  /opt/cef/ ; fi \
+ # keep CEF's license/notice files in the shipped image (BSD-3-Clause attribution)
+ && cp "$CEF_DIR/LICENSE.txt" /opt/cef/ \
+ && if [ -f "$CEF_DIR/README.txt" ]; then cp "$CEF_DIR/README.txt" /opt/cef/ ; fi \
  && ls -la /opt/cef | head -40
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -102,8 +111,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
         gstreamer1.0-tools \
         gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-        gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
-        gstreamer1.0-libav \
+        gstreamer1.0-plugins-bad \
         xvfb \
         libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
         libxkbcommon0 libxcomposite1 libxdamage1 libxrandr2 libgbm1 \

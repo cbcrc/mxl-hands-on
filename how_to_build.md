@@ -92,53 +92,45 @@ Let's push the freshly built images with the $TAG_TOOLS tag `v1.0.0-rc2..` and p
    docker tag mxl-writer:"${TAG_TOOLS}-linux-clang-release" ghcr.io/cbcrc/mxl-writer:$TAG_TOOLS
    docker tag mxl-reader:"${TAG_TOOLS}-linux-clang-release" ghcr.io/cbcrc/mxl-reader:$TAG_TOOLS
    docker tag mxl-clip-player:"${TAG_TOOLS}-linux-clang-release" ghcr.io/cbcrc/mxl-clip-player:$TAG_TOOLS
-   docker tag mxl-info-gui:latest ghcr.io/cbcrc/mxl-info-gui:$TAG_APP
-   docker tag test-generator:latest ghcr.io/cbcrc/test-generator:$TAG_APP
-   docker tag file-player:latest ghcr.io/cbcrc/file-player:$TAG_APP
-   docker tag mxl2webrtc:latest ghcr.io/cbcrc/mxl2webrtc:$TAG_APP
-   docker tag input-selector:latest ghcr.io/cbcrc/input-selector:$TAG_APP
-   docker tag html5-keyer:latest ghcr.io/cbcrc/html5-keyer:$TAG_APP
-   docker tag hls2mxl:latest ghcr.io/cbcrc/hls2mxl:$TAG_APP
-   docker tag webrtc2mxl:latest ghcr.io/cbcrc/webrtc2mxl:$TAG_APP
    docker push ghcr.io/cbcrc/mxl-writer:$TAG_TOOLS
    docker push ghcr.io/cbcrc/mxl-reader:$TAG_TOOLS
    docker push ghcr.io/cbcrc/mxl-clip-player:$TAG_TOOLS
-   docker push ghcr.io/cbcrc/mxl-info-gui:$TAG_APP
-   docker push ghcr.io/cbcrc/test-generator:$TAG_APP
-   docker push ghcr.io/cbcrc/file-player:$TAG_APP
-   docker push ghcr.io/cbcrc/mxl2webrtc:$TAG_APP
-   docker push ghcr.io/cbcrc/input-selector:$TAG_APP
-   docker push ghcr.io/cbcrc/html5-keyer:$TAG_APP
-   docker push ghcr.io/cbcrc/hls2mxl:$TAG_APP
-   docker push ghcr.io/cbcrc/webrtc2mxl:$TAG_APP
+```
+
+The gst-apps images are published with `docker buildx build --push` instead of `docker tag` + `docker push`: this generates an **SPDX SBOM and provenance attestation** for each image and attaches them to the pushed image (see `THIRD-PARTY-NOTICES.md` for why we publish SBOMs). The build reuses the cache from Step 2, so this is mostly a re-export + push.
+
+> ⚠️ Use `docker buildx build` here, not `docker compose build --sbom=true` — on current Docker versions the compose flag silently produces no SBOM. Attestations also require the **containerd image store** (Docker Desktop: Settings → General → "Use containerd for pulling and storing images").
+
+```sh
+   # Run from the repository root. Pushes both :$TAG_APP and :latest with SBOM attached.
+   for pair in mxl-info-gui:mxl-info-gui test-generator:test-generator \
+               file-player:file-player mxl2webrtc:mxl2webrtc \
+               input-selector:input-selector html5-keyer:HTML5-keyer \
+               hls2mxl:hls2mxl webrtc2mxl:webrtc2mxl; do
+     image=${pair%%:*}; dir=${pair##*:}
+     docker buildx build --platform linux/amd64 --sbom=true --provenance=mode=max \
+       -f gst-apps/$dir/Dockerfile \
+       -t ghcr.io/cbcrc/$image:$TAG_APP -t ghcr.io/cbcrc/$image:latest \
+       --push .
+   done
+```
+
+To verify the SBOM landed on GHCR (prints the SPDX document):
+
+```sh
+   docker buildx imagetools inspect ghcr.io/cbcrc/file-player:latest --format '{{ json .SBOM }}' | head -c 500
 ```
 
 Let's consider this versions as the **latest stable** version of mxl that we want to deploy by default.
-Let's attach the moving tag `latest` and push.
+Let's attach the moving tag `latest` and push. (The gst-apps images already got their `latest` tag from the buildx loop above; only the tools images need it here.)
 
 ```sh
    docker tag mxl-writer:"${TAG_TOOLS}-linux-clang-release" ghcr.io/cbcrc/mxl-writer:latest
    docker tag mxl-reader:"${TAG_TOOLS}-linux-clang-release" ghcr.io/cbcrc/mxl-reader:latest
    docker tag mxl-clip-player:"${TAG_TOOLS}-linux-clang-release" ghcr.io/cbcrc/mxl-clip-player:latest
-   docker tag mxl-info-gui:latest ghcr.io/cbcrc/mxl-info-gui:latest
-   docker tag test-generator:latest ghcr.io/cbcrc/test-generator:latest
-   docker tag file-player:latest ghcr.io/cbcrc/file-player:latest
-   docker tag mxl2webrtc:latest ghcr.io/cbcrc/mxl2webrtc:latest
-   docker tag input-selector:latest ghcr.io/cbcrc/input-selector:latest
-   docker tag html5-keyer:latest ghcr.io/cbcrc/html5-keyer:latest
-   docker tag hls2mxl:latest ghcr.io/cbcrc/hls2mxl:latest
-   docker tag webrtc2mxl:latest ghcr.io/cbcrc/webrtc2mxl:latest
    docker push ghcr.io/cbcrc/mxl-writer:latest
    docker push ghcr.io/cbcrc/mxl-reader:latest
    docker push ghcr.io/cbcrc/mxl-clip-player:latest
-   docker push ghcr.io/cbcrc/mxl-info-gui:latest
-   docker push ghcr.io/cbcrc/test-generator:latest
-   docker push ghcr.io/cbcrc/file-player:latest
-   docker push ghcr.io/cbcrc/mxl2webrtc:latest
-   docker push ghcr.io/cbcrc/input-selector:latest
-   docker push ghcr.io/cbcrc/html5-keyer:latest
-   docker push ghcr.io/cbcrc/hls2mxl:latest
-   docker push ghcr.io/cbcrc/webrtc2mxl:latest
 ```
 
 ## Step 5 Test with Exercises

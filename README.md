@@ -41,4 +41,8 @@ This repository is dual-licensed.
 * All **code, configuration, and script files** (e.g., `.sh`, `.yaml`, Dockerfiles) are licensed under the [Apache License 2.0](LICENSES/Apache-2.0.txt).
 * All **documentation and media files** (e.g., `.md`, `.jpg`, `.ts`) are licensed under the [Creative Commons Attribution 4.0 International License](LICENSES/CC-BY-4.0.txt).
 
-Please see the main `LICENSE` file for more details.
+Please see [`LICENSES/LICENSE.md`](LICENSES/LICENSE.md) for more details. A copy of the Apache License 2.0 is also provided in the top-level [`LICENSE`](LICENSE) file.
+
+The [`dmf-mxl`](https://github.com/dmf-mxl/mxl) git submodule is a separate work licensed under its own Apache License 2.0 (see `dmf-mxl/LICENSE.txt`); its license is unchanged by this repository.
+
+The container images built from this repository bundle third-party open-source components under their own licenses. See [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) for details.
