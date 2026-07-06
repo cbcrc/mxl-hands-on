@@ -109,8 +109,8 @@ The gst-apps images are published with `docker buildx build --push` instead of `
                hls2mxl:hls2mxl webrtc2mxl:webrtc2mxl; do
      image=${pair%%:*}; dir=${pair##*:}
      docker buildx build --platform linux/amd64 --sbom=true --provenance=mode=max \
-       -f gst-apps/$dir/Dockerfile \
-       -t ghcr.io/cbcrc/$image:$TAG_APP -t ghcr.io/cbcrc/$image:latest \
+       -f "gst-apps/${dir}/Dockerfile" \
+       -t "ghcr.io/cbcrc/${image}:${TAG_APP}" -t "ghcr.io/cbcrc/${image}:latest" \
        --push .
    done
 ```
