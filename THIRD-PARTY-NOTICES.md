@@ -7,7 +7,7 @@ SPDX-License-Identifier: CC-BY-4.0
 
 The source code in this repository is licensed as described in [`LICENSES/LICENSE.md`](LICENSES/LICENSE.md) (Apache-2.0 for code, CC-BY-4.0 for documentation and media).
 
-The **container images** built from `gst-apps/` and published under `ghcr.io/cbcrc/` additionally bundle third-party open-source components under their own licenses. This file lists those components, their licenses, and where to obtain their source code.
+The **container images** built from `gst-apps/` and `build-images/` (demo images) and published under `ghcr.io/cbcrc/` additionally bundle third-party open-source components under their own licenses. This file lists those components, their licenses, and where to obtain their source code.
 
 ## Components common to most images
 
@@ -29,15 +29,23 @@ The **container images** built from `gst-apps/` and published under `ghcr.io/cbc
 | Vosk speech recognition runtime (`vosk` Python package) | Apache-2.0 | **HTML5-keyer** | [alphacep/vosk-api](https://github.com/alphacep/vosk-api) |
 | Vosk models `vosk-model-small-en-us-0.15`, `vosk-model-small-fr-0.22` | Apache-2.0 (per [alphacephei.com/vosk/models](https://alphacephei.com/vosk/models)) | **HTML5-keyer** (`/opt/vosk`) | same page |
 
+## Demo images (`build-images/`: mxl-writer, mxl-reader, mxl-clip-player)
+
+| Component | License | In images | Source |
+|---|---|---|---|
+| Debian 13 (trixie) base system | Various (see `/usr/share/doc/*/copyright` in the image) | all demo images | [Debian source packages](https://packages.debian.org/trixie/) (`apt-get source <package>`) |
+| GStreamer core, `-plugins-base`, `-plugins-good`, `-plugins-bad` (**mxl-clip-player** ships only the `mpegtsdemux`, `videoparsersbad` and `audioparsers` plugin files plus `libgstreamer-plugins-bad1.0-0`) | LGPL-2.1-or-later | **mxl-writer**, **mxl-clip-player** | Debian source packages `gstreamer1.0`, `gst-plugins-base1.0`, `gst-plugins-good1.0`, `gst-plugins-bad1.0` |
+| MXL SDK (`libmxl.so`, `mxl-gst-testsrc`, `mxl-info`, `mxl-gst-looping-filesrc`, `looping_filesrc` GStreamer plugin) | Apache-2.0 | all demo images | [dmf-mxl/mxl](https://github.com/dmf-mxl/mxl) |
+
 ## Components referenced but **not** redistributed by this project
 
 - **MediaMTX** (MIT) — pulled directly from Docker Hub (`bluenviron/mediamtx`) by users at deploy time.
 - **`gstreamer1.0-plugins-ugly`** (GPL; contains the `x264enc` H.264 encoder, which is both GPL-licensed and patent-encumbered) — deliberately **not included** in any published image. The `mxl2webrtc` app requires `x264enc` and installs `gstreamer1.0-plugins-ugly` from the Ubuntu archive **at container start** (see `gst-apps/mxl2webrtc/`). The GPL combined work is therefore created on the deployer's machine and not distributed by this project. Apache-2.0 is one-way compatible with GPL-3.0, so this use is license-compatible either way.
-- **`gstreamer1.0-libav` + FFmpeg libraries** (LGPL-2.1-or-later / GPL-2.0-or-later as built by Ubuntu, whose `libavcodec` also hard-depends on the GPL, patent-encumbered `libx264` encoder library) — deliberately **not included** in any published image. The `hls2mxl` and `file-player` apps need the FFmpeg decoders (H.264/AAC) and install `gstreamer1.0-libav` from the Ubuntu archive **at container start**, same pattern as above.
+- **`gstreamer1.0-libav` + FFmpeg libraries** (LGPL-2.1-or-later / GPL-2.0-or-later as built by Ubuntu and Debian, whose `libavcodec` also hard-depends on the GPL, patent-encumbered `libx264` encoder library) — deliberately **not included** in any published image. The `hls2mxl` and `file-player` apps need the FFmpeg decoders (H.264/AAC) and install `gstreamer1.0-libav` from the Ubuntu archive **at container start**, same pattern as above. The **mxl-clip-player** demo image does the same from the Debian archive (its entrypoint installs the decoders on first start).
 
 ## LGPL corresponding source
 
-The LGPL-licensed binaries in the published images (GStreamer, libnice, and other Ubuntu libraries) are unmodified Ubuntu 24.04 (noble) packages. Corresponding source for any of them can be obtained from the [Ubuntu package archive](https://packages.ubuntu.com/noble/) or with `apt-get source <package>` on an Ubuntu 24.04 system, for the exact package versions recorded in each image (`dpkg -l` inside the image). No GPL-licensed codec packages are included in the published images; they are installed on the deployer's machine at container start where required (see above).
+The LGPL-licensed binaries in the published images (GStreamer, libnice, and other distribution libraries) are unmodified Ubuntu 24.04 (noble) packages — Debian 13 (trixie) packages for the demo images. Corresponding source for any of them can be obtained from the [Ubuntu package archive](https://packages.ubuntu.com/noble/) or the [Debian package archive](https://packages.debian.org/trixie/), or with `apt-get source <package>` on a matching system, for the exact package versions recorded in each image (`dpkg -l` inside the image). No GPL-licensed codec packages are included in the published images; they are installed on the deployer's machine at container start where required (see above).
 
 ## Per-image SBOMs
 
