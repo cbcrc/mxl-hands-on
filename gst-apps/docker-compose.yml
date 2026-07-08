@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
 name: gst-apps
 
 # the device must point to a directory on the host that contains

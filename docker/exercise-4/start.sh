@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
 mkdir -p /Volumes/mxl/domain_1
 cp ./data/domain_def.json /Volumes/mxl/domain_1
 cp ~/mxl-hands-on/build-images/sizzle.ts ./data/Clips

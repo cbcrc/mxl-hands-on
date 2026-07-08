@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
 """
 FastAPI backend for the MXL Test Generator.
 Serves both the REST API and the React frontend on port 9600.

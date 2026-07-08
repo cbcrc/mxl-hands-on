@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: 2025 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
 # ==============================================================================
 # SCRIPT: build-demo-images.sh (Local Build - Clean Tags)
 # PURPOSE: Builds amd64 Docker images locally using artifacts from build_linux.sh

@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+// SPDX-License-Identifier: Apache-2.0
 // Voice-activated keyword commands. Keys are the trigger phrase with every
 // word run through normalizeText() and concatenated with no separator, so
 // matching is diacritic/case/punctuation-insensitive like script-word

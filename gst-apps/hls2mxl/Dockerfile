@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 Contributors to the Media eXchange Layer project.
+# SPDX-FileCopyrightText: 2025 CBC/Radio-Canada
 # SPDX-License-Identifier: Apache-2.0
 #
 # Multi-stage Dockerfile for the MXL HLS Gateway.

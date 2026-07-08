@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
 # Entrypoint for the MXL HTML5 Keyer container.
 #
 # CEF/Chromium needs an X display on Linux even when it runs offscreen, so we

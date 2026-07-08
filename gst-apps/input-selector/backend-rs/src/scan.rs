@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
 // SPDX-License-Identifier: Apache-2.0
 //
 // Domain and flow discovery — ported from the Python backend's `main.py`

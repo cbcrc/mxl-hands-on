@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2025 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
 # Declare build arguments for the base image
 ARG BASE_IMAGE=debian:trixie-slim
 
