@@ -1,0 +1,101 @@
+# SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
+# macOS Docker Desktop override.
+# Usage: docker compose -f docker-compose.yml -f docker-compose.mac.yml up
+#
+# On macOS, network_mode: host shares the Docker Desktop Linux VM's network,
+# not the Mac host.  Two problems arise:
+#
+#  1. WHIP connection refused: mxl2webrtc uses host.docker.internal which on
+#     Mac resolves to the Mac host, but mediamtx is on the VM's host network
+#     and its ports are not forwarded to the Mac.
+#
+#  2. WebRTC ICE failure: if mediamtx and mxl2webrtc land on different Docker
+#     bridge networks (compose network vs. docker0), iptables isolates them and
+#     ICE connectivity checks fail silently — WHIP returns 201 but no media
+#     ever reaches mediamtx, so WHEP returns 404.
+#
+# Fix: switch both mediamtx and mxl2webrtc to docker0 (network_mode: bridge).
+# They share the same subnet, so ICE candidate IPs are directly reachable
+# between the containers.  Docker's userspace proxy listens on the docker0
+# gateway for the published ports, so host.docker.internal:8889 (used for
+# WHIP) reaches mediamtx regardless of which /etc/hosts entry wins.
+# MTX_WEBRTCADDITIONALHOSTS tells mediamtx to advertise the Mac host IP in
+# WHEP answers so the browser's ICE traffic is forwarded by Docker Desktop
+# through the published port 8189/udp.
+#
+#  3. Flows vanish intermittently / mxlsrc never finds a flow / mxl-info-gui
+#     always reports flows "inactive": the base compose file's mxl-domain
+#     volume is a virtiofs bind-mount of a Mac-side path. dmf-mxl's
+#     DomainWatcher relies on Linux inotify, and mxlIsFlowActive() relies on
+#     flock() — neither is reliably propagated across containers over
+#     virtiofs, causing intermittent flow loss and false "inactive" status.
+#
+# Fix: back mxl-domain with a tmpfs volume that lives entirely inside the
+# Docker Desktop Linux VM (no virtiofs involved), preserving the RAM-disk
+# performance requirement while giving inotify/flock real Linux semantics.
+# Since this volume no longer lives under /Volumes on the Mac, domain-init
+# seeds it with the repo's domain_def.json on every `up`.
+
+volumes:
+  mxl-domain:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=512m"
+
+services:
+  domain-init:
+    # Stays running for the life of the stack: Docker's local+tmpfs volume
+    # driver unmounts (and wipes) the tmpfs once its last mounter exits, so a
+    # one-shot seed container would race the app containers and lose the
+    # copied file. Holding the mount open here keeps the tmpfs alive.
+    image: busybox
+    init: true   # run tini as PID 1 so SIGTERM actually reaches `tail` below instead
+                 # of being ignored per the kernel's default PID-1 signal exemption
+    volumes:
+      - mxl-domain:/mxl-domain
+      - ./data/domain_def.json:/seed/domain_def.json:ro
+    entrypoint: ["sh", "-c", "cp /seed/domain_def.json /mxl-domain/domain_def.json && exec tail -f /dev/null"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/mxl-domain/domain_def.json"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+      start_period: 2s
+
+  writer-media-function:
+    depends_on:
+      domain-init:
+        condition: service_healthy
+
+  clip-player-function:
+    depends_on:
+      domain-init:
+        condition: service_healthy
+  
+  reader-media-function:
+    depends_on:
+      domain-init:
+        condition: service_healthy
+
+  mediamtx:
+    network_mode: bridge          # docker0; allows port publishing and shared subnet with mxl2webrtc
+    ports:
+      - "8554:8554"               # RTSP
+      - "8889:8889"               # WebRTC HTTP (WHIP / WHEP)
+      - "8189:8189/udp"           # WebRTC ICE media
+    environment:
+      - MTX_WEBRTCADDITIONALHOSTS=host.docker.internal   # Mac host IP → browser ICE via published port
+
+  webrtc-player:
+    network_mode: bridge          # same docker0 subnet as mediamtx → ICE works
+    depends_on:
+      domain-init:
+        condition: service_healthy
+    environment:
+      # Docker's userspace proxy listens on the docker0 gateway (= host.docker.internal)
+      # for port 8889, forwarding to the mediamtx container.
+      - MEDIAMTX_WHIP_URL=http://host.docker.internal:8889/mxl2webrtc/whip
+      - MEDIAMTX_WEBRTC_URL=http://localhost:8889

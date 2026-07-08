@@ -88,7 +88,10 @@ This exercise also showcases the gstreamer clip player plugin (added in [PR #22]
 1. Start the containers
 
    ```sh
-   docker compose up -d
+   docker compose up -d # For linux based system
+   ```
+   ```sh
+   ./start-mac.sh # For mac based system
    ```
 
 1. Use the WebRTC player application to look at the newly created mxl flows. You can reach the webRTC player in your browser with the following information:
@@ -101,7 +104,10 @@ With what you learned so far, can you look at all mxl flows?
 
 When you are done experimenting, do not forget to shutdown your containers.
    ```sh
-   docker compose down
+   docker compose down # For linux based system
+   ```
+   ```sh
+   ./stop-mac.sh # For mac based system
    ```
 
 ### Extra information for Exercise 3

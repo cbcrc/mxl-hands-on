@@ -20,9 +20,10 @@ services:
     command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-g", "demo-app-writer", "-v", "/app/v210_flow.json", "-t", "Original Flow"]
   
   clip-player-function:
-    image: ghcr.io/cbcrc/mxl-clip-player:latest
+    image: mxl-clip-player:mxl-ff0ece6-linux-gcc-release
     platform: linux/amd64
-    user: 1000:1000
+    # No user: override — the entrypoint installs gstreamer1.0-libav (GPL,
+    # not shipped in the image) at first start, which requires root.
     restart: unless-stopped
     volumes:
       - type: volume   # Maps the named volume "/mxl" (in memory) to /domain inside the container, in read-write mode.
