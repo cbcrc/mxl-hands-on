@@ -56,7 +56,7 @@ services:
                  # of being ignored per the kernel's default PID-1 signal exemption
     volumes:
       - mxl-domain:/mxl-domain
-      - ./domain_def.json:/seed/domain_def.json:ro
+      - ./data/domain_def.json:/seed/domain_def.json:ro
     entrypoint: ["sh", "-c", "cp /seed/domain_def.json /mxl-domain/domain_def.json && exec tail -f /dev/null"]
     healthcheck:
       test: ["CMD", "test", "-f", "/mxl-domain/domain_def.json"]
@@ -65,32 +65,17 @@ services:
       retries: 5
       start_period: 2s
 
-  test-generator:
+  writer-media-function:
     depends_on:
       domain-init:
         condition: service_healthy
 
-  file-player:
+  clip-player-function:
     depends_on:
       domain-init:
         condition: service_healthy
-
-  mxl-info-gui:
-    depends_on:
-      domain-init:
-        condition: service_healthy
-
-  hls2mxl:
-    depends_on:
-      domain-init:
-        condition: service_healthy
-
-  input-selector:
-    depends_on:
-      domain-init:
-        condition: service_healthy
-
-  html5-keyer:
+  
+  reader-media-function:
     depends_on:
       domain-init:
         condition: service_healthy
@@ -104,7 +89,7 @@ services:
     environment:
       - MTX_WEBRTCADDITIONALHOSTS=host.docker.internal   # Mac host IP → browser ICE via published port
 
-  mxl2webrtc:
+  webrtc-player:
     network_mode: bridge          # same docker0 subnet as mediamtx → ICE works
     depends_on:
       domain-init:
@@ -114,8 +99,3 @@ services:
       # for port 8889, forwarding to the mediamtx container.
       - MEDIAMTX_WHIP_URL=http://host.docker.internal:8889/mxl2webrtc/whip
       - MEDIAMTX_WEBRTC_URL=http://localhost:8889
-
-  webrtc2mxl:
-    depends_on:
-      domain-init:
-        condition: service_healthy

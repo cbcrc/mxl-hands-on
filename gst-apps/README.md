@@ -125,6 +125,8 @@ A read-only monitoring tool. Wraps the `mxl-info` CLI command and presents its o
 
 Reads one MXL video flow and/or one MXL audio flow and relays them as a low-latency WebRTC stream viewable directly in the browser — no browser plugin required.
 
+> **Codec licensing note:** the H.264 encoder (`x264enc`, from `gstreamer1.0-plugins-ugly`) is GPL-licensed and patent-encumbered, so it is **not** shipped in the published image. The container installs it from the Ubuntu archive on first start, which requires network access. For offline deployments, pre-bake it with a one-line derived image: `FROM ghcr.io/cbcrc/mxl2webrtc:latest` then `RUN apt-get update && apt-get install -y gstreamer1.0-plugins-ugly`. See the repo-level `THIRD-PARTY-NOTICES.md` for the full third-party inventory.
+
 ### Two delivery modes
 
 The UI checkbox **"Use MediaMTX relay"** selects how the stream reaches the browser. The modes differ in latency **and in how they scale with viewer count** — pick by what you need:
@@ -180,6 +182,8 @@ For the full GStreamer pipeline breakdown see [gstreamer-pipeline.md — Section
 
 Reads a local media file (`.mp4` or `.ts`) and publishes its video and/or audio streams as continuously looping MXL flows. No external signal source required — the pipeline decodes the file as-is and forwards raw frames to `mxlsink`. When the end of file is reached, a flushing seek restarts playback seamlessly from the beginning.
 
+> **Codec licensing note:** the FFmpeg-based decoders (`gstreamer1.0-libav`, needed for H.264/AAC) are **not** shipped in the published image — Ubuntu's FFmpeg build enables GPL components and pulls in the patent-encumbered `libx264` library. The container installs the package from the Ubuntu archive on first start, which requires network access. For offline deployments, pre-bake it: `FROM ghcr.io/cbcrc/file-player:latest` then `RUN apt-get update && apt-get install -y gstreamer1.0-libav`. See the repo-level `THIRD-PARTY-NOTICES.md`.
+
 > **Before starting:** make sure `MEDIA_DEVICE` is set in your `.env` file (see [Environment setup](#environment-setup)). It must point to the host directory that contains your clip files.
 
 **Setup panel** (before starting the pipeline):
@@ -201,6 +205,8 @@ For the GStreamer pipeline details see [gstreamer-pipeline.md — Section 3](./g
 **Image:** `ghcr.io/cbcrc/hls2mxl:latest`
 
 Ingests any live HLS stream and republishes it as one video flow and one audio flow in an MXL domain. No manual resolution, frame rate, or channel-count selection is required — the pipeline adapts automatically to whatever the HLS source delivers.
+
+> **Codec licensing note:** the FFmpeg-based decoders (`gstreamer1.0-libav`, needed for H.264/AAC) are **not** shipped in the published image — Ubuntu's FFmpeg build enables GPL components and pulls in the patent-encumbered `libx264` library. The container installs the package from the Ubuntu archive on first start, which requires network access. For offline deployments, pre-bake it: `FROM ghcr.io/cbcrc/hls2mxl:latest` then `RUN apt-get update && apt-get install -y gstreamer1.0-libav`. See the repo-level `THIRD-PARTY-NOTICES.md`.
 
 **How it works:**
 
@@ -327,6 +333,8 @@ cd ..
 cd gst-apps
 docker compose build
 ```
+
+> **Publishing to GHCR:** don't `docker tag` + `docker push` these images — publish them with `docker buildx build --sbom=true --provenance=mode=max --push` so each image carries an SPDX SBOM attestation (see [how_to_build.md — Step 4](../how_to_build.md) for the exact loop, and `THIRD-PARTY-NOTICES.md` for why).
 
 ---
 

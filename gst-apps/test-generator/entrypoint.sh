@@ -1,5 +1,5 @@
 #!/bin/bash
-# SPDX-FileCopyrightText: 2025 Contributors to the Media eXchange Layer project.
+# SPDX-FileCopyrightText: 2025 CBC/Radio-Canada
 # SPDX-License-Identifier: Apache-2.0
 #
 # Entrypoint for the MXL Test Generator container.

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
 # macOS Docker Desktop override.
 # Usage: docker compose -f docker-compose.yml -f docker-compose.mac.yml up
 #

@@ -98,30 +98,33 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
     ```sh
         cd ~/mxl-hands-on/docker/exercise-4
     ```
-1. If you did **NOT** do the preparations steps for either WLS or MacOS, make sure you have a /Volumes/mxl mounted in *tmpfs* or *ram*.
+1. If you did **NOT** do the preparations steps for WLS, make sure you have a /Volumes/mxl mounted in *tmpfs*.
    ```sh
    sudo mount -t tmpfs -o size=512m,uid=1000,gid=1000,mode=0755 tmpfs /Volumes/mxl # on WSL linux
    sudo mkdir -p /Volumes/mxl/domain_1
    sudo chown 1000:1000 /Volumes/mxl/domain_1
    ```
-   ```sh
-   diskutil erasevolume HFS+ mxl $(hdiutil attach -nomount ram://1048576) # on MacOS
-   sudo mkdir -p /Volumes/mxl/domain_1
-   sudo chown 1000:1000 /Volumes/mxl/domain_1
-   ```
-1. Making sure we have at least one for our clip player application (you can add more of your own, .mp4 or .ts)
+
+1. Making sure we have at least one clip for our clip player application (you can add more of your own, .mp4 or .ts)
    ```sh
    cp ~/mxl-hands-on/build-images/sizzle.ts data/Clips
    ```
 1. Start the system with the start script.
     ```sh
-        ./start.sh # For linux based machine
+        ./start.sh # For linux based system
     ```
     ```sh
-        ./start-mac.sh # For mac based machine
+        ./start-mac.sh # For mac based system
     ```
 1. Use the application and try to reproduce the workflow above. You have more documentation on application usage [here](../gst-apps/README.md)
 
+1. When you are down, do not forget to shutdown your containers.
+    ```sh
+    stop.sh # For linux based system
+    ```
+    ```sh
+    ./stop-mac.sh # For mac based system
+    ```
 | App | URL | API Swagger Page |
 |-----|-----|-----|
 | Test Generator | http://localhost:9600 | http://localhost:9600/docs |

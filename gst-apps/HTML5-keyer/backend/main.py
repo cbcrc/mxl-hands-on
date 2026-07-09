@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
 """
 FastAPI backend for the MXL HTML5 Keyer.
 

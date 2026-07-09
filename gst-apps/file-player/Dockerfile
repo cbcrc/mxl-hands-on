@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 Contributors to the Media eXchange Layer project.
+# SPDX-FileCopyrightText: 2025 CBC/Radio-Canada
 # SPDX-License-Identifier: Apache-2.0
 #
 # Multi-stage Dockerfile for the MXL File Player.
@@ -42,8 +42,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gstreamer1.0-plugins-base \
         gstreamer1.0-plugins-good \
         gstreamer1.0-plugins-bad \
-        gstreamer1.0-plugins-ugly \
-        gstreamer1.0-libav \
         curl \
     && rm -rf /var/lib/apt/lists/*
 

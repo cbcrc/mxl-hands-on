@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
 # Multi-stage Dockerfile for the MXL Input Selector (native Rust backend).
 # Build context: repository root (two levels above this file's directory).
 #

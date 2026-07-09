@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
 // SPDX-License-Identifier: Apache-2.0
 //
 // Flow format reading and cross-input validation — ported from the Python

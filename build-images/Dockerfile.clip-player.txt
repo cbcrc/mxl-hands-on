@@ -1,52 +1,111 @@
+# SPDX-FileCopyrightText: 2025 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
 # Declare build arguments for the base image
 ARG BASE_IMAGE=debian:trixie-slim
 
-FROM ${BASE_IMAGE}
+# ── Stage 1: staging ─────────────────────────────────────────────────────────
+# The full compiler build tree only ever exists in this throwaway stage, so
+# the final image doesn't carry a dead ~300-500MB COPY layer (an rm in a later
+# layer cannot reclaim space from an earlier one).
+FROM ${BASE_IMAGE} AS staging
 
 # --- Final Path provided by shell script ---
 ARG FULL_BUILD_PATH
 # --- END Final Path provided by shell script ---
 
-WORKDIR /app
-
-# Use minimal dependencies and clean up in the same layer to reduce image size
+# plugins-good and plugins-bad are only installed here to extract three
+# plugin files from them (see below); their full dependency trees (OpenCV,
+# Vulkan, ... — hundreds of packages) never reach the runtime stage.
 RUN apt-get update && apt-get -y install --no-install-recommends \
-        libgstreamer1.0-dev \
-        libgstreamer-plugins-base1.0-dev \
-        libgstreamer-plugins-bad1.0-dev \
-        gstreamer1.0-plugins-base \
+        patchelf \
         gstreamer1.0-plugins-good \
         gstreamer1.0-plugins-bad \
-        gstreamer1.0-plugins-ugly \
-        gstreamer1.0-libav \
-        gstreamer1.0-tools \
-        gstreamer1.0-x \
-        gstreamer1.0-alsa \
-        gstreamer1.0-gl \
-        gstreamer1.0-gtk3 \
-        gstreamer1.0-qt5 \
-        gstreamer1.0-pulseaudio \
-        patchelf \
-        # Add bash and coreutils for complex file movement
-        bash \
-        coreutils \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the entire build directory content into a temporary location within the image
 COPY ${FULL_BUILD_PATH} /tmp/build/
 
-# Move only necessary files from the temp directory to /app or their target location and clean up
-RUN mv /tmp/build/utils/gst-looping-filesrc /gst-plugins/ \
-    && mv /tmp/build/lib/*.so* /app/ \
-    && mv /tmp/build/lib/tests/data/*.json /app/ \
-    && mv /tmp/build/tools/mxl-gst/mxl-gst-looping-filesrc /app/ \
-    # Clean up the temp directory
-    && rm -rf /tmp/build
+# Keep only the necessary files; set rpath so the executable finds the MXL
+# libraries in /app. From good/bad, extract just the plugins MPEG-TS playback
+# needs: tsdemux (mpegtsdemux), h264parse/mpegvideoparse (videoparsersbad),
+# aacparse/mpegaudioparse/ac3parse (audioparsers).
+RUN mkdir -p /staging/app \
+    && mv /tmp/build/utils/gst-looping-filesrc /staging/gst-plugins \
+    && mv /tmp/build/lib/*.so* /staging/app/ \
+    && mv /tmp/build/lib/tests/data/*.json /staging/app/ \
+    && mv /tmp/build/tools/mxl-gst/mxl-gst-looping-filesrc /staging/app/ \
+    && patchelf --set-rpath /app /staging/app/mxl-gst-looping-filesrc \
+    && cp /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmpegtsdemux.so \
+          /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstvideoparsersbad.so \
+          /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstaudioparsers.so \
+          /staging/gst-plugins/
+
+# ── Stage 2: runtime ─────────────────────────────────────────────────────────
+FROM ${BASE_IMAGE}
+
+WORKDIR /app
+
+# Runtime-only GStreamer packages. The pipeline is
+# looping_filesrc -> decodebin -> videorate/videoconvert/audioconvert -> appsink
+# fed with an MPEG-TS file:
+#   - plugins-base: decodebin, videorate, videoconvert, audioconvert, appsink
+#   - libgstreamer-plugins-bad1.0-0: libgstmpegts/libgstcodecparsers, needed
+#     by the demuxer/parser plugins extracted in the staging stage (the full
+#     plugins-good/plugins-bad packages are deliberately NOT installed here)
+#   - tools: gst-inspect-1.0, used by the entrypoint
+# Codec decoders (gstreamer1.0-libav) are installed by the entrypoint at
+# container start, not shipped in the image (GPL/patent-encumbered, see
+# THIRD-PARTY-NOTICES.md).
+RUN apt-get update && apt-get -y install --no-install-recommends \
+        gstreamer1.0-plugins-base \
+        libgstreamer-plugins-bad1.0-0 \
+        gstreamer1.0-tools \
+        # bash for the entrypoint
+        bash \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=staging /staging/gst-plugins /gst-plugins
+COPY --from=staging /staging/app /app
 
 # Set environment variable for GStreamer plugin path
 ENV GST_PLUGIN_PATH="/gst-plugins"
 
-# Set rpath for the executable
-RUN patchelf --set-rpath /app mxl-gst-looping-filesrc
+# The build context is the dmf-mxl submodule, so the entrypoint cannot be
+# COPY'd from build-images/; embed it here instead (BuildKit heredoc).
+COPY --chmod=755 <<'EOF' /entrypoint.sh
+#!/bin/bash
+# SPDX-FileCopyrightText: 2025 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
+#
+# Entrypoint for the MXL clip player container.
 
-CMD ["/app/mxl-gst-looping-filesrc", "-d", "/domain"]
+set -e
+
+# The FFmpeg-based decoders (gstreamer1.0-libav) are not shipped in the
+# published image: Debian's FFmpeg build enables GPL components and
+# hard-depends on the patent-encumbered libx264 encoder library. Install
+# from the Debian archive at first start instead (needs network access; the
+# GPL combined work stays on the deployer's machine).
+if ! gst-inspect-1.0 avdec_h264 >/dev/null 2>&1; then
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "ERROR: gstreamer1.0-libav is not installed in this image and the" >&2
+        echo "container is not running as root, so the entrypoint cannot install" >&2
+        echo "it. Remove the 'user:' override for this service and retry." >&2
+        exit 1
+    fi
+    echo "avdec_h264 not found — installing gstreamer1.0-libav..."
+    apt-get update
+    apt-get install -y --no-install-recommends gstreamer1.0-libav
+    rm -rf /var/lib/apt/lists/*
+fi
+
+# Support both invocation styles: bare options (image CMD) and a full command
+# line starting with the binary path (docker/exercise-3 compose file).
+if [ "${1:0:1}" = "/" ]; then
+    exec "$@"
+fi
+exec /app/mxl-gst-looping-filesrc "$@"
+EOF
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["-d", "/domain"]

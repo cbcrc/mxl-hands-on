@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+// SPDX-License-Identifier: Apache-2.0
 import React, { useState, useEffect, useCallback } from "react";
 
 const API = "";
