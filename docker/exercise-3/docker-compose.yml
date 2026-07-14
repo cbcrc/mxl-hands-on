@@ -20,7 +20,7 @@ services:
     command: ["/app/mxl-gst-testsrc", "-d", "/domain", "-g", "demo-app-writer", "-v", "/app/v210_flow.json", "-t", "Original Flow"]
   
   clip-player-function:
-    image: mxl-clip-player:mxl-ff0ece6-linux-gcc-release
+    image: ghcr.io/cbcrc/mxl-clip-player:latest
     platform: linux/amd64
     # No user: override — the entrypoint installs gstreamer1.0-libav (GPL,
     # not shipped in the image) at first start, which requires root.
