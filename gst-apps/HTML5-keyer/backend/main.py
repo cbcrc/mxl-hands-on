@@ -19,7 +19,9 @@ GET  /prompter-api/presets      – resolution/framerate preset list
 POST /prompter-api/update       – OGraf updateAction data (scriptText, …)
 POST /prompter-api/play         – OGraf playAction
 POST /prompter-api/stop         – OGraf stopAction
-POST /prompter-api/action       – OGraf customAction (pause/resume/speedUp/speedDown)
+POST /prompter-api/action       – OGraf customAction (pause/resume/speedUp/speedDown/jumpToStory/triggerTag)
+GET  /prompter-api/tags         – {tag} triggers parsed from the current script, with their API-call config
+POST /prompter-api/tags         – attach/update the API call (method/url/body) fired when a tag triggers
 WS   /prompter-ws               – the CEF-hosted graphic connects here for commands
 """
 
@@ -31,6 +33,8 @@ import logging
 import os
 import re
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Optional
 
@@ -181,11 +185,103 @@ def _parse_story_names(script_text: str) -> list[str]:
     return [m.strip() for m in _STORY_MARKER_RE.findall(script_text)]
 
 
+# {tag} markers — inline, in-place phrases (unlike [STORY: ...] headings) that
+# stay part of the read text but can also be attached to an API call, fired
+# either by the presenter reading the phrase or by a manual UI/API trigger.
+_TAG_RE = re.compile(r"\{([^{}]+)\}")
+_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+
+def _parse_api_tags(script_text: str) -> list[str]:
+    seen: dict[str, str] = {}
+    for raw in _TAG_RE.findall(script_text):
+        name = raw.strip()
+        if name and name.lower() not in seen:
+            seen[name.lower()] = name
+    return list(seen.values())
+
+
+def _parse_script_vocabulary(script_text: str) -> list[str]:
+    """Words to constrain the dictation recognizer to: everything actually read
+    aloud. [STORY: ...] heading lines are excluded — mirroring teleprompter.js,
+    which doesn't count them as script words either — and {} punctuation is
+    stripped while keeping the tagged words themselves, since those are still
+    read normally.
+    """
+    words: list[str] = []
+    for line in script_text.splitlines():
+        if _STORY_MARKER_RE.match(line):
+            continue
+        words.extend(_WORD_RE.findall(_TAG_RE.sub(r"\1", line)))
+    return [w.lower() for w in words if len(w) > 3]
+
+
 _hub = PrompterHub()
-_voice = VoiceTracker(
-    broadcast=_hub.send_transcript,
-    on_command=lambda cmd: _hub.send_voice_command(cmd["command"], cmd.get("param")),
-)
+
+# {tag} -> API call config, keyed by lowercased tag name. Reset whenever a new
+# scriptText loads (see api_prompter_update) — mirrors story markers, which are
+# likewise re-derived fresh from the current script rather than persisted
+# across scripts/days.
+_api_tags: dict[str, dict] = {}
+
+
+class ApiTagCallError(Exception):
+    """Raised when a tag's configured API call fails, carrying a message fit to
+    show a human (container-networking failures — wrong host/port, connection
+    refused — are the common case, see ai_instructions.md)."""
+
+
+def _do_http_call(method: str, url: str, body: str) -> None:
+    data = body.encode("utf-8") if body else None
+    req = urllib.request.Request(url, data=data, method=method.upper())
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            log.info("API tag call %s %s -> %s", method, url, resp.status)
+    except urllib.error.HTTPError as exc:
+        raise ApiTagCallError(f"{method} {url} failed: HTTP {exc.code} {exc.reason}") from exc
+    except urllib.error.URLError as exc:
+        raise ApiTagCallError(f"{method} {url} failed: {exc.reason}") from exc
+    except Exception as exc:
+        raise ApiTagCallError(f"{method} {url} failed: {exc}") from exc
+
+
+def _fire_api_tag_sync(name: str) -> None:
+    """Fire a tag's configured API call synchronously — used directly from the
+    voice-tracker worker thread, which is not part of the asyncio loop and has
+    no request to report a failure to, so just log it."""
+    cfg = _api_tags.get(name.strip().lower())
+    if not cfg or not cfg.get("url"):
+        log.warning("API tag %r triggered but has no configured URL — skipping", name)
+        return
+    try:
+        _do_http_call(cfg["method"], cfg["url"], cfg.get("body") or "")
+    except ApiTagCallError:
+        log.exception("API tag call failed")
+
+
+async def _fire_api_tag(name: str) -> None:
+    """Fire a tag's configured API call, raising on failure — used by the
+    manual Test button (POST /prompter-api/action), which surfaces the error
+    in the UI rather than only logging it."""
+    cfg = _api_tags.get(name.strip().lower())
+    if not cfg or not cfg.get("url"):
+        raise HTTPException(status_code=400, detail=f"Tag {name!r} has no URL configured — Save one first")
+    try:
+        await asyncio.to_thread(_do_http_call, cfg["method"], cfg["url"], cfg.get("body") or "")
+    except ApiTagCallError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+def _handle_voice_command(cmd: dict) -> None:
+    if cmd["command"] == "triggerApiTag":
+        _fire_api_tag_sync(cmd["param"])
+        return
+    _hub.send_voice_command(cmd["command"], cmd.get("param"))
+
+
+_voice = VoiceTracker(broadcast=_hub.send_transcript, on_command=_handle_voice_command)
 
 
 # ── Request models ────────────────────────────────────────────────────────────
@@ -224,8 +320,15 @@ class PrompterUpdate(BaseModel):
 
 
 class PrompterAction(BaseModel):
-    action: str   # pause | resume | speedUp | speedDown | jumpToStory
-    param:  Optional[str] = None   # story name, for jumpToStory
+    action: str   # pause | resume | speedUp | speedDown | jumpToStory | triggerTag
+    param:  Optional[str] = None   # story name (jumpToStory) or tag name (triggerTag)
+
+
+class ApiTagConfig(BaseModel):
+    name:   str
+    method: str = "POST"
+    url:    str = ""
+    body:   str = ""
 
 
 def _full_status() -> dict:
@@ -461,7 +564,14 @@ async def api_prompter_update(body: PrompterUpdate) -> dict:
     if "enableVoiceTracking" in data:
         _voice.set_enabled(bool(data["enableVoiceTracking"]))
     if "scriptText" in data:
-        _voice.set_story_names(_parse_story_names(data["scriptText"]))
+        script = data["scriptText"]
+        _voice.set_story_names(_parse_story_names(script))
+        _voice.set_script_vocabulary(_parse_script_vocabulary(script))
+        tag_names = _parse_api_tags(script)
+        _voice.set_api_tags(tag_names)
+        _api_tags.clear()
+        for n in tag_names:
+            _api_tags[n.lower()] = {"name": n, "method": "POST", "url": "", "body": ""}
     if data:
         _hub.update_data(data)
     return {"ok": True}
@@ -481,9 +591,33 @@ async def api_prompter_stop() -> dict:
 
 @app.post("/prompter-api/action")
 async def api_prompter_action(body: PrompterAction) -> dict:
+    if body.action == "triggerTag":
+        if not body.param:
+            raise HTTPException(status_code=400, detail="Missing tag name")
+        await _fire_api_tag(body.param)
+        return {"ok": True}
     if body.action not in ("pause", "resume", "speedUp", "speedDown", "jumpToStory"):
         raise HTTPException(status_code=400, detail="Unknown action")
     _hub.send_action(body.action, body.param)
+    return {"ok": True}
+
+
+@app.get("/prompter-api/tags")
+async def api_prompter_tags_list() -> list[dict]:
+    return list(_api_tags.values())
+
+
+@app.post("/prompter-api/tags")
+async def api_prompter_tags_set(body: ApiTagConfig) -> dict:
+    key = body.name.strip().lower()
+    if key not in _api_tags:
+        raise HTTPException(status_code=404, detail="Unknown tag — reload the script first")
+    _api_tags[key] = {
+        "name": _api_tags[key]["name"],
+        "method": body.method.upper(),
+        "url": body.url.strip(),
+        "body": body.body,
+    }
     return {"ok": True}
 
 

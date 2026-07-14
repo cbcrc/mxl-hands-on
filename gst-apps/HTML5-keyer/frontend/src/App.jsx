@@ -182,6 +182,8 @@ export default function App() {
   const [pVoice,   setPVoice]   = useState(false);
   const [pReverse, setPReverse] = useState(false);
   const [pStoryMarkers, setPStoryMarkers] = useState([]);
+  const [pApiTags, setPApiTags] = useState([]); // {name, method, url, body} from GET /prompter-api/tags
+  const [pApiTagsVersion, setPApiTagsVersion] = useState(0); // bumped each Load Script so ApiTagRow remounts fresh
 
   const [starting, setStarting]   = useState(false);
   const [keyBusy,  setKeyBusy]    = useState(false);
@@ -324,14 +326,34 @@ export default function App() {
   const promAction = (action) => post("/prompter-api/action", { action }).catch(e => setError(e.message));
   const promActionParam = (action, param) => post("/prompter-api/action", { action, param }).catch(e => setError(e.message));
 
-  const loadScript = () => {
-    promUpdate({ scriptText: pScript });
+  const loadScript = async () => {
+    // Must await: the tags fetch below reads backend state that this same
+    // request populates. Firing both at once races the POST against the GET
+    // with no ordering guarantee, so the GET can land first and see the tags
+    // dict from *before* this scriptText was parsed (empty, or stale).
+    await promUpdate({ scriptText: pScript });
     const re = /^\[STORY:\s*(.+?)\]\s*$/gim;
     const names = [];
     let m;
     while ((m = re.exec(pScript))) names.push(m[1]);
     setPStoryMarkers(names);
+    // {tag} configs are backend state (the voice recognizer fires them
+    // server-side), so re-fetch rather than re-deriving locally. The backend
+    // clears tag configs on every new scriptText, so bump the version too —
+    // otherwise a reloaded script reusing the same tag name would keep
+    // ApiTagRow's stale local draft instead of picking up the fresh (blank) config.
+    setPApiTagsVersion((v) => v + 1);
+    fetch(`${API}/prompter-api/tags`).then(r => r.json()).then(setPApiTags).catch(() => {});
   };
+
+  const saveApiTag = (tag) => {
+    setError("");
+    post("/prompter-api/tags", tag)
+      .then(() => setPApiTags((tags) => tags.map((t) => (t.name === tag.name ? tag : t))))
+      .catch((e) => setError(e.message));
+  };
+
+  const testApiTag = (name) => promActionParam("triggerTag", name);
 
   // ── Derived state ──────────────────────────────────────────────────────────
 
@@ -593,6 +615,7 @@ export default function App() {
             pVoice={pVoice} setPVoice={setPVoice}
             pReverse={pReverse} setPReverse={setPReverse}
             pStoryMarkers={pStoryMarkers}
+            pApiTags={pApiTags} pApiTagsVersion={pApiTagsVersion} saveApiTag={saveApiTag} testApiTag={testApiTag}
             promUpdate={promUpdate} promPlay={promPlay} promStop={promStop} promAction={promAction}
             promActionParam={promActionParam}
             status={status}
@@ -715,6 +738,7 @@ function PrompterControls(props) {
     pMirror, setPMirror, pCountdown, setPCountdown, pStatusBar, setPStatusBar,
     pVoiceLang, setPVoiceLang, pVoice, setPVoice,
     pReverse, setPReverse, pStoryMarkers,
+    pApiTags, pApiTagsVersion, saveApiTag, testApiTag,
     promUpdate, promPlay, promStop, promAction, promActionParam,
   } = props;
 
@@ -824,6 +848,61 @@ function PrompterControls(props) {
           ))}
         </div>
       )}
+
+      {/* {tag} API-call triggers — parsed from {...} spans on Load Script.
+          Each fires the configured call when the presenter reads the phrase
+          (voice, server-side) or via the manual Test button (both paths hit
+          the same backend config, POST /prompter-api/tags). */}
+      {pApiTags.length > 0 && (
+        <div style={{ marginTop: "1rem" }}>
+          <label style={S.label}>API Tag Triggers</label>
+          {pApiTags.map((tag) => (
+            <ApiTagRow key={`${pApiTagsVersion}-${tag.name}`} tag={tag} running={running} onSave={saveApiTag} onTest={testApiTag} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ApiTagRow({ tag, running, onSave, onTest }) {
+  const [method, setMethod] = useState(tag.method);
+  const [url, setUrl] = useState(tag.url);
+  const [body, setBody] = useState(tag.body);
+  const dirty = method !== tag.method || url !== tag.url || body !== tag.body;
+
+  return (
+    <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start", marginTop: "0.5rem", flexWrap: "wrap" }}>
+      <span style={{ ...S.caption, minWidth: "8rem", paddingTop: "0.5rem" }}>{`{${tag.name}}`}</span>
+      <select style={{ ...S.input, width: "5.5rem" }} value={method} onChange={(e) => setMethod(e.target.value)} disabled={!running}>
+        <option value="POST">POST</option>
+        <option value="GET">GET</option>
+        <option value="PUT">PUT</option>
+      </select>
+      <input
+        style={{ ...S.input, flex: "1 1 16rem" }}
+        placeholder="https://…"
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        disabled={!running}
+      />
+      <input
+        style={{ ...S.input, flex: "1 1 12rem" }}
+        placeholder="JSON body (optional)"
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        disabled={!running || method === "GET"}
+      />
+      <button
+        style={btn("primary", !running || !dirty)}
+        onClick={() => onSave({ name: tag.name, method, url, body })}
+        disabled={!running || !dirty}
+      >
+        Save
+      </button>
+      <button style={btn("success", !running || !tag.url)} onClick={() => onTest(tag.name)} disabled={!running || !tag.url}>
+        Test
+      </button>
     </div>
   );
 }

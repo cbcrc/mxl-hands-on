@@ -144,6 +144,17 @@ export default class TeleprompterGraphic extends HTMLElement {
           margin-top: 0.6em;
         }
 
+        /* {tag phrase} words — read normally (braces stripped, see updateAction)
+           but tinted orange so the on-air talent can see it's wired to an API
+           trigger. An inline color (word-follow's active/passed states) always
+           wins over this class, so the flash-yellow-while-reading behavior is
+           unaffected; those call sites clear the inline color via
+           removeProperty('color') instead of forcing white, so a tag word
+           settles back to orange rather than white once read past. */
+        .tag-word {
+          color: #ff9500;
+        }
+
         .countdown-overlay {
           position: absolute;
           top: 0; left: 0; right: 0; bottom: 0;
@@ -233,16 +244,33 @@ export default class TeleprompterGraphic extends HTMLElement {
           return;
         }
 
-        const rawTokens = line.split(/(\s+)/);
-        rawTokens.forEach((token) => {
-          if (/\S/.test(token)) {
-            const cleanText = this.normalizeText(token);
-            this.scriptWords.push(cleanText);
-            html += `<span id="word-${wordCounter}" style="transition: color 0.3s;">${token}</span>`;
-            wordCounter++;
-          } else {
-            html += token;
-          }
+        // Split the line into alternating outside-tag / {tag phrase} segments
+        // so tag words render without the braces (mirrors main.py's
+        // _parse_script_vocabulary) and pick up the .tag-word highlight.
+        const tagRe = /\{([^{}]+)\}/g;
+        const segments = [];
+        let lastEnd = 0;
+        let tm;
+        while ((tm = tagRe.exec(line))) {
+          if (tm.index > lastEnd) segments.push({ text: line.slice(lastEnd, tm.index), isTag: false });
+          segments.push({ text: tm[1], isTag: true });
+          lastEnd = tagRe.lastIndex;
+        }
+        if (lastEnd < line.length) segments.push({ text: line.slice(lastEnd), isTag: false });
+
+        segments.forEach(({ text: segText, isTag }) => {
+          const rawTokens = segText.split(/(\s+)/);
+          rawTokens.forEach((token) => {
+            if (/\S/.test(token)) {
+              const cleanText = this.normalizeText(token);
+              this.scriptWords.push(cleanText);
+              const cls = isTag ? ' class="tag-word"' : '';
+              html += `<span id="word-${wordCounter}"${cls} style="transition: color 0.3s;">${token}</span>`;
+              wordCounter++;
+            } else {
+              html += token;
+            }
+          });
         });
         if (lineIdx < lines.length - 1) html += '<br>';
       });
@@ -343,7 +371,7 @@ export default class TeleprompterGraphic extends HTMLElement {
     this.voiceTrackingActive = false;
     if (this.recognition) this.recognition.stop();
     const words = this.shadowRoot.querySelectorAll('span[id^="word-"]');
-    words.forEach(w => w.style.color = '#ffffff');
+    words.forEach(w => w.style.removeProperty('color'));
     this.targetScroll = this.currentScroll;
   }
 
@@ -363,7 +391,7 @@ export default class TeleprompterGraphic extends HTMLElement {
   // break, then voice-jump to a story marker (jumpToStory) to get back live.
   goTop() {
     const oldWord = this.shadowRoot.getElementById(`word-${this.currentWordIndex}`);
-    if (oldWord) oldWord.style.color = '#ffffff';
+    if (oldWord) oldWord.style.removeProperty('color');
     this.currentWordIndex = 0;
     this.currentScroll = 0;
     this.targetScroll = 0;
@@ -381,7 +409,7 @@ export default class TeleprompterGraphic extends HTMLElement {
     const marker = this.storyMarkers.find(m => this.normalizeText(m.name) === key);
     if (!marker) return;
     const oldWord = this.shadowRoot.getElementById(`word-${this.currentWordIndex}`);
-    if (oldWord) oldWord.style.color = '#ffffff';
+    if (oldWord) oldWord.style.removeProperty('color');
     this.currentWordIndex = marker.wordIndex;
     const markerEl = this.shadowRoot.getElementById(marker.elementId);
     const content = this.shadowRoot.getElementById('content');
@@ -465,7 +493,7 @@ export default class TeleprompterGraphic extends HTMLElement {
     for (let i = this.currentWordIndex; i < searchLimit; i++) {
       if (this.scriptWords[i] === lastSpoken) {
         const oldWord = this.shadowRoot.getElementById(`word-${this.currentWordIndex}`);
-        if (oldWord) oldWord.style.color = '#ffffff';
+        if (oldWord) oldWord.style.removeProperty('color');
         this.currentWordIndex = i;
         const newWord = this.shadowRoot.getElementById(`word-${i}`);
         if (newWord) {
@@ -543,7 +571,7 @@ export default class TeleprompterGraphic extends HTMLElement {
     this.currentWordIndex = 0;
 
     const words = this.shadowRoot.querySelectorAll('span[id^="word-"]');
-    words.forEach(w => w.style.color = '#ffffff');
+    words.forEach(w => w.style.removeProperty('color'));
 
     const content = this.shadowRoot.getElementById('content');
     if (content) content.style.transform = `translateY(0px)`;

@@ -465,6 +465,19 @@ non-obvious properties are required for smooth motion on the captured MXL output
   spans, so it's never matched as spoken text. `jumpToStory()` scrolls to the marker element's
   own `offsetTop` (not the next word's), snapping `currentScroll` immediately since the rAF
   loop may not be running when the jump is triggered manually.
+- **API tags (`{tag phrase}`).** Unlike `[STORY: Name]`, a tag is **inline** within a line of
+  body copy and stays part of the read/spoken text — `updateAction` strips only the `{`/`}`
+  punctuation (keeping the enclosed words in `scriptWords`/`word-N` spans) so it renders and
+  tracks like normal copy. The tagged words get a `.tag-word` span class (orange, `#ff9500`) so
+  the on-air talent can see it's wired to a trigger; the word-follow highlighter's active/passed
+  states use inline `style.color`, which always wins over the class (flash yellow while being
+  read is unaffected), and the "passed" reset calls `removeProperty('color')` instead of forcing
+  white so a tag word settles back to orange rather than losing the highlight. Backend-side, each
+  unique tag found in `scriptText` (case-insensitive, first-seen casing wins) can have an API call
+  (method/URL/JSON body) attached via the UI or `POST /prompter-api/tags`; the call fires when the
+  presenter reads the phrase (grammar-recognized server-side, see Voice tracking below) or via the
+  manual **Test** button. Tag→call mappings are **not** persisted across scripts — they're cleared
+  and re-derived fresh every time `scriptText` changes, the same as story names.
 
 ### Control channel & API (OGraf control points)
 A `PrompterHub` keeps the set of connected `/prompter-ws` sockets, retains the latest
@@ -479,7 +492,9 @@ endpoints map 1:1 to `teleprompter.ograf.json`:
 | `POST` | `/prompter-api/update`  | `updateAction(data)` — any subset of `scriptText`, `scrollSpeed`, `mirrored`, `reverseScroll`, `enableVoiceTracking`, `voiceLanguage`, `fontSize`, `enableCountdown`, `showStatusBar`. A new `scriptText` is applied **live** (no pipeline restart): `updateAction` rebuilds the copy (parsing out `[STORY: Name]` markers, see above) and resets the prompter to a clean, **paused, scrolled-to-top** state (stops the scroll, cancels the countdown, resets the timer and `playStartTime` so the next `play` re-runs the countdown). Without this reset the container keeps the prior `translateY()` offset and `isPlaying` state, so a script loaded after `play` renders off-screen and looks like it never arrived. |
 | `POST` | `/prompter-api/play`    | `playAction` |
 | `POST` | `/prompter-api/stop`    | `stopAction` |
-| `POST` | `/prompter-api/action`  | `customAction` — body `{action: "pause"\|"resume"\|"speedUp"\|"speedDown"\|"jumpToStory", param?: string}`. `param` carries the story name for `jumpToStory`. |
+| `POST` | `/prompter-api/action`  | `customAction` — body `{action: "pause"\|"resume"\|"speedUp"\|"speedDown"\|"jumpToStory"\|"triggerTag", param?: string}`. `param` carries the story name for `jumpToStory`, the tag name for `triggerTag`. `triggerTag` raises (400 no URL configured / 502 the call itself failed, e.g. wrong host or connection refused) rather than swallowing the error, so the UI's Test button surfaces it in the normal error banner instead of silently no-op'ing — a real risk here since the backend making the call runs **inside its own container**, so a URL like `http://localhost:PORT/...` means "this container", not the host or a sibling container (use the sibling's Compose service name, or `host.docker.internal` for a host-side service — the voice-triggered path hits the same failure but only logs it, since there's no request to report to). |
+| `GET`  | `/prompter-api/tags`    | list of `{tag phrase}` triggers parsed from the current `scriptText`, each with its configured `{name, method, url, body}` (blank until set) |
+| `POST` | `/prompter-api/tags`    | attach/update a tag's API call — body `{name, method, url, body}`. 404s if `name` isn't a tag in the currently loaded script (reload the script first). Not routed through `/prompter-ws` — the backend calls out directly, see Voice tracking below. |
 | `WS`   | `/prompter-ws`          | the CEF host page connects here for commands, dictation transcripts, and grammar-recognizer voice commands (`{type:"voice_command"}`) |
 
 `enableVoiceTracking`/`voiceLanguage` in `/update` also toggle/configure the voice tracker.
@@ -501,32 +516,56 @@ headless CEF render** (no microphone device, no Google cloud speech backend). In
   (`en-US` → `/opt/vosk/en`, `fr-CA` → `/opt/vosk/fr`), reloads on language change, and only
   transcribes while voice tracking is enabled. Partial + final transcripts are broadcast as
   `{type:"transcript",text}` to the prompter page, which feeds them into `pushTranscript`.
-- **Two recognizers run on the same audio.** Besides the open-vocabulary dictation recognizer
-  above (drives word-follow scrolling), a second, **grammar-constrained** `KaldiRecognizer`
-  (`vosk_recognizer_new_grm`, i.e. `KaldiRecognizer(model, rate, grammar_json)`) is restricted
-  to a small phrase list: **one** fixed keyword phrase for the active language
-  (`_FIXED_COMMAND_PHRASES_BY_LANG`: `"go top"` for `en-US`, `"debut du texte"` for `fr-CA` —
-  only the active language's phrase is compiled in, since including the other language's words
-  would just make Vosk log an "Ignoring word missing in vocabulary" warning for every word not
-  in that lexicon) plus `"story <name>"` for every `[STORY: Name]` marker in the *currently
-  loaded* script. Open-vocabulary decoding across the full ~100k-word vocabulary is a coin flip
-  for short, out-of-sentence command phrases and arbitrary story titles — confirmed live via
-  logging: "go top" was misheard as "go up", and "two" was consistently transcribed as "too".
-  Constraining the decoder to only the phrases that are actually valid *right now* is
-  dramatically more reliable, and — critically for a newsroom prompter where every rundown has
-  different story titles — it needs **no code change** per script: `VoiceTracker.set_story_names()`
-  rebuilds the grammar automatically whenever `/prompter-api/update` receives a new `scriptText`
-  (`main.py` parses `[STORY: Name]` out of it with the same regex used client-side), and
-  `set_language()` rebuilds it again on a language switch so the right fixed phrase is always
-  the one compiled in. The grammar always includes `"[unk]"` so unrelated speech is rejected as
-  unknown instead of being force-matched to the nearest known phrase.
+- **Two recognizers run on the same audio, and both are grammar-constrained once a script is
+  loaded.** Open-vocabulary decoding across the full ~100k-word model vocabulary is a coin flip
+  for anything short or uncommon — confirmed live via logging: "go top" was misheard as "go up",
+  "two" was consistently transcribed as "too". Constraining a `KaldiRecognizer` to only the words
+  that can actually be valid *right now* (`vosk_recognizer_new_grm`, i.e.
+  `KaldiRecognizer(model, rate, grammar_json)`) is dramatically more reliable, and adapts with
+  **no code change** per script.
+  - The **dictation** recognizer (drives word-follow scrolling) is constrained to the current
+    script's own vocabulary: every word in `scriptText` longer than 3 letters, lowercased and
+    deduped (`VoiceTracker.set_script_vocabulary()`, rebuilt whenever `/prompter-api/update`
+    receives a new `scriptText`). The `>3`-letter cutoff mirrors the filter the frontend already
+    applies when matching spoken words to `scriptWords` (short words are ignored there anyway,
+    so including them in the grammar would only bloat it). Falls back to unconstrained
+    open-vocabulary decoding when no script has been loaded yet (empty vocabulary). Literal
+    `"[unk]"` tokens the grammar emits for out-of-script-vocabulary audio (ad-libs, corrections)
+    are stripped before broadcasting, so they never reach the frontend's word matcher.
+  - The **command** recognizer is restricted to a small phrase list: **one** fixed keyword phrase
+    for the active language (`_FIXED_COMMAND_PHRASES_BY_LANG`: `"go top"` for `en-US`,
+    `"debut du texte"` for `fr-CA` — only the active language's phrase is compiled in, since
+    including the other language's words would just make Vosk log an "Ignoring word missing in
+    vocabulary" warning for every word not in that lexicon), plus `"story <name>"` for every
+    `[STORY: Name]` marker, plus each `{tag phrase}` verbatim (bare, not prefixed — it's read
+    naturally in place, unlike a story jump command) — both for the *currently loaded* script.
+    `VoiceTracker.set_story_names()`/`set_api_tags()` rebuild the grammar whenever
+    `/prompter-api/update` receives a new `scriptText` (`main.py` parses `[STORY: Name]` and
+    `{tag}` out of it with the same regexes used client-side/for the vocabulary above), and
+    `set_language()` rebuilds it again on a language switch so the right fixed phrase is always
+    the one compiled in. The grammar always includes `"[unk]"` so unrelated speech is rejected as
+    unknown instead of being force-matched to the nearest known phrase.
+  - **Tag matching is substring, not whole-utterance equality** — the one place a `{tag}` isn't
+    treated like the other two commands. `"go top"` and `"story <name>"` are spoken as their own
+    isolated command utterance, so the endpointer's FINAL result *is* just that phrase and an
+    exact-equality check works. A `{tag}` is read in place inside a normal sentence, so the FINAL
+    result covers the whole sentence around it (every non-grammar word collapsed to `"[unk]"`).
+    `_emit_command` strips those `"[unk]"` tokens first (reusing `_strip_unk`) and then searches
+    for the tag phrase as a contiguous, space-padded run in what's left (`_find_tag_phrase`,
+    longest tag first in case one tag's words are a subset of another's) — matching the phrase
+    as recognized *within* the sentence rather than requiring the whole utterance to equal it.
 - A confident **final** result from the command recognizer is dispatched as
   `{type:"voice_command", command, param?}` — a distinct WS message from `{type:"transcript"}`
   — straight to `TeleprompterGraphic.applyVoiceCommand()`, bypassing the fuzzy client-side
-  `checkVoiceCommands()` text matching entirely for that hit. `checkVoiceCommands()` still runs
-  on every dictation transcript as a redundant fallback path (either recognizer firing is
-  enough to trigger the command); it is not a per-title special case, so it doesn't need to
-  "know" about story titles beyond what's already in `this.storyMarkers`.
+  `checkVoiceCommands()` text matching entirely for that hit, **except** for `triggerApiTag`
+  commands: those are intercepted in `main.py`'s `_handle_voice_command()` before reaching the
+  hub/WS at all, and fire the tag's configured HTTP call directly from the voice-tracker worker
+  thread (`_fire_api_tag_sync`) — the graphic never needs to know a tag fired.
+  `checkVoiceCommands()` still runs on every dictation transcript as a redundant fallback path
+  for `goTop`/`jumpToStory` (either recognizer firing is enough to trigger the command); it is
+  not a per-title special case, so it doesn't need to "know" about story titles beyond what's
+  already in `this.storyMarkers` (and it does not attempt tag triggers at all — those are
+  server-side only).
 
 ### Backend wiring (`gst_keyer.py`, `main.py`)
 - `gst_keyer.start_prompt(domain_path, audio_flow_uuid|None, W, H, num, den, html5_url,
@@ -558,6 +597,13 @@ headless CEF render** (no microphone device, no Google cloud speech backend). In
   of the pasted script on "Load Script" (client-side, mirroring the engine's own marker regex)
   rather than round-tripping through the one-directional `/prompter-ws` socket. No Key ON/OFF
   in this mode.
+- **API Tag Triggers.** Below the story-jump row, one `ApiTagRow` per `{tag}` found in the
+  script — method / URL / JSON-body inputs plus **Save** and **Test** buttons. Unlike story
+  names, tag configs are backend state (the voice recognizer fires them server-side, not through
+  the browser), so "Load Script" re-fetches `GET /prompter-api/tags` after posting the new
+  `scriptText` rather than deriving the list purely client-side. **Save** only enables once a
+  row is dirty and calls `POST /prompter-api/tags`; **Test** calls
+  `promActionParam("triggerTag", name)` and is disabled until a URL is set.
 
 ### Docker
 - A `vosk-models` stage downloads the small en-US and fr models into `/opt/vosk/{en,fr}` and

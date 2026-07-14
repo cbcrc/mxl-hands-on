@@ -14,16 +14,21 @@ gst_keyer._add_audio_branch).  Recognition runs on a dedicated worker thread so
 the GStreamer streaming thread is never blocked.
 
 Two Vosk recognizers run on the same audio:
-  - an open-vocabulary "dictation" recognizer that feeds the general
-    word-follow scroll tracking (unchanged from before).
+  - a "dictation" recognizer that feeds the general word-follow scroll
+    tracking. Once a script is loaded it is also grammar-constrained, to the
+    script's own vocabulary (see set_script_vocabulary) — the same
+    reliability win the command recognizer gets below, just scoped to
+    whatever is actually being read today instead of a fixed phrase list.
+    Falls back to open-vocabulary decoding when no script is loaded yet.
   - a grammar-constrained "command" recognizer restricted to a small phrase
-    list (the fixed keywords + "story <name>" for each marker in the
-    currently loaded script). Open-vocabulary decoding across a ~100k-word
-    vocabulary is a coin flip for short, out-of-sentence command phrases and
-    arbitrary story titles (confirmed live: "go top" -> "go up", "two" ->
-    "too"); constraining the decoder to the handful of phrases that are
-    actually valid right now is far more reliable, and it adapts automatically
-    to whatever story titles are in *today's* script without any code change.
+    list (the fixed keywords + "story <name>" for each marker, + each {tag}
+    phrase, in the currently loaded script). Open-vocabulary decoding across
+    a ~100k-word vocabulary is a coin flip for short, out-of-sentence command
+    phrases and arbitrary story titles (confirmed live: "go top" -> "go up",
+    "two" -> "too"); constraining the decoder to the handful of phrases that
+    are actually valid right now is far more reliable, and it adapts
+    automatically to whatever story titles/tags are in *today's* script
+    without any code change.
 """
 
 from __future__ import annotations
@@ -78,11 +83,14 @@ class VoiceTracker:
         self._model = None
         self._model_lang: Optional[str] = None
 
-        self._rec = None            # open-vocabulary dictation recognizer
+        self._rec = None            # dictation recognizer (grammar-constrained once a script loads)
         self._last_partial = ""
+        self._dictation_vocab: list[str] = []
 
         self._cmd_rec = None        # grammar-constrained command recognizer
         self._story_names: list[str] = []
+        self._tag_names: list[str] = []
+        self._tag_phrase_set: set[str] = set()
         self._grammar_phrases: list[str] = list(_FIXED_COMMAND_PHRASES_BY_LANG[self._lang])
         self._cmd_last_partial = ""
 
@@ -112,10 +120,39 @@ class VoiceTracker:
             self._story_names = list(names)
             self._rebuild_grammar_phrases_locked()
 
+    def set_api_tags(self, tag_names: list[str]) -> None:
+        """Rebuild the command grammar with the {tag} phrases in the current script.
+
+        Unlike story names, a tag phrase is not prefixed by a keyword — it's read
+        naturally as part of the line — so it's added to the grammar as a bare
+        phrase and matched verbatim in _emit_command.
+        """
+        with self._lock:
+            self._tag_names = list(tag_names)
+            self._tag_phrase_set = {n.strip().lower() for n in tag_names if n.strip()}
+            self._rebuild_grammar_phrases_locked()
+
+    def set_script_vocabulary(self, words: list[str]) -> None:
+        """Rebuild the dictation recognizer's grammar from the current script's own words.
+
+        Words of 3 letters or fewer are dropped — the frontend's word-follow
+        matcher already ignores them (see matchTranscriptToScript in
+        teleprompter.js), so including them here would only bloat the grammar.
+        """
+        with self._lock:
+            vocab = sorted({w.strip().lower() for w in words if len(w.strip()) > 3})
+            if vocab == self._dictation_vocab:
+                return
+            self._dictation_vocab = vocab
+            # Force the worker to rebuild the dictation recognizer with the new vocabulary.
+            self._rec = None
+            self._last_partial = ""
+
     def _rebuild_grammar_phrases_locked(self) -> None:
-        """Recompute self._grammar_phrases from language + story names. Caller must hold self._lock."""
+        """Recompute self._grammar_phrases from language + story names + tags. Caller must hold self._lock."""
         phrases = list(_FIXED_COMMAND_PHRASES_BY_LANG.get(self._lang, []))
         phrases += [f"story {n.strip().lower()}" for n in self._story_names if n.strip()]
+        phrases += sorted(self._tag_phrase_set)
         if phrases == self._grammar_phrases:
             return
         self._grammar_phrases = phrases
@@ -152,6 +189,9 @@ class VoiceTracker:
             self._last_partial = ""
             self._cmd_last_partial = ""
             self._story_names = []
+            self._tag_names = []
+            self._tag_phrase_set = set()
+            self._dictation_vocab = []
             self._grammar_phrases = list(_FIXED_COMMAND_PHRASES_BY_LANG.get(self._lang, []))
 
     def feed(self, pcm: bytes) -> None:
@@ -211,9 +251,18 @@ class VoiceTracker:
             if self._rec is not None:
                 return True
             model = self._model
+            vocab = list(self._dictation_vocab)
 
         from vosk import KaldiRecognizer
-        rec = KaldiRecognizer(model, _SAMPLE_RATE)
+        if vocab:
+            # "[unk]" is required for the same reason as the command recognizer
+            # below — without it, every word outside today's script vocabulary
+            # (ad-libs, corrections) would get force-matched to the closest
+            # in-vocabulary word instead of being rejected.
+            grammar = json.dumps(vocab + ["[unk]"])
+            rec = KaldiRecognizer(model, _SAMPLE_RATE, grammar)
+        else:
+            rec = KaldiRecognizer(model, _SAMPLE_RATE)
         rec.SetWords(False)
         with self._lock:
             self._rec = rec
@@ -265,19 +314,27 @@ class VoiceTracker:
             return
         try:
             if rec.AcceptWaveform(pcm):
-                text = json.loads(rec.Result()).get("text", "")
+                text = self._strip_unk(json.loads(rec.Result()).get("text", ""))
                 if text:
                     log.info("Vosk FINAL: %r", text)
                     self._emit(text)
                 self._last_partial = ""
             else:
-                partial = json.loads(rec.PartialResult()).get("partial", "")
+                partial = self._strip_unk(json.loads(rec.PartialResult()).get("partial", ""))
                 if partial and partial != self._last_partial:
                     self._last_partial = partial
                     log.info("Vosk partial: %r", partial)
                     self._emit(partial)
         except Exception:
             log.exception("Vosk dictation recognition failed")
+
+    @staticmethod
+    def _strip_unk(text: str) -> str:
+        """Drop literal "[unk]" tokens the grammar-constrained recognizer emits for
+        out-of-vocabulary audio — they're noise to the frontend's word matcher."""
+        if "[unk]" not in text:
+            return text
+        return " ".join(w for w in text.split() if w != "[unk]")
 
     def _process_command(self, pcm: bytes) -> None:
         rec = self._cmd_rec
@@ -311,8 +368,26 @@ class VoiceTracker:
         elif norm.startswith("story "):
             cmd = {"command": "jumpToStory", "param": norm[len("story "):].strip()}
         else:
-            return
+            # Unlike "go top"/"story <name>", which are spoken as their own
+            # isolated command utterance, a {tag} is read in place inside a
+            # normal sentence — the endpointer's FINAL result covers the whole
+            # utterance around it, with every non-grammar word collapsed to
+            # "[unk]". Stripping those leaves just the words that were
+            # actually recognized, in order, so the tag phrase can still be
+            # found as a contiguous run rather than needing to be the *entire*
+            # utterance verbatim.
+            tag = self._find_tag_phrase(self._strip_unk(norm))
+            if tag is None:
+                return
+            cmd = {"command": "triggerApiTag", "param": tag}
         try:
             self._on_command(cmd)
         except Exception:
             log.exception("voice command dispatch failed")
+
+    def _find_tag_phrase(self, text: str) -> Optional[str]:
+        padded = f" {text} "
+        for tag in sorted(self._tag_phrase_set, key=len, reverse=True):
+            if f" {tag} " in padded:
+                return tag
+        return None

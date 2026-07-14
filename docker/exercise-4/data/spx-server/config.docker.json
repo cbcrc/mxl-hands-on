@@ -22,6 +22,7 @@
     "renderer": "normal",
     "autoplayLocalRenderer": true,
     "recents": [
+      "test/test",
       "MXL test/test",
       "MyFirstOgrafProject/MyFirstOgrafRundown"
     ]
@@ -47,5 +48,5 @@
   },
   "warning": "Modifications done in the SPX will overwrite this file.",
   "copyright": "(c) 2020- SPX Graphics (https://spx.graphics)",
-  "updated": "2026-05-27T19:04:06.290Z"
+  "updated": "2026-07-14T11:18:40.344Z"
 }
