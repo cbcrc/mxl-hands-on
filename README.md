@@ -24,7 +24,6 @@ As the media industry transitions from traditional hardware-based setups to virt
 
 ## TODO
 
-* Upgrade images to latest MXL version
 * Create a git pipeline that will automatically update the images to the latest MXL code
 
 ## Authors
