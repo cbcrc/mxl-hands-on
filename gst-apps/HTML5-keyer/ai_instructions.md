@@ -434,6 +434,13 @@ non-obvious properties are required for smooth motion on the captured MXL output
 - **Velocity-capped follow.** `matchTranscriptToScript` moves the target in discrete, sometimes
   multi-word leaps (a Vosk final can advance several words at once). The per-frame follow step is
   clamped to `maxFollowPx` so a big leap scrolls smoothly to the word instead of snapping forward.
+- **Context-gated far jumps.** The word-follow search scans the next 15 script words for the
+  last spoken word, nearest match first. A single recognized word only justifies a small advance
+  (≤ 3 positions); a farther jump additionally requires the *previous* spoken word to match the
+  script word preceding the candidate (skipping ≤3-letter words, which the spoken stream filters
+  out). Rationale: the grammar-constrained dictation recognizer maps near-miss audio onto script
+  words, so before this gate a lone false detection — or a re-hear of a word that appears twice
+  in the window — would yank the prompter ahead to the wrong (often second) instance.
 - **Reverse scroll.** `reverseScroll` (bool) flips the sign of the non-voice-tracking
   auto-scroll step (`animateScroll`'s `dir = reverseDirection ? 1 : -1`), so the same speed
   scrolls backward instead of forward. The on-screen `.cue-marker` triangle gets a `.reversed`

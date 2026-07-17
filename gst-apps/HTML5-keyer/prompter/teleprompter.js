@@ -488,21 +488,42 @@ export default class TeleprompterGraphic extends HTMLElement {
     if (spokenWords.length === 0) return;
 
     const lastSpoken = spokenWords[spokenWords.length - 1];
+    const prevSpoken = spokenWords.length > 1 ? spokenWords[spokenWords.length - 2] : null;
     const searchLimit = Math.min(this.scriptWords.length, this.currentWordIndex + 15);
 
+    // A single recognized word is enough evidence for a small advance (normal
+    // reading cadence), but not for a far jump: the grammar-constrained
+    // recognizer maps near-miss audio onto script words, so one isolated hit
+    // used to yank the prompter forward — including to the *second* instance
+    // of a word that appears twice in the window. A jump beyond NEAR_JUMP
+    // words now also requires the previously spoken word to match the script
+    // word just before the candidate, so duplicates are disambiguated by
+    // their context and a lone false detection can't move the target far.
+    const NEAR_JUMP = 3;
     for (let i = this.currentWordIndex; i < searchLimit; i++) {
-      if (this.scriptWords[i] === lastSpoken) {
-        const oldWord = this.shadowRoot.getElementById(`word-${this.currentWordIndex}`);
-        if (oldWord) oldWord.style.removeProperty('color');
-        this.currentWordIndex = i;
-        const newWord = this.shadowRoot.getElementById(`word-${i}`);
-        if (newWord) {
-           newWord.style.color = '#ffff00';
-           this.targetScroll = -newWord.offsetTop;
-        }
-        break;
+      if (this.scriptWords[i] !== lastSpoken) continue;
+      if (i - this.currentWordIndex > NEAR_JUMP && !this.matchesPrecedingWord(i, prevSpoken)) continue;
+      const oldWord = this.shadowRoot.getElementById(`word-${this.currentWordIndex}`);
+      if (oldWord) oldWord.style.removeProperty('color');
+      this.currentWordIndex = i;
+      const newWord = this.shadowRoot.getElementById(`word-${i}`);
+      if (newWord) {
+         newWord.style.color = '#ffff00';
+         this.targetScroll = -newWord.offsetTop;
       }
+      break;
     }
+  }
+
+  // True when prevSpoken matches the script word preceding index i. Words of
+  // 3 letters or fewer are skipped: they are filtered out of the spoken
+  // stream above, so the previous *spoken* word corresponds to the nearest
+  // preceding *long* script word, not necessarily scriptWords[i - 1].
+  matchesPrecedingWord(i, prevSpoken) {
+    if (!prevSpoken) return false;
+    let j = i - 1;
+    while (j >= 0 && this.scriptWords[j].length <= 3) j--;
+    return j >= 0 && this.scriptWords[j] === prevSpoken;
   }
 
   // --- COUNTDOWN LOGIC --- //
