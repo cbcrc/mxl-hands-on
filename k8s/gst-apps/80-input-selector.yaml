@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: input-selector
+  namespace: gst-apps
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: input-selector
+  template:
+    metadata:
+      labels:
+        app: input-selector
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: ${MXL_NODE}
+      initContainers:
+      - name: seed-domain
+        image: busybox:1.36
+        command:
+          - sh
+          - -c
+          - |
+            set -e
+            cp /seed/domain_def.json /mxl-domain/domain_def.json
+            chmod a+rwX /mxl-domain
+            chmod a+rw /mxl-domain/domain_def.json
+        volumeMounts:
+          - name: mxl-domain
+            mountPath: /mxl-domain
+          - name: seed
+            mountPath: /seed
+      containers:
+        - name: app
+          image: ghcr.io/cbcrc/input-selector:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 9600
+          env:
+            - name: MXL_DOMAIN
+              value: /mxl-domain
+          volumeMounts:
+            - name: mxl-domain
+              mountPath: /mxl-domain
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+      volumes:
+        - name: mxl-domain
+          persistentVolumeClaim:
+            claimName: mxl-domain
+        - name: seed
+          configMap:
+            name: mxl-domain-def
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: input-selector
+  namespace: gst-apps
+  annotations:
+    metallb.universe.tf/allow-shared-ip: gst-apps
+    metallb.universe.tf/loadBalancerIPs: ${MXL_LB_IP_APPS}
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Cluster
+  selector:
+    app: input-selector
+  ports:
+    - name: http
+      port: 9604
+      targetPort: 9600
+      protocol: TCP
+          

@@ -1,0 +1,69 @@
+# SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mediamtx
+  namespace: gst-apps
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mediamtx
+  template:
+    metadata:
+      labels:
+        app: mediamtx
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: ${MXL_NODE}
+      containers:
+        - name: mediamtx
+          image: bluenviron/mediamtx:latest
+          imagePullPolicy: Always
+          ports:
+            - name: webrtc
+              containerPort: 8889
+            - name: rtsp
+              containerPort: 8554
+            - name: ice
+              containerPort: 8189
+              protocol: UDP
+          env:
+            - name: MTX_WEBRTCADDITIONALHOSTS
+              value: "${MXL_LB_IP_APPS}"
+            - name: MTX_WEBRTCIPSFROMINTERFACES
+              value: "no"
+            - name: MTX_RTSPTRANSPORTS
+              value: "tcp"
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mediamtx
+  namespace: gst-apps
+  annotations:
+    metallb.universe.tf/allow-shared-ip: gst-apps
+    metallb.universe.tf/loadBalancerIPs: ${MXL_LB_IP_APPS}
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Cluster
+  selector:
+    app: mediamtx
+  ports:
+    - name: webrtc
+      port: 8889
+      targetPort: 8889
+      protocol: TCP
+    - name: rtsp
+      port: 8554
+      targetPort: 8554
+      protocol: TCP
+    - name: ice
+      port: 8189
+      targetPort: 8189
+      protocol: UDP

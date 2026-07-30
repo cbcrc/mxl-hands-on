@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gst-apps-mxl-domain
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes: [ReadWriteMany]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: mxl-domain
+  volumeMode: Filesystem
+  hostPath:
+    path: /dev/shm/mxl/gst-apps
+    type: DirectoryOrCreate
+  claimRef:
+    namespace: gst-apps
+    name: mxl-domain
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+          - key: kubernetes.io/hostname
+            operator: In
+            values: [${MXL_NODE}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mxl-domain
+  namespace: gst-apps
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: mxl-domain
+  volumeName: gst-apps-mxl-domain
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mxl-domain-def
+  namespace: gst-apps
+data:
+  domain_def.json: |
+    {
+      "id": "21ef9b5c-98c1-5f98-9def-1d61ee9a4fdb",
+      "label": "gst-apps-domain",
+      "description": "mxl-domain-gst-apps-namespace"
+    }
