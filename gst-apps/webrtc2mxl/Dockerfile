@@ -14,7 +14,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # Stage 1 – Build React + Vite frontend
 # ─────────────────────────────────────────────────────────────────────────────
-FROM node:18-bullseye-slim AS frontend-builder
+FROM node:22-bookworm-slim AS frontend-builder
 
 WORKDIR /build
 

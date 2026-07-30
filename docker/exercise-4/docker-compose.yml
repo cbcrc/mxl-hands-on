@@ -157,7 +157,8 @@ services:
       - MXL_DOMAIN=/mxl-domain
       # GStreamer pulls the published stream from mediamtx via WHEP.
       - MEDIAMTX_WHEP_URL=http://host.docker.internal:8889/webrtc2mxl/whep
-      # Returned to the browser by /config (the browser substitutes its own hostname).
+      # Returned to the browser by /config. `localhost` is a local alias, so the
+      # browser substitutes its own hostname; a routable host would be used as-is.
       - MEDIAMTX_WHIP_URL=http://localhost:8889/webrtc2mxl/whip
     extra_hosts:
       - "host.docker.internal:host-gateway"

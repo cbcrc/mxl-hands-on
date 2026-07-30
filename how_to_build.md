@@ -163,6 +163,37 @@ If you encounter build issues:
 2. Check logs for any compilation errors
 3. Verify Docker BuildX is configured correctly with `docker buildx ls`
 
+### `npm run build` fails with a GLIBC error
+
+Symptom, in the `frontend-builder` stage of any `gst-apps` image:
+
+```
+Error: Cannot find module @rollup/rollup-linux-x64-gnu
+  [cause]: /lib/x86_64-linux-gnu/libc.so.6: version `GLIBC_2.32' not found
+```
+
+The `gst-apps` frontends have **no committed `package-lock.json`**, so `npm install` re-resolves
+`vite: ^5.0.0` — and transitively the newest Rollup — on every build with a cold cache. Rollup
+ships prebuilt native binaries and raises their glibc floor without documenting it: 4.62.3
+(2026-07-26) jumped from requiring `GLIBC_2.14` to `GLIBC_2.34`, which broke the old
+`node:18-bullseye-slim` builder (glibc 2.31). The builders are now `node:22-bookworm-slim`
+(glibc 2.36), which has headroom.
+
+Two things to know when this recurs:
+
+- A **warm cache hides it.** Editing frontend source does not invalidate the `npm install` layer,
+  so the same tree can build fine for weeks and then fail on the first cold build. If a build
+  suddenly fails and nothing relevant changed, suspect a floated dependency, not your edit.
+- The durable fix is to commit a `package-lock.json` per frontend and switch the Dockerfiles from
+  `npm install` to `npm ci`. Until then, builds are not reproducible and this can happen again.
+
+To check what a given Rollup release actually requires:
+
+```sh
+curl -sL "https://registry.npmjs.org/@rollup/rollup-linux-x64-gnu/-/rollup-linux-x64-gnu-<version>.tgz" \
+  | tar xz -O --wildcards '*/*.node' | strings | grep -o 'GLIBC_2\.[0-9]*' | sort -u -t. -k2 -n | tail -1
+```
+
 ## Notes
 
 - Build artifacts are stored in `dmf-mxl/build/` directory

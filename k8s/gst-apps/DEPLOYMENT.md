@@ -62,6 +62,13 @@ This is deliberate — GPL codecs are kept out of the published images. It means
 outbound internet **every time they start**, and their first start is slow. Verified working
 in this cluster.
 
+**`input-selector` carries `MAX_INPUTS: "3"` explicitly.** The Rust backend defaults to 3
+(`gst-apps/input-selector/backend-rs/src/api.rs:51-55`) and so does the frontend, so omitting it
+happens to behave correctly — but it left the manifest silently diverging from
+`docker-compose.yml`, which passes `MAX_INPUTS=${INPUT_SELECTOR_MAX_INPUTS:-3}`. It is set
+explicitly so the knob is where an operator looks for it. Values below 1 or unparseable are
+silently ignored and fall back to 3; there is no upper bound.
+
 **No `hostPort`, no `hostNetwork`.** Compose runs MediaMTX with `network_mode: host` so ICE
 candidates carry a real host IP. The Kubernetes equivalent is `MTX_WEBRTCADDITIONALHOSTS`,
 which tells MediaMTX what address to advertise while it sits behind a normal Service. Using
@@ -313,13 +320,24 @@ Easiest workaround, no TLS needed:
 kubectl port-forward deploy/webrtc2mxl 9606:9600
 ```
 
-then open **http://localhost:9606**, which counts as a secure context. Note the browser will
-then also substitute `localhost` for the MediaMTX host (see "Known issues"), so MediaMTX must
-be reachable at `localhost:8889` too — run a second port-forward alongside it:
+then open **http://localhost:9606**, which counts as a secure context.
+
+**This changed with the item 1 fix in "Known issues".** The page is served from `localhost`, but
+the WHIP host now comes from `MEDIAMTX_WHIP_URL` in the manifest, which is
+`${MXL_LB_IP_APPS}:8889` — a real address, so it is honoured instead of being rewritten to
+`localhost`. On a machine that can reach the MetalLB address, the single port-forward above is
+now enough and MediaMTX needs no port-forward at all.
+
+If you are working from somewhere that *cannot* reach `${MXL_LB_IP_APPS}`, point the app at a local
+alias so the substitution kicks back in, and forward MediaMTX too:
 
 ```sh
+kubectl set env deploy/webrtc2mxl MEDIAMTX_WHIP_URL=http://localhost:8889/webrtc2mxl/whip
 kubectl port-forward deploy/mediamtx 8889:8889
 ```
+
+Undo it afterwards with `kubectl set env deploy/webrtc2mxl MEDIAMTX_WHIP_URL-`, or re-apply the
+manifest — otherwise every other user of the deployment is left pointing at their own machine.
 
 For a permanent fix, put the app behind the cluster's Traefik ingress with TLS (`traefik`
 ingressClass, LB at `…193`). That is the only way lab users get microphone access
@@ -421,22 +439,32 @@ tmpfs — costs nothing and vanishes on reboot.
 
 ## Known issues and follow-ups
 
-**1. `App.jsx` overrides the configured MediaMTX host.** In
-`gst-apps/mxl2webrtc/frontend/src/App.jsx:312`:
+**1. `App.jsx` overriding the configured MediaMTX host — FIXED (2026-07-30).** Both frontends
+used to discard the hostname from `MEDIAMTX_WEBRTC_URL` / `MEDIAMTX_WHIP_URL` and substitute
+`window.location.hostname`, keeping only scheme and port. That is free in Compose, where
+everything is on one host, but in Kubernetes it forced **MediaMTX onto the same address as the
+app UIs** — it could not have its own IP or its own `externalTrafficPolicy`.
+
+They now substitute only when the configured hostname is an alias that cannot mean anything but
+the local machine:
 
 ```js
-setMediamtxUrl(`${cfg.protocol}//${window.location.hostname}:${cfg.port || "8889"}`);
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal"]);
 ```
 
-The frontend discards the hostname from `MEDIAMTX_WEBRTC_URL` and substitutes
-`window.location.hostname`, keeping only scheme and port. `webrtc2mxl` does the same with
-`MEDIAMTX_WHIP_URL`. This is free in Compose, where everything is on one host, but in
-Kubernetes it forces **MediaMTX onto the same address as the app UIs** — it cannot have its own
-IP or its own `externalTrafficPolicy`.
+Anything else is honoured as-is via `cfg.origin`. See
+`gst-apps/mxl2webrtc/frontend/src/App.jsx:311` and
+`gst-apps/webrtc2mxl/frontend/src/App.jsx:251`. Compose is unaffected — its shipped defaults are
+all local aliases, so it takes the same branch as before. The cluster manifests already set real
+addresses, so those are now used verbatim. Note `cfg.origin` **drops a default port**, which is
+what makes a future `https://…` behind Traefik work — but it also means a configured URL must
+carry `:8889` explicitly. The missing port in `95-webrtc2mxl.yaml` was masked by the old
+`cfg.port || "8889"` fallback and is now fixed.
 
-Fix: honour the configured hostname when one is set, falling back to
-`window.location.hostname` only when it isn't. Small change, and it would unblock item 2.
-Raise with whoever owns `gst-apps`.
+Requires a rebuild and push of the `mxl2webrtc` and `webrtc2mxl` images — the Vite bundles are
+baked in at image build time (see `how_to_build.md` Step 4).
+
+This unblocks item 2, which still waits on item 3.
 
 **2. External traffic enters on an arbitrary node and is SNAT'd cross-node.** With
 `externalTrafficPolicy: Cluster`, all five nodes advertise `.199` over BGP and the switch's
@@ -450,7 +478,10 @@ depends on the health of whichever unrelated node the flow hashes to.** If glitc
 and looks random, this is why.
 
 `externalTrafficPolicy: Local` would fix it, but MetalLB refuses a shared IP unless all
-services are `Cluster`. Escaping that needs item 1 first, so MediaMTX can hold its own IP.
+services are `Cluster`. Item 1 is now fixed, so MediaMTX *can* hold its own address — the
+remaining blocker is item 3: a second address out of the contested `upp-services-pool-lab` is
+exactly what was invalidated mid-session during the rollout. Do this once the dedicated pool
+exists.
 
 **3. Ask for a dedicated `IPAddressPool`.** `upp-services-pool-lab` is shared and other teams
 claim addresses continuously — `.200`, `.201` and the `artisto-002` namespace all appeared

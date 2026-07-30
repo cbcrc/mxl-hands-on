@@ -4,6 +4,10 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 
 const API = "";
 
+// Hostnames that only ever mean "this machine": the configured value cannot be
+// reached from a remote browser, so fall back to the browser's own hostname.
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal"]);
+
 // ── Styles ──────────────────────────────────────────────────────────────────
 
 const S = {
@@ -246,10 +250,16 @@ export default function App() {
     fetch(`${API}/config`)
       .then(r => r.json())
       .then(d => {
-        // Keep the path/port from config but substitute the browser's own
-        // hostname, so the WHIP URL works locally or from a remote machine.
+        // Honour the configured hostname when it names a real host.  Only when
+        // it is a local alias do we keep the path/port and substitute the
+        // browser's own hostname, so the WHIP URL still works locally or from a
+        // remote machine.
         const cfg = new URL(d.mediamtx_whip_url);
-        setWhipUrl(`${cfg.protocol}//${window.location.hostname}:${cfg.port || "8889"}${cfg.pathname}`);
+        setWhipUrl(
+          LOCAL_HOSTS.has(cfg.hostname)
+            ? `${cfg.protocol}//${window.location.hostname}:${cfg.port || "8889"}${cfg.pathname}`
+            : `${cfg.origin}${cfg.pathname}`
+        );
       })
       .catch(() => {});
     fetch(`${API}/domains`)

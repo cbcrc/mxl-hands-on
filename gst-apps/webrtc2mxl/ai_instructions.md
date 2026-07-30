@@ -89,8 +89,12 @@ select from existing ones — domain selection only needs the `domain_def.json` 
     via `extra_hosts: host.docker.internal:host-gateway`.
   - The browser publishes to MediaMTX WHIP at `http://<host>:8889/webrtc2mxl/whip`. The backend
     `/config` endpoint returns `MEDIAMTX_WHIP_URL` (`http://localhost:8889/webrtc2mxl/whip`); the
-    **frontend substitutes its own `window.location.hostname`** (keeping the port) so it works
-    for both local and remote browsers.
+    **frontend honours that hostname when it names a real host**, and substitutes its own
+    `window.location.hostname` (keeping the port and path) only when the configured hostname is
+    a local alias — `localhost`, `127.0.0.1`, `0.0.0.0`, `host.docker.internal`. Under compose
+    the default is `localhost`, so it takes the substitution branch and works for both local and
+    remote browsers; a deployment that configures a routable address gets that address used
+    verbatim.
 - **Mode:** audio-only. A start with no microphone selected must not be startable.
 
 ## WHEP-client signalling (the one genuinely new mechanism)
@@ -348,7 +352,8 @@ Initialize a React 18 + Vite 5 project in `frontend/`.
   2. Create `RTCPeerConnection({ iceServers: [] })`, `addTrack` the audio track (send-only),
      `createOffer`, `setLocalDescription`, wait for ICE gathering (or ~5 s timeout).
   3. **Publish first:** POST the offer SDP as `application/sdp` to
-     `{whipBase-with-window.location.hostname}` (from `GET /config`); `setRemoteDescription` with
+     `whipUrl` (from `GET /config`, hostname-substituted only for local aliases);
+     `setRemoteDescription` with
      the 201 answer. Keep the returned `Location` resource URL for teardown.
   4. **Then** `POST /pipeline/start` with `{domain_path, grouphint, label, description}` so the backend's WHEP pull
      finds a live publisher (its retry covers any residual race).
