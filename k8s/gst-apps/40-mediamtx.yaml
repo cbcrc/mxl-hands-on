@@ -31,7 +31,7 @@ spec:
               protocol: UDP
           env:
             - name: MTX_WEBRTCADDITIONALHOSTS
-              value: "${MXL_LB_IP_APPS}"
+              value: "${MXL_LB_IP_MEDIAMTX}"
             - name: MTX_WEBRTCIPSFROMINTERFACES
               value: "no"
             - name: MTX_RTSPTRANSPORTS
@@ -47,11 +47,12 @@ metadata:
   name: mediamtx
   namespace: gst-apps
   annotations:
-    metallb.universe.tf/allow-shared-ip: gst-apps
-    metallb.universe.tf/loadBalancerIPs: ${MXL_LB_IP_APPS}
+    metallb.universe.tf/loadBalancerIPs: ${MXL_LB_IP_MEDIAMTX}
 spec:
   type: LoadBalancer
-  externalTrafficPolicy: Cluster
+  # Own address, so no allow-shared-ip and no forced `Cluster`. `Local` keeps
+  # media on ${MXL_NODE} instead of hashing to a random node and SNAT'ing back.
+  externalTrafficPolicy: Local
   selector:
     app: mediamtx
   ports:

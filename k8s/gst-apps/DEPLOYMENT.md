@@ -20,7 +20,7 @@ Deployed and verified working in namespace `gst-apps`, all pods pinned to **`${M
 | hls2mxl | `70-hls2mxl.yaml` | http://${MXL_LB_IP_APPS}:9603 | up |
 | input-selector | `80-input-selector.yaml` | http://${MXL_LB_IP_APPS}:9604 | up |
 | mxl-info-gui | `20-mxl-info-gui.yaml` | http://${MXL_LB_IP_APPS}:9699 | lists domain + flows |
-| mediamtx | `40-mediamtx.yaml` | http://${MXL_LB_IP_APPS}:8889 | relays WHIP→WHEP |
+| mediamtx | `40-mediamtx.yaml` | http://${MXL_LB_IP_MEDIAMTX}:8889 | relays WHIP→WHEP |
 
 Supporting objects: `00-namespace.yaml`, `10-domain.yaml` (PV + PVC + ConfigMap).
 
@@ -75,9 +75,9 @@ which tells MediaMTX what address to advertise while it sits behind a normal Ser
 `hostPort` instead would collide with the MediaMTX pods already running in `mxl-test` and
 `mxl-testbench` — one of those has been stuck `Pending` for hours for exactly that reason.
 
-**Exposure: one shared MetalLB IP, `${MXL_LB_IP_APPS}`, with the compose port numbers preserved.**
-Every app listens on 9600 inside its container; the Service maps the familiar port to it. All
-services carry:
+**Exposure: two MetalLB addresses.** The eight app UIs share `${MXL_LB_IP_APPS}` with the compose port
+numbers preserved — every app listens on 9600 inside its container and the Service maps the
+familiar port to it. They all carry:
 
 ```yaml
   annotations:
@@ -87,9 +87,29 @@ spec:
   externalTrafficPolicy: Cluster
 ```
 
-`externalTrafficPolicy: Cluster` is **required** for the shared IP — MetalLB only shares an
-address when all services are `Cluster` or all target the same pods. Do not set `Local`; see
-"Known issues".
+`externalTrafficPolicy: Cluster` is **required** for a shared IP — MetalLB only shares an address
+when all services are `Cluster` or all target the same pods. Do not set `Local` on these.
+
+**MediaMTX is the exception: it holds `${MXL_LB_IP_MEDIAMTX}` alone, with `externalTrafficPolicy: Local`.**
+It is the only service carrying media rather than a web UI, and `Cluster` costs it a cross-node
+SNAT hop on every packet — see the resolved item 2 in "Known issues" for the full reasoning and
+the tradeoff this accepts. Because it no longer shares, it has no `allow-shared-ip` key:
+
+```yaml
+  annotations:
+    metallb.universe.tf/loadBalancerIPs: ${MXL_LB_IP_MEDIAMTX}
+spec:
+  externalTrafficPolicy: Local
+```
+
+Do not add `metallb.universe.tf/address-pool` alongside it — `loadBalancerIPs` already pins the
+address and MetalLB infers the pool, so the annotation does nothing except emit a second
+`deprecatedAnnotation` warning into `kubectl describe`.
+
+Both browser-facing MediaMTX URLs (`MEDIAMTX_WEBRTC_URL` in `50-mxl2webrtc.yaml`,
+`MEDIAMTX_WHIP_URL` in `95-webrtc2mxl.yaml`) must therefore name `${MXL_LB_IP_MEDIAMTX}:8889`, **with the
+port explicit** — the frontends build the address from `cfg.origin`, which drops a default port.
+The in-cluster URLs are unaffected; they use Service DNS.
 
 ---
 
@@ -265,7 +285,7 @@ spec:
             - name: MEDIAMTX_WHEP_URL
               value: "http://mediamtx:8889/webrtc2mxl/whep"
             - name: MEDIAMTX_WHIP_URL
-              value: "http://${MXL_LB_IP_APPS}:8889/webrtc2mxl/whip"
+              value: "http://${MXL_LB_IP_MEDIAMTX}:8889/webrtc2mxl/whip"
           volumeMounts:
             - name: mxl-domain
               mountPath: /mxl-domain
@@ -308,28 +328,53 @@ spec:
   Must be Service DNS: `http://mediamtx:8889/...`
 - `MEDIAMTX_WHIP_URL` — handed to the **browser** to publish to. Must be externally routable.
 
-### Expect the microphone to be blocked
+### The microphone needs a secure context — pick a workaround
 
-This app is the one that needs `getUserMedia`, and **Chrome only grants microphone access in a
-secure context** — HTTPS, or `localhost`. Loading it over `http://${MXL_LB_IP_APPS}:9606` will fail
-with a permissions error that looks like a deployment bug but isn't.
+This is the only app that calls `getUserMedia`, and **browsers only expose microphones in a secure
+context** — HTTPS, or `localhost`. Over `http://${MXL_LB_IP_APPS}:9606` the browser does not define
+`navigator.mediaDevices` *at all*, so `loadMics()` returns immediately
+(`gst-apps/webrtc2mxl/frontend/src/App.jsx:238`) and the permission-priming call at `:273` throws.
 
-Easiest workaround, no TLS needed:
+**The symptom is an empty microphone list, not a permission prompt.** That is why it reads like a
+deployment bug. It isn't one, and nothing in the manifests can fix it.
+
+Both workarounds below are per-user. **Neither can be deployed cluster-wide**, and it is worth
+being clear why: `kubectl port-forward` is a client-side tunnel whose entire value is producing a
+`localhost` origin *on the viewer's own machine*. Nothing running in the cluster can do that for
+somebody else's browser, and the tunnel dies whenever the pod restarts. The only mechanism that
+would work for everyone is HTTPS — see item 8 in "Known issues" for why that is currently
+unavailable here.
+
+**Workaround A — tell Chrome to trust the origin.** No `kubectl` needed; persists per browser
+profile. Chrome/Edge only. Open `chrome://flags/#unsafely-treat-insecure-origin-as-secure`, set it
+to *Enabled*, put both origins in the box, and relaunch:
+
+```
+http://${MXL_LB_IP_APPS}:9606,http://${MXL_LB_IP_MEDIAMTX}:8889
+```
+
+MediaMTX's origin is in that list because flagging the page origin as trustworthy also brings the
+page under Chrome's mixed-content rules, which would otherwise block the plain-HTTP WHIP POST.
+Believed necessary rather than confirmed — it costs nothing to include, and if it *is* required
+its absence is a confusing silent failure.
+
+**Workaround B — port-forward.** Works in any browser; `localhost` is a secure context by
+definition:
 
 ```sh
 kubectl port-forward deploy/webrtc2mxl 9606:9600
 ```
 
-then open **http://localhost:9606**, which counts as a secure context.
+then open **http://localhost:9606**.
 
-**This changed with the item 1 fix in "Known issues".** The page is served from `localhost`, but
-the WHIP host now comes from `MEDIAMTX_WHIP_URL` in the manifest, which is
-`${MXL_LB_IP_APPS}:8889` — a real address, so it is honoured instead of being rewritten to
-`localhost`. On a machine that can reach the MetalLB address, the single port-forward above is
-now enough and MediaMTX needs no port-forward at all.
+**This got simpler with the item 1 fix in "Known issues".** The page is served from `localhost`,
+but the WHIP host now comes from `MEDIAMTX_WHIP_URL` in the manifest, which is
+`${MXL_LB_IP_MEDIAMTX}:8889` — a real address, so it is honoured instead of being rewritten to
+`localhost`. On a machine that can reach the MetalLB address, that single port-forward is enough
+and MediaMTX needs none.
 
-If you are working from somewhere that *cannot* reach `${MXL_LB_IP_APPS}`, point the app at a local
-alias so the substitution kicks back in, and forward MediaMTX too:
+If you are somewhere that *cannot* reach `${MXL_LB_IP_MEDIAMTX}`, point the app at a local alias so the
+substitution kicks back in, and forward MediaMTX too:
 
 ```sh
 kubectl set env deploy/webrtc2mxl MEDIAMTX_WHIP_URL=http://localhost:8889/webrtc2mxl/whip
@@ -339,17 +384,13 @@ kubectl port-forward deploy/mediamtx 8889:8889
 Undo it afterwards with `kubectl set env deploy/webrtc2mxl MEDIAMTX_WHIP_URL-`, or re-apply the
 manifest — otherwise every other user of the deployment is left pointing at their own machine.
 
-For a permanent fix, put the app behind the cluster's Traefik ingress with TLS (`traefik`
-ingressClass, LB at `…193`). That is the only way lab users get microphone access
-without port-forwarding.
-
 ---
 
 ## Final verification
 
 ```sh
 kubectl get pods -o wide          # 9 pods Running, all on ${MXL_NODE}
-kubectl get svc                   # all EXTERNAL-IP ${MXL_LB_IP_APPS}
+kubectl get svc                   # eight on ${MXL_LB_IP_APPS}, mediamtx alone on .222
 ```
 
 | App | URL |
@@ -360,8 +401,9 @@ kubectl get svc                   # all EXTERNAL-IP ${MXL_LB_IP_APPS}
 | hls2mxl | http://${MXL_LB_IP_APPS}:9603 |
 | input-selector | http://${MXL_LB_IP_APPS}:9604 |
 | html5-keyer | http://${MXL_LB_IP_APPS}:9605 |
-| webrtc2mxl | http://${MXL_LB_IP_APPS}:9606 (needs port-forward for mic) |
+| webrtc2mxl | http://${MXL_LB_IP_APPS}:9606 (mic needs a secure-context workaround) |
 | mxl-info-gui | http://${MXL_LB_IP_APPS}:9699 |
+| mediamtx | http://${MXL_LB_IP_MEDIAMTX}:8889 |
 
 The chain worth walking end to end:
 
@@ -466,29 +508,69 @@ baked in at image build time (see `how_to_build.md` Step 4).
 
 This unblocks item 2, which still waits on item 3.
 
-**2. External traffic enters on an arbitrary node and is SNAT'd cross-node.** With
+**2. MediaMTX traffic was SNAT'd cross-node — FIXED (2026-07-31).** With
 `externalTrafficPolicy: Cluster`, all five nodes advertise `.199` over BGP and the switch's
-ECMP hash picks the entry node per flow. MediaMTX session logs show
-`remote candidate: 10.42.5.0` — node 001's CNI gateway — while the pods are on node 002. Every
-media packet takes an extra hop.
+ECMP hash picks the entry node per flow. MediaMTX session logs showed
+`remote candidate: 10.42.5.0` — node 001's CNI gateway — while the pods run on node 002. Every
+media packet took an extra hop, and audio glitched badly while `<sibling-node>` was
+mid-Mellanox-maintenance with dead BGP, going clean once that node was fixed. Media quality
+depended on the health of whichever unrelated node the flow happened to hash to.
 
-Audio glitched badly while `<sibling-node>` was mid-Mellanox-maintenance with dead BGP, and went
-clean once that node was fixed — the hop itself is tolerable, but **media quality currently
-depends on the health of whichever unrelated node the flow hashes to.** If glitching returns
-and looks random, this is why.
+MediaMTX now holds **`${MXL_LB_IP_MEDIAMTX}`** by itself with **`externalTrafficPolicy: Local`**, which
+item 1's fix unblocked. Only `${MXL_NODE}` advertises that address, so there is no ECMP choice
+and no extra hop, and client source IPs survive instead of being SNAT'd — which also stops the
+translation from muddying ICE candidate matching. The app UIs are untouched and still share `.199`
+on `Cluster`.
 
-`externalTrafficPolicy: Local` would fix it, but MetalLB refuses a shared IP unless all
-services are `Cluster`. Item 1 is now fixed, so MediaMTX *can* hold its own address — the
-remaining blocker is item 3: a second address out of the contested `upp-services-pool-lab` is
-exactly what was invalidated mid-session during the rollout. Do this once the dedicated pool
-exists.
+Verified 2026-07-31. The clearest evidence is the MetalLB speaker event in
+`kubectl describe svc -n gst-apps mediamtx` — before the change it read
+`announcing from node "<unrelated-node>"`, a node with no gst-apps pods on it at all; after, it
+reads `announcing from node "${MXL_NODE}"`. In the MediaMTX logs, browser sessions now show a
+real client address as the remote candidate (`prflx/udp/<client-ip>/...`) where they previously
+showed a `10.42.x.0` CNI gateway. Sessions created by `10.42.x.x` are the mxl2webrtc backend pod
+publishing over WHIP from inside the cluster — a pod IP is correct there.
+
+During the switch, `describe` shows `ClearAssignment` / `can't change sharing key` events. Those
+are the transition, not a failure: MetalLB must release `.199` before it can grant `.222`, and
+`IPAllocated ["${MXL_LB_IP_MEDIAMTX}"]` follows a second later.
+
+**The tradeoff this accepts:** MediaMTX now depends entirely on node 002's BGP. Item 5 records
+both peer sessions on `<sibling-node>` dying silently after a driver update; the same failure on 002
+would take MediaMTX fully offline rather than merely degrading it. Check BGP on 002 first if
+MediaMTX becomes unreachable while the pods look healthy.
 
 **3. Ask for a dedicated `IPAddressPool`.** `upp-services-pool-lab` is shared and other teams
 claim addresses continuously — `.200`, `.201` and the `artisto-002` namespace all appeared
-*during* the initial rollout, invalidating an address mid-session. Request a small pool with
-`autoAssign: false` reserved for gst-apps. Manifests then reference a pool name instead of a
-hardcoded address, which also resolves the `deprecatedAnnotation` warning on
+*during* the initial rollout, invalidating an address mid-session. The item 2 fix consumed a
+second address from that same contested pool, so this matters more now, not less. Request a small
+pool with `autoAssign: false` reserved for gst-apps. Manifests then reference a pool name instead
+of a hardcoded address, which also resolves the `deprecatedAnnotation` warning on
 `metallb.universe.tf/loadBalancerIPs` and makes a second Helm release trivial.
+
+Two things that cost time when picking `.222`, worth knowing before picking the next one:
+
+- **The pool has a hole.** It is `…193-200` *and* `…204-222`. `.201`–`.203` look
+  free in any naive scan but are outside the pool, and MetalLB rejects them with
+  `not compatible with requested address pool`.
+- **It is `autoAssign: true`**, and MetalLB allocates by walking the ranges from the low end. Any
+  team's next `LoadBalancer` Service that doesn't name an address takes `.205`, then `.206`.
+  **Pick from the top of the range** to stay out of that race — very likely what invalidated
+  `.200`/`.201` last time.
+
+MetalLB keeps no allocation table; the claims live in the `Service` objects, and `.status` is what
+was granted (`.spec` is only what was asked for). So the authoritative check is:
+
+```sh
+kubectl get ipaddresspools.metallb.io -A \
+  -o custom-columns='NAME:.metadata.name,AUTO:.spec.autoAssign,ADDRESSES:.spec.addresses'
+kubectl get svc -A -o jsonpath='{range .items[?(@.spec.type=="LoadBalancer")]}{.status.loadBalancer.ingress[0].ip}{"\t"}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' | sort -V
+```
+
+**Do not use `ping` to check whether an address is free.** Every address in this range answers
+ICMP, including ones in the pool's gap that can never be assigned — something on the path, VPN
+client or a switch doing proxy-ARP, answers for the whole prefix. `kubectl` is the only source of
+truth. Allocation failures also surface as *events*, not as `apply` errors, so confirm with
+`kubectl describe svc -n gst-apps mediamtx`.
 
 **4. Clips are not reproducible.** `sizzle.ts` was uploaded with `kubectl cp` into the
 `file-player-clips` PVC. It exists only in that volume — nobody else can recreate it from the
@@ -505,10 +587,44 @@ loopback and pod-IP ICE candidates, but `127.0.0.1` candidates still appeared in
 is harmless and possibly the log simply reports the socket's local address rather than the
 advertised candidate. Not investigated.
 
+Still true after the item 2 fix — a session on 2026-07-31 established with
+`local candidate: host/udp/127.0.0.1/8189` and played normally, while the next session on the same
+page picked `10.42.4.211`. So it is cosmetic, but it does mean the local candidate in the log is
+not a reliable signal when debugging; use the remote candidate and the `nodeAssigned` event.
+
 **7. The old `k8s/*.yaml` are stale.** `kube-deployment.yaml` and `vnc-mxl.yaml` target a node
 named `hol1`, pull `cbcrc/*` from Docker Hub, and back the domain with Longhorn RWX. They are
 unrelated to gst-apps and nothing in the workshop docs references them. Delete or update them
 separately.
+
+**8. There is no TLS path in this cluster, so the microphone stays a per-user workaround.**
+Seamless `getUserMedia` for lab users needs HTTPS with a certificate their machines already trust.
+Checked 2026-07-31 — none of the pieces are in place:
+
+- `traefik` ingressClass exists (controller `traefik.io/ingress-controller`, LB `…193`)
+  and the Traefik CRDs are installed, but there are **zero `Ingress` and zero `IngressRoute`
+  objects cluster-wide**. Nobody uses it.
+- **No cert-manager** — `kubectl get clusterissuers.cert-manager.io` returns nothing.
+- All six `kubernetes.io/tls` secrets are internal and useless to a browser: `k3s-serving` is the
+  API server's own cert, the rest are webhook CAs.
+
+So HTTPS today means Traefik's built-in self-signed cert. That is worse than it sounds here,
+because WHIP needs MediaMTX on a **second hostname** — the frontend resolves the WHIP `Location`
+header against the WHIP URL and later `DELETE`s it to tear the session down
+(`gst-apps/webrtc2mxl/frontend/src/App.jsx:199` and `:147`), so folding MediaMTX under a path
+prefix on the app's hostname would break teardown and leak a publisher session per publish. Two
+hostnames means two certs to accept, and the MediaMTX one is a background `fetch` rather than a
+navigation, so the browser shows **no interstitial at all** — it just fails until the user
+manually visits `https://mediamtx.<host>` once.
+
+The clean fix is a certificate from an internal CA the lab machines already trust, which is a PKI
+request rather than a technical blocker. **Deferred pending a team discussion on direction** — this
+is a lab, and the goal was porting `gst-apps` to Kubernetes, not solving browser security policy.
+
+If HTTPS is ever pursued, note that `webrtc2mxl` could serve WHIP from its own origin the way
+`mxl2webrtc`'s direct mode already serves WHEP (`gst-apps/mxl2webrtc/backend/main.py:260-295`, a
+native `webrtcbin` server). That removes MediaMTX from the browser path entirely and halves the
+TLS surface to one hostname.
 
 ---
 
@@ -524,7 +640,7 @@ Exactly four things vary per release:
 | --- | --- | --- |
 | `nodeSelector` **and** PV `nodeAffinity` | `${MXL_NODE}` | Must always agree, or pods hang `Pending` |
 | **PV name** | `gst-apps-mxl-domain` | **PVs are cluster-scoped** — the one guaranteed collision. Template as `{{ .Release.Name }}-mxl-domain` or the second install fails |
-| MetalLB IP + `allow-shared-ip` key | `${MXL_LB_IP_APPS}` / `gst-apps` | Two instances need two addresses and two sharing keys |
+| MetalLB IPs + `allow-shared-ip` key | `${MXL_LB_IP_APPS}` / `gst-apps`, plus `${MXL_LB_IP_MEDIAMTX}` for MediaMTX | Each instance needs its own **pair** of addresses and its own sharing key |
 | Namespace | `gst-apps` | Cleanest isolation is one namespace per host |
 
 Everything else — the initContainer, the domain ConfigMap, the Service shape, the per-app port

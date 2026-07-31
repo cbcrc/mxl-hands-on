@@ -46,7 +46,7 @@ spec:
             - name: MEDIAMTX_WHEP_URL
               value: "http://mediamtx:8889/webrtc2mxl/whep"
             - name: MEDIAMTX_WHIP_URL
-              value: "http://${MXL_LB_IP_APPS}:8889/webrtc2mxl/whip"
+              value: "http://${MXL_LB_IP_MEDIAMTX}:8889/webrtc2mxl/whip"
           volumeMounts:
             - name: mxl-domain
               mountPath: /mxl-domain
