@@ -28,19 +28,25 @@ Supporting objects: `00-namespace.yaml`, `10-domain.yaml` (PV + PVC + ConfigMap)
 
 ## Before you apply — `.env`
 
-The two MetalLB addresses are lab-private and are **not** committed. The manifests carry
-`${MXL_LB_IP_APPS}` and `${MXL_LB_IP_MEDIAMTX}` placeholders; `apply.sh` fills them in from a
-git-ignored `.env` before piping to `kubectl`.
+The two MetalLB addresses and the pinned node's hostname are lab-private and are **not**
+committed. The manifests carry placeholders; `apply.sh` fills them in from a git-ignored `.env`
+before piping to `kubectl`.
+
+| Variable | What it is |
+| --- | --- |
+| `MXL_LB_IP_APPS` | MetalLB address shared by the eight app UIs |
+| `MXL_LB_IP_MEDIAMTX` | MetalLB address held by MediaMTX alone |
+| `MXL_NODE` | hostname of the node every pod is pinned to |
 
 ```sh
 cp k8s/gst-apps/.env.template k8s/gst-apps/.env
-$EDITOR k8s/gst-apps/.env          # set both addresses
+$EDITOR k8s/gst-apps/.env          # set all three
 ./k8s/gst-apps/apply.sh
 ```
 
-Every `${MXL_LB_IP_APPS}` / `${MXL_LB_IP_MEDIAMTX}` below — in URLs, YAML snippets and prose —
-means the value from your `.env`. `kubectl apply -f k8s/gst-apps` on its own will now push the
-literal placeholders and fail; go through `apply.sh`.
+Every `${MXL_LB_IP_APPS}` / `${MXL_LB_IP_MEDIAMTX}` / `${MXL_NODE}` below — in URLs, YAML
+snippets and prose — means the value from your `.env`. `kubectl apply -f k8s/gst-apps` on its own
+will now push the literal placeholders and fail; go through `apply.sh`.
 
 ## The design, and why
 
@@ -550,10 +556,10 @@ During the switch, `describe` shows `ClearAssignment` / `can't change sharing ke
 are the transition, not a failure: MetalLB must release `.199` before it can grant `.222`, and
 `IPAllocated ["${MXL_LB_IP_MEDIAMTX}"]` follows a second later.
 
-**The tradeoff this accepts:** MediaMTX now depends entirely on node 002's BGP. Item 5 records
-both peer sessions on `<sibling-node>` dying silently after a driver update; the same failure on 002
-would take MediaMTX fully offline rather than merely degrading it. Check BGP on 002 first if
-MediaMTX becomes unreachable while the pods look healthy.
+**The tradeoff this accepts:** MediaMTX now depends entirely on the pinned node's BGP. Item 5
+records both peer sessions on `<sibling-node>` dying silently after a driver update; the same
+failure on `${MXL_NODE}` would take MediaMTX fully offline rather than merely degrading it. Check
+its BGP first if MediaMTX becomes unreachable while the pods look healthy.
 
 **3. Ask for a dedicated `IPAddressPool`.** `upp-services-pool-lab` is shared and other teams
 claim addresses continuously — `.200`, `.201` and the `artisto-002` namespace all appeared

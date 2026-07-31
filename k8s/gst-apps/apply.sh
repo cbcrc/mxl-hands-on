@@ -24,9 +24,10 @@ set +a
 
 : "${MXL_LB_IP_APPS:?not set in .env}"
 : "${MXL_LB_IP_MEDIAMTX:?not set in .env}"
+: "${MXL_NODE:?not set in .env}"
 
 for f in "$here"/*.yaml; do
-  envsubst '${MXL_LB_IP_APPS} ${MXL_LB_IP_MEDIAMTX}' <"$f"
+  envsubst '${MXL_LB_IP_APPS} ${MXL_LB_IP_MEDIAMTX} ${MXL_NODE}' <"$f"
   # leading newline: several manifests have no trailing newline of their own
   printf '\n---\n'
 done | kubectl apply -f - "$@"
