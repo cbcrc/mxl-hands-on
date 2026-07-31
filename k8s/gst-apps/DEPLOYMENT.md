@@ -26,6 +26,22 @@ Supporting objects: `00-namespace.yaml`, `10-domain.yaml` (PV + PVC + ConfigMap)
 
 **Still to deploy: `html5-keyer` and `webrtc2mxl`.** Both below.
 
+## Before you apply — `.env`
+
+The two MetalLB addresses are lab-private and are **not** committed. The manifests carry
+`${MXL_LB_IP_APPS}` and `${MXL_LB_IP_MEDIAMTX}` placeholders; `apply.sh` fills them in from a
+git-ignored `.env` before piping to `kubectl`.
+
+```sh
+cp k8s/gst-apps/.env.template k8s/gst-apps/.env
+$EDITOR k8s/gst-apps/.env          # set both addresses
+./k8s/gst-apps/apply.sh
+```
+
+Every `${MXL_LB_IP_APPS}` / `${MXL_LB_IP_MEDIAMTX}` below — in URLs, YAML snippets and prose —
+means the value from your `.env`. `kubectl apply -f k8s/gst-apps` on its own will now push the
+literal placeholders and fail; go through `apply.sh`.
+
 ## The design, and why
 
 **The MXL domain is node-local shared memory.** Flows are memory-mapped ring buffers in a
@@ -450,7 +466,7 @@ networking working", which was the fastest path to every diagnosis during the in
 catchable locally:
 
 ```sh
-kubectl apply -f k8s/gst-apps --dry-run=server
+./k8s/gst-apps/apply.sh --dry-run=server
 ```
 
 **Teardown:**
@@ -601,7 +617,8 @@ separately.
 Seamless `getUserMedia` for lab users needs HTTPS with a certificate their machines already trust.
 Checked 2026-07-31 — none of the pieces are in place:
 
-- `traefik` ingressClass exists (controller `traefik.io/ingress-controller`, LB `…193`)
+- `traefik` ingressClass exists (controller `traefik.io/ingress-controller`, holding the pool's
+  first address)
   and the Traefik CRDs are installed, but there are **zero `Ingress` and zero `IngressRoute`
   objects cluster-wide**. Nobody uses it.
 - **No cert-manager** — `kubectl get clusterissuers.cert-manager.io` returns nothing.

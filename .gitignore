@@ -56,3 +56,4 @@ Thumbs.db
 /docker/exercise-4/data/spx-server/LOG
 /gst-apps/mediamtx
 /gst-apps/.env
+/k8s/gst-apps/.env
