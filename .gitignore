@@ -56,3 +56,5 @@ Thumbs.db
 /docker/exercise-4/data/spx-server/LOG
 /gst-apps/mediamtx
 /gst-apps/.env
+/ea-ema-upp-mxl-sdk
+/test-tools/ABI-tester/backend/build
