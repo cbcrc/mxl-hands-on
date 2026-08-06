@@ -8,10 +8,24 @@
 #include <sstream>
 #include <string>
 #include <cstring>
+#include <cstdint>
 
 #include <mxl/flow.h>
 #include <mxl/mxl.h>
 #include <mxl/time.h>
+
+// A record we stamp into the head of every grain payload, so the reader can
+// measure true producer -> consumer transit instead of index-derived age.
+struct PayloadStamp
+{
+    uint64_t magic;
+    uint64_t index;
+    uint64_t writeNs;
+};
+
+static_assert(sizeof(PayloadStamp) == 24, "PayloadStamp must be exactly 24 bytes");
+
+static constexpr uint64_t kStampMagic = 0x4D584C5354414D50ULL;  // "MXLSTAMP"
 
 // File reader helper
 static std::string readFile(char const* path)
@@ -115,6 +129,14 @@ int main(int argc, char** argv)
                 (unsigned long long)index, grain.grainSize, grain.totalSlices);
     
     std::memset(payload, 0, grain.grainSize);
+    // Insert MXLSTAMP
+    PayloadStamp stamp{};
+    stamp.magic = kStampMagic;
+    stamp.index = index;
+    stamp.writeNs = mxlGetTime();
+
+    std::memcpy(payload, &stamp, sizeof(stamp));
+    // End of insert MXLSTAMP
     grain.validSlices = grain.totalSlices;
 
     status = mxlFlowWriterCommitGrain(writer, &grain);
@@ -141,7 +163,7 @@ int main(int argc, char** argv)
     mxlGrainInfo readGrain{};
     uint8_t*    readPayload = nullptr;
 
-    mxlSleepForNs(2000000000ULL);   // Temporarily wait for 2 sec
+    // mxlSleepForNs(2000000000ULL);   // Temporarily wait for 2 sec
 
     status = mxlFlowReaderGetGrain(reader, index, 1000000000ULL, &readGrain, &readPayload);
     if (status != MXL_STATUS_OK)
@@ -162,6 +184,22 @@ int main(int argc, char** argv)
     std::printf("  ots  : %llu ns\n", (unsigned long long)otsNs);
     std::printf("  wall : %llu ns\n", (unsigned long long)wallNs);
     std::printf("  age  : %.3f ms\n", ageNs / 1000000.0);
+
+    PayloadStamp readStamp{};
+    std::memcpy(&readStamp, readPayload, sizeof(readStamp));
+
+    if (readStamp.magic != kStampMagic)
+    {
+        std::fprintf(stderr, "  stamp: absent or corrupt (magic %llx)\n",
+                    (unsigned long long)readStamp.magic);
+    }
+    else
+    {
+        int64_t transitNs = (int64_t)(wallNs - readStamp.writeNs);
+        std::printf("  stamp index  : %llu\n", (unsigned long long)readStamp.index);
+        std::printf("  transit      : %.3f ms (%lld ns)\n",
+                    transitNs / 1000000.0, (long long)transitNs);
+    }
 
     mxlFlowRuntimeInfo runtime{};
 
