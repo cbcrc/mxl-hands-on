@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <cstring>
 
 #include <mxl/flow.h>
 #include <mxl/mxl.h>
@@ -96,10 +97,105 @@ int main(int argc, char** argv)
                 (long long)config.common.grainRate.denominator);
     std::printf("  grain count: %u\n", config.discrete.grainCount);
     std::printf("  slice size : %u bytes\n", config.discrete.sliceSizes[0]);
+    
+    // Open, fill and commit one grain
+    uint64_t index = mxlGetCurrentIndex(&config.common.grainRate);
+
+    mxlGrainInfo grain{};
+    uint8_t*    payload = nullptr;
+
+    status = mxlFlowWriterOpenGrain(writer, index, &grain, &payload);
+    if (status != MXL_STATUS_OK)
+    {
+        std::fprintf(stderr, "mxlFlowWriterOpenGrain failed with status %d\n", status);
+        return 1;
+    }
+
+    std::printf("Grain %llu opened: %u bytes, %u slices.\n",
+                (unsigned long long)index, grain.grainSize, grain.totalSlices);
+    
+    std::memset(payload, 0, grain.grainSize);
+    grain.validSlices = grain.totalSlices;
+
+    status = mxlFlowWriterCommitGrain(writer, &grain);
+    if (status != MXL_STATUS_OK)
+    {
+        std::fprintf(stderr, "mxlFlowWriterCommitGrain failed with status %d\n", status);
+        return 1;
+    }
+
+    std::printf("Grain %llu commited.\n", (unsigned long long)index);
+
+    // Attach a reader to the flow we just wrote
+    char const* flowId = "a1b2c3d4-0001-4000-8000-000000000001";
+
+    mxlFlowReader reader{};
+
+    status = mxlCreateFlowReader(instance, flowId, nullptr, &reader);
+    if (status != MXL_STATUS_OK)
+    {
+        std::fprintf(stderr, "mxlCreateFlowReader failed with status %d\n", status);
+        return 1;
+    }
+
+    mxlGrainInfo readGrain{};
+    uint8_t*    readPayload = nullptr;
+
+    mxlSleepForNs(2000000000ULL);   // Temporarily wait for 2 sec
+
+    status = mxlFlowReaderGetGrain(reader, index, 1000000000ULL, &readGrain, &readPayload);
+    if (status != MXL_STATUS_OK)
+    {
+        std::fprintf(stderr, "mxlFlowReaderGetGrain failed with status %d\n", status);
+        return 1;
+    }
+
+    std::printf("Read grain %llu: %u bytes, %u/%u slices valid.\n",
+                (unsigned long long)readGrain.index, readGrain.grainSize,
+                readGrain.validSlices, readGrain.totalSlices);
+
+    // The index IS the timestamp
+    uint64_t otsNs = mxlIndexToTimestamp(&config.common.grainRate, readGrain.index);
+    uint64_t wallNs = mxlGetTime();
+    int64_t ageNs = (int64_t)(wallNs -  otsNs);
+
+    std::printf("  ots  : %llu ns\n", (unsigned long long)otsNs);
+    std::printf("  wall : %llu ns\n", (unsigned long long)wallNs);
+    std::printf("  age  : %.3f ms\n", ageNs / 1000000.0);
+
+    mxlFlowRuntimeInfo runtime{};
+
+    status = mxlFlowReaderGetRuntimeInfo(reader, &runtime);
+    if (status != MXL_STATUS_OK)
+    {
+        std::fprintf(stderr, "mxlFlowReaderGetRuntimeInfo failed with status %d\n", status);
+        return 1;
+    }
+
+    std::printf("  head : %llu\n", (unsigned long long)runtime.headIndex);
+    std::printf("  last write: %llu ns\n", (unsigned long long)runtime.lastWriteTime);
+    std::printf("  last read : %llu ns\n", (unsigned long long)runtime.lastReadTime);
+    
+    mxlSleepForNs(100000000ULL); // 100 ms - let the watcher thread run
+
+    mxlFlowRuntimeInfo runtime2{};
+    (void)mxlFlowReaderGetRuntimeInfo(reader, &runtime2);
+    std::printf("  last read (after 100 ms): %llu ns (delta %.3f ms)\n",
+                (unsigned long long)runtime2.lastReadTime,
+                (int64_t)(runtime2.lastReadTime - runtime.lastReadTime) / 1000000.0);
+
 
     std::printf("Holding the flow open for 30 seconds - inspect it with mxl-info now.\n");
     mxlSleepForNs(30ULL * 1000ULL * 1000ULL * 1000ULL);
     
+    // Release flow reader
+    status = mxlReleaseFlowReader(instance, reader);
+    if (status != MXL_STATUS_OK)
+    {
+        std::fprintf(stderr, "mxlReleaseFlowReader failed with status %d\n", status);
+        return 1;
+    }
+
     // Release flow writer
     status = mxlReleaseFlowWriter(instance, writer);
     if (status != MXL_STATUS_OK)
@@ -108,7 +204,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    std::printf("Flow writer released.\n");
+    std::printf("Flow writer and reader released.\n");
 
     // Destroy mxl instance
     status = mxlDestroyInstance(instance);
