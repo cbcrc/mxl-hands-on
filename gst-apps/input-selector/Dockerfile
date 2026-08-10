@@ -65,10 +65,10 @@ FROM ubuntu:24.04
 ARG DEBIAN_FRONTEND=noninteractive
 
 # ── MXL runtime library ───────────────────────────────────────────────────────
-COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.2 /opt/mxl/lib/libmxl.so.1.2
+COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.1 /opt/mxl/lib/libmxl.so.1.1
 
 RUN cd /opt/mxl/lib \
- && ln -sf libmxl.so.1.2 libmxl.so.1 \
+ && ln -sf libmxl.so.1.1 libmxl.so.1 \
  && ln -sf libmxl.so.1   libmxl.so \
  && ldconfig /opt/mxl/lib \
  # The binary dlopen()s libmxl.so from the absolute path baked at compile time

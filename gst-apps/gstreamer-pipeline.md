@@ -70,9 +70,9 @@ section before the pipeline starts and is fixed for its lifetime — it cannot b
 without a Stop + Start because caps renegotiation across a running mxlsink is not
 reliable. Audio level (−60 … 0 dBFS in 0.5 dB steps) is adjustable live.
 
-The pipeline is brought directly to `PLAYING` state. A background thread then polls for
-each flow's `{domain}/{uuid}.mxl-flow/flow_def.json` (up to 15 s) and patches the
-`grouphint`, `description`, and `label` fields with the values entered in the Setup form.
+The pipeline is brought directly to `PLAYING` state. Each `mxlsink` carries the values
+entered in the Setup form on its `group-hint`, `description`, and `label` properties, and
+writes them into `{domain}/{uuid}.mxl-flow/flow_def.json` when it creates the flow.
 
 ### Diagram
 
@@ -486,10 +486,10 @@ pipeline.seek_simple(Gst.Format.TIME,
 This restarts the file from the beginning without rebuilding the pipeline, so the MXL
 flows remain alive across loops and consumers see a single continuous stream.
 
-**Flow_def.json patching** — once the pipeline reaches PLAYING, a background thread polls
-each `{domain}/{flow-uuid}.mxl-flow/flow_def.json` (up to 15 s) and patches `grouphint`,
-`tags["urn:x-nmos:tag:grouphint/v1.0"]`, `description`, and `label` with the values entered
-in the Setup form (`<grouphint>:Video` and `<grouphint>:Audio` respectively).
+**Flow metadata** — each `mxlsink` is given the values entered in the Setup form on its
+`group-hint` (`<grouphint>:Video` and `<grouphint>:Audio` respectively), `description`, and
+`label` properties. The sink writes them — `tags["urn:x-nmos:tag:grouphint/v1.0"]` included —
+into `{domain}/{flow-uuid}.mxl-flow/flow_def.json` when it creates the flow.
 
 ### Diagram
 
@@ -549,11 +549,11 @@ gst-launch-1.0 \
   dec. ! videoconvert \
        ! "video/x-raw,format=v210" \
        ! queue \
-       ! mxlsink flow-id="<video-uuid>" domain="/mxl-domain/<domain-path>" sync=false \
+       ! mxlsink flow-id="<video-uuid>" domain="/mxl-domain/<domain-path>" \
   dec. ! audioconvert ! audioresample \
        ! "audio/x-raw,format=F32LE,rate=48000,layout=interleaved" \
        ! queue \
-       ! mxlsink flow-id="<audio-uuid>" domain="/mxl-domain/<domain-path>" sync=false
+       ! mxlsink flow-id="<audio-uuid>" domain="/mxl-domain/<domain-path>"
 ```
 
 > Flow UUIDs are **deterministic (UUID v5)** derived from
@@ -580,10 +580,14 @@ pipeline with valve elements:
   buffer the stream, without involving `mxlsink` at all. After 10 seconds a GLib timer fires,
   tears down the warmup pipeline, and starts Phase 2.
 
-- **Phase 2 (real pipeline):** a fresh `uridecodebin` is started with `mxlsink(sync=False)`
-  as the final sink for each branch. With `sync=False`, the sink does not block the GStreamer
-  state machine waiting for clock-synchronised preroll, so both video and audio branches reach
-  PLAYING immediately and data flows reliably.
+- **Phase 2 (real pipeline):** a fresh `uridecodebin` is started with `mxlsink(sync=True)`
+  as the final sink for each branch. `sync=True` (the `GstBaseSink` default) is what paces the
+  pipeline: `mxlsink` maps a buffer to a grain index as `pts + base_time + (mxl_now −
+  pipeline_clock_now)` and commits it straight away, so the sink waiting for each buffer's
+  running time *is* the pacing. With `sync=False` the decoder runs as fast as it downloads and
+  the head index ends up minutes in the future (a large negative latency in `mxl-info`), then
+  stops at EOS. Preroll is governed by `async`, not `sync`, so this does not stall the state
+  machine.
 
   > **Why not valves?**  A `valve(drop=True)` placed before `mxlsink` blocks the sink's
   > preroll: `GstBaseSink` needs to receive a buffer to complete the PAUSED→PLAYING transition,
@@ -600,12 +604,12 @@ video and first audio pad are used; additional pads (e.g. subtitle tracks) are i
 is necessary because `uridecodebin` creates pads asynchronously once it has enough data to
 negotiate the stream format.
 
-**Video branch** — `videoconvert → capsfilter(v210) → queue → mxlsink(sync=False)`
+**Video branch** — `videoconvert → capsfilter(v210) → queue → mxlsink(sync=True)`
 `videoconvert` converts whatever pixel format the HLS decoder produces (I420, NV12, P010,
 etc.) to the v210 packed 10-bit format that `mxlsink` requires. No resolution or frame-rate
 constraint is applied — the pipeline passes through the source's native geometry.
 
-**Audio branch** — `audioconvert → audioresample → capsfilter(F32LE, 48 kHz) → queue → mxlsink(sync=False)`
+**Audio branch** — `audioconvert → audioresample → capsfilter(F32LE, 48 kHz) → queue → mxlsink(sync=True)`
 `audioconvert` handles sample-format conversion (AAC typically decodes to F32LE non-interleaved;
 `audioconvert` converts to interleaved), `audioresample` converts the source sample rate to
 48 kHz. The capsfilter intentionally does **not** constrain the channel count — whatever
@@ -637,7 +641,7 @@ flowchart TB
         vconv["videoconvert"]
         vcaps["capsfilter\nformat=v210"]
         vqueue["queue"]
-        vsink["mxlsink\nflow-id=video-uuid\nsync=False"]
+        vsink["mxlsink\nflow-id=video-uuid"]
 
         vconv --> vcaps --> vqueue --> vsink
     end
@@ -648,7 +652,7 @@ flowchart TB
         aresample["audioresample"]
         acaps["capsfilter\nF32LE, 48 kHz\n(native channel count)"]
         aqueue["queue"]
-        asink["mxlsink\nflow-id=audio-uuid\nsync=False"]
+        asink["mxlsink\nflow-id=audio-uuid"]
 
         aconv --> aresample --> acaps --> aqueue --> asink
     end
@@ -657,9 +661,6 @@ flowchart TB
     timer --> src2
     src2 -- "pad-added (video/*)" --> vconv
     src2 -- "pad-added (audio/*)" --> aconv
-
-    patch["background thread\n→ poll & patch flow_def.json"] -. "after flows appear" .-> vsink
-    patch -. "after flows appear" .-> asink
 ```
 
 ---
@@ -751,8 +752,8 @@ gst-launch-1.0 \
        ! "video/x-raw,format=BGRA" \
        ! queue leaky=2 max-size-buffers=2 max-size-time=0 max-size-bytes=0 \
        ! mixer.sink_0 \
-  cefsrc url="http://host.docker.internal:5660/renderer/" \
-       ! "video/x-raw,format=BGRA,width=1920,height=1080,framerate=60/1" \
+  cefsrc url="http://host.docker.internal:5660/renderer/" max-video-framerate=60/1 \
+       ! "video/x-raw,format=BGRA,width=1920,height=1080" \
        ! videorate \
        ! "video/x-raw,format=BGRA,framerate=60/1" \
        ! queue leaky=2 max-size-buffers=2 max-size-time=0 max-size-bytes=0 \
@@ -795,13 +796,14 @@ mixing via `compositor`.
 the compositor sees the same pixel format on both pads. The leaky queue (drop-oldest, 2 frames)
 prevents stale frames from accumulating — mandatory for a live pipeline.
 
-**CEF overlay branch** — `cefsrc → capsfilter(BGRA, W×H, integer fps) → videorate → capsfilter(BGRA, num/den) → queue(leaky) → compositor.sink_1`
+**CEF overlay branch** — `cefsrc(max-video-framerate=integer fps) → capsfilter(BGRA, W×H) → videorate → capsfilter(BGRA, num/den) → queue(leaky) → compositor.sink_1`
 
 `cefsrc` renders the HTML5 page inside a Chromium subprocess and delivers BGRA frames with the
-alpha channel intact for keying. Two capsfilters bracket `videorate`: the first constrains
-`cefsrc` to an integer frame rate (required by `cefsrc`) at the correct raster; `videorate` then
-re-paces the output to the exact `num/den` grain rate of the MXL input, regardless of browser
-rendering jitter.
+alpha channel intact for keying. `cefsrc` advertises `framerate=0/1` — it emits a buffer per
+browser paint and takes its (integer) render rate from the `max-video-framerate` property, so the
+capsfilter right after it must pin only the raster, never a framerate. `videorate` then re-paces
+the output to the exact `num/den` grain rate of the MXL input, regardless of browser rendering
+jitter.
 
 `compositor.sink_1` has `sync=false` so the mixer composites the CEF frame immediately when it
 arrives, without stalling to align CEF timestamps with the MXL clock domain. The overlay starts
@@ -826,24 +828,11 @@ in the plugin — rebuild `libgstmxl.so` from current source.)
 - CPU compositing works on any host, including those without a discrete GPU.
 - No `glupload`/`gldownload` round-trip, saving ~950 MB/s of GPU memory bandwidth.
 
-**Output branch** — `compositor → identity(pts-fix) → videoconvert → capsfilter(v210, colorimetry=bt709) → queue(leaky) → mxlsink(sync=false)`
+**Output branch** — `compositor → videoconvert → capsfilter(v210, colorimetry=bt709) → queue(leaky) → mxlsink(sync=false)`
 
-Two non-obvious fixes are applied in the output branch:
+One non-obvious fix is applied in the output branch:
 
-1. **PTS timestamp correction (`identity` with Python `handoff` callback).**
-   The compositor is a GStreamer aggregator that normalises all input timestamps to *running time*
-   (nanoseconds elapsed since the pipeline started, beginning at 0). `mxlsink` instead expects
-   timestamps in the pipeline clock's **absolute** domain — it latches a one-shot offset
-   `mxl_now − clock.time()` and adds it to each buffer PTS to map onto TAI
-   (`render_video.rs`). Feeding it raw running-time PTSes places grains near the epoch (mxl-info-gui
-   then reports a ~56-year latency). The fix is an `identity` element with `signal-handoffs=true`;
-   its Python `handoff` callback adds `pipeline.get_base_time()` to each buffer's PTS and DTS,
-   converting running time back to absolute clock time. No special sink preroll handling is needed:
-   the compositor produces no output until the pipeline is PLAYING and `base_time` is set (and, per
-   the CEF-pad discussion above, not until CEF has delivered its first buffer), so the first buffer
-   `mxlsink` ever sees is already corrected.
-
-2. **Colorimetry pinning (`colorimetry=bt709` in the output capsfilter).**
+1. **Colorimetry pinning (`colorimetry=bt709` in the output capsfilter).**
    Before the CEF branch delivers its first frame, the compositor emits a CAPS event carrying only
    the background colorimetry (`bt709`). Once the CEF pad becomes active, it emits a second CAPS
    event whose colorimetry field changes (CEF renders in sRGB, which the compositor reports as a
@@ -853,9 +842,12 @@ Two non-obvious fixes are applied in the output branch:
    Pinning `colorimetry=bt709` in the downstream capsfilter forces the compositor to produce
    identical CAPS events on both transitions, so `mxlsink`'s `set_caps` is only called once.
 
-`mxlsink` has `sync=false` so `GstBaseSink` does not try to clock-synchronise the (absolute-domain)
-PTS. The write thread inside `mxlsink` still sleeps until the correct TAI wall time before
-committing each grain to the MXL domain.
+`mxlsink` has `sync=false`: the compositor's inputs are live (the MXL background flow, or the
+black `videotestsrc` in prompter mode), so the branch already runs at real time and the sink does
+not need to re-clock it. The buffer PTS stays plain running time — since MXL v1.1 `mxlsink` maps it
+as `pts + base_time + (mxl_now − pipeline_clock_now)`, so no PTS fixup belongs in this branch (an
+earlier revision added `base_time` here for the v1.0 sink; doing that now double-counts it and
+lands every grain hours in the future).
 
 ### Diagram
 
@@ -879,7 +871,6 @@ flowchart LR
     end
 
     mixer["compositor\nignore-inactive-pads NOT set\n(waits for CEF; CPU composite)"]
-    pts_fix["identity\nsignal-handoffs=true\n(add base_time to PTS)"]
     out_conv["videoconvert\nBGRA → v210"]
     out_caps["capsfilter\nv210, W×H, num/den\ncolorimetry=bt709"]
     out_q["queue\nleaky=drop-oldest, max=2"]
@@ -888,7 +879,7 @@ flowchart LR
     bg_q   -->|"sink_0\nzorder=0"| mixer
     cef_q  -->|"sink_1\nsync=false\nzorder=1\nalpha=0.0→1.0"| mixer
 
-    mixer --> pts_fix --> out_conv --> out_caps --> out_q --> out_sink
+    mixer --> out_conv --> out_caps --> out_q --> out_sink
 ```
 
 ### Prompt mode (Teleprompter)
@@ -910,8 +901,8 @@ gst-launch-1.0 \
        ! "video/x-raw,format=BGRA,width=1920,height=1080,framerate=50/1,interlace-mode=progressive" \
        ! queue leaky=2 max-size-buffers=2 max-size-time=0 max-size-bytes=0 \
        ! mixer.sink_0 \
-  cefsrc url="http://localhost:9600/prompter/" \
-       ! "video/x-raw,format=BGRA,width=1920,height=1080,framerate=50/1" \
+  cefsrc url="http://localhost:9600/prompter/" max-video-framerate=50/1 \
+       ! "video/x-raw,format=BGRA,width=1920,height=1080" \
        ! videorate \
        ! "video/x-raw,format=BGRA,framerate=50/1" \
        ! queue leaky=2 max-size-buffers=2 max-size-time=0 max-size-bytes=0 \
@@ -989,7 +980,6 @@ flowchart LR
     end
 
     mixer["compositor\nignore-inactive-pads NOT set\n(CPU composite)"]
-    pts_fix["identity\nsignal-handoffs=true\n(add base_time to PTS)"]
     out_conv["videoconvert\nBGRA → v210"]
     out_caps["capsfilter\nv210, W×H, num/den\ncolorimetry=bt709"]
     out_q["queue\nleaky=drop-oldest, max=2"]
@@ -997,7 +987,7 @@ flowchart LR
 
     bg_q  -->|"sink_0\nzorder=0"| mixer
     cef_q -->|"sink_1\nsync=false\nzorder=1\nalpha=1.0"| mixer
-    mixer --> pts_fix --> out_conv --> out_caps --> out_q --> out_sink
+    mixer --> out_conv --> out_caps --> out_q --> out_sink
 
     asink -. "PCM → Vosk (worker thread)" .-> vosk["VoiceTracker\n(en-US / fr-CA)"]
     vosk  -. "transcript over /prompter-ws" .-> page["OGraf host page (CEF)\npushTranscript → matcher"]
