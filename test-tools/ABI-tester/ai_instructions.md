@@ -47,8 +47,8 @@ applications would.
   > ⚠️ `./dmf-mxl/build/Linux-Clang-Release/lib/include/mxl/` holds only the generated
   > `version.h`, which no public header includes. `./dmf-mxl/lib/include` alone is enough
   > to compile. There is **no** `mxl/dataflow.h` — all flow/grain/sample calls are in `flow.h`.
-- **MXL shared library:** `./dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.2`
-  → `/opt/mxl/lib/libmxl.so.1.2` in the image, with the conventional
+- **MXL shared library:** `./dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.1`
+  → `/opt/mxl/lib/libmxl.so.1.1` in the image, with the conventional
   `libmxl.so.1` → `libmxl.so` symlink chain.
 - **ABI reference documentation:** `./ea-ema-upp-mxl-sdk/Docs/C-MXL-ABI.md` — pinned to
   commit `ff0ece65e1f5f106122ecf315156cc84b5467b99`, which is the checked-out `dmf-mxl`
@@ -115,7 +115,7 @@ base, so `mxlGetTime() - ots_ns` is a meaningful age. `mxlFlowRuntimeInfo`
 
 ## The ABI Call Catalog
 
-`libmxl.so.1.2` exports **exactly 42 functions** (verified with `nm -D`): 5 from `mxl.h`,
+`libmxl.so.1.1` exports **exactly 42 functions** (verified with `nm -D`): 5 from `mxl.h`,
 30 from `flow.h`, 7 from `time.h`. All 42 must be queueable. The backend holds this as one
 table and serves it at `GET /abi-calls`; **the frontend renders its call palette and every
 argument form from that endpoint**, so the two cannot drift.
@@ -445,9 +445,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY dmf-mxl/lib/include /opt/mxl/include
-COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.2 /opt/mxl/lib/libmxl.so.1.2
+COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.1 /opt/mxl/lib/libmxl.so.1.1
 RUN cd /opt/mxl/lib \
- && ln -sf libmxl.so.1.2 libmxl.so.1 \
+ && ln -sf libmxl.so.1.1 libmxl.so.1 \
  && ln -sf libmxl.so.1   libmxl.so
 
 COPY test-tools/ABI-tester/backend /build/backend
@@ -464,9 +464,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libcpp-httplib0.14t64 curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.2 /opt/mxl/lib/libmxl.so.1.2
+COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.1 /opt/mxl/lib/libmxl.so.1.1
 RUN cd /opt/mxl/lib \
- && ln -sf libmxl.so.1.2 libmxl.so.1 \
+ && ln -sf libmxl.so.1.1 libmxl.so.1 \
  && ln -sf libmxl.so.1   libmxl.so \
  && ldconfig /opt/mxl/lib
 
