@@ -9,10 +9,16 @@
 #include <string>
 #include <cstring>
 #include <cstdint>
+#include <cstdlib>
+#include <httplib.h>
+#include <nlohmann/json.hpp>
 
 #include <mxl/flow.h>
 #include <mxl/mxl.h>
 #include <mxl/time.h>
+#include "domains.hpp"
+#include "registry.hpp"
+#include "calls.hpp"
 
 // A record we stamp into the head of every grain payload, so the reader can
 // measure true producer -> consumer transit instead of index-derived age.
@@ -223,8 +229,147 @@ int main(int argc, char** argv)
                 (int64_t)(runtime2.lastReadTime - runtime.lastReadTime) / 1000000.0);
 
 
-    std::printf("Holding the flow open for 30 seconds - inspect it with mxl-info now.\n");
-    mxlSleepForNs(30ULL * 1000ULL * 1000ULL * 1000ULL);
+    // Serve what we just measured, instead of sleeping on it.
+    httplib::Server server;
+    
+    // The handle table every step will name its operands through.
+    Registry registry;
+    registry.store("main", HandleKind::Instance, instance, domain);
+
+    server.Get("/health",
+        [&](httplib::Request const&, httplib::Response& res)
+        {
+            nlohmann::json body;
+            body["status"]      = "ok";
+            body["sdk_version"] = version.full;
+            body["domain"]      = domain;
+            body["tmpfs"]       = isTmpFs;
+            body["flow_id"]     = flowId;
+            body["grain_index"] = readGrain.index;
+            body["ots_ns"]      = otsNs;
+            body["age_ms"]      = (int64_t)(mxlGetTime() - otsNs) / 1000000.0;
+
+            res.set_content(body.dump(2) + "\n", "application/json");
+        });
+    
+    // Calls for the mxl domain finder function.
+    server.Get("/domains",
+        [](httplib::Request const&, httplib::Response& res)
+        {
+            char const* root = std::getenv("MXL_DOMAIN_ROOT");
+
+            nlohmann::json list = nlohmann::json::array();
+
+            for (auto const& d : scanDomains(root ? root : "/Volumes/mxl"))
+            {
+                nlohmann::json item;
+                item["id"]                      = d.id;
+                item["label"]                   = d.label;
+                item["description"]             = d.description;
+                item["path"]                    = d.path;
+                item["buffer_depth_ms"]         = d.bufferDepthMs;
+                item["buffer_depth_is_default"] = d.bufferDepthIsDefault;
+                list.push_back(item);
+            }
+
+            res.set_content(list.dump(2) + "\n", "application/json");
+        });
+    
+    server.Get("/abi-calls",
+        [](httplib::Request const&, httplib::Response& res)
+        {
+            nlohmann::json list = nlohmann::json::array();
+
+            for (auto const& call : callCatalog())
+            {
+                nlohmann::json params = nlohmann::json::array();
+                for (auto const& p : call.params)
+                {
+                    params.push_back(nlohmann::json{{"name", p.name},
+                                                    {"type", p.type},
+                                                    {"required", p.required},
+                                                    {"description", p.description}});
+                }
+
+                list.push_back(nlohmann::json{{"name", call.name},
+                                              {"header", call.header},
+                                              {"description", call.description},
+                                              {"params", params}});
+            }
+
+            res.set_content(list.dump(2) + "\n", "application/json");
+        });
+    
+    server.Post("/step",
+        [&](httplib::Request const& req, httplib::Response& res)
+        {
+            auto respond = [&res](int status, nlohmann::json body)
+            {
+                res.status = status;
+                res.set_content(body.dump(2) + "\n", "application/json");
+            };
+
+            nlohmann::json const request = nlohmann::json::parse(req.body, nullptr, false);
+            if (request.is_discarded() || !request.is_object() ||
+                !request.contains("call") || !request["call"].is_string())
+            {
+                respond(400, nlohmann::json{{"ok", false},
+                                            {"error", "body must be an object with a string \"call\""}});
+                return;
+            }
+
+            std::string const name = request["call"].get<std::string>();
+
+            CallSpec const* spec = findCall(name);
+            if (spec == nullptr)
+            {
+                respond(404, nlohmann::json{{"ok", false}, {"error", "unknown call: " + name}});
+                return;
+            }
+
+            nlohmann::json const args =
+                request.contains("args") ? request["args"] : nlohmann::json::object();
+            
+            uint64_t const startNs = mxlGetTime();
+            nlohmann::json result = spec->invoke(registry, args);
+            uint64_t const endNs = mxlGetTime();
+
+            if (!result.is_object())
+            {
+                respond(500, nlohmann::json{{"ok", false},
+                                            {"error", "adapter for" + name + "did not return a JSON object"}});
+                return;
+            }
+
+            result["call"]        = name;
+            result["duration_us"] = (endNs - startNs) / 1000.0;
+
+            respond(result.value("ok", false) ? 200 : 500, result);
+        });
+
+    server.Get("/state",
+        [&](httplib::Request const&, httplib::Response& res)
+        {
+            nlohmann::json handles = nlohmann::json::object();
+
+            for (auto const& [name, entry] : registry.snapshot())
+            {
+                char ptrText[32];
+                std::snprintf(ptrText, sizeof(ptrText), "%p", entry.ptr);
+
+                nlohmann::json item;
+                item["kind"] = handleKindName(entry.kind);
+                item["note"] = entry.note;
+                item["ptr"] = ptrText;
+
+                handles[name] = item;
+            }
+
+            res.set_content(handles.dump(2) + "\n", "application/json");
+        });
+    
+    std::printf("Listening on http://0.0.0.0:9600 (Ctrl-C to stop)\n");
+    server.listen("0.0.0.0", 9600);
     
     // Release flow reader
     status = mxlReleaseFlowReader(instance, reader);

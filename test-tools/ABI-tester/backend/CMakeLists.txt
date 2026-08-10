@@ -13,13 +13,17 @@ set(MXL_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../dmf-mxl"
 
 set(MXL_LIB_DIR "${MXL_ROOT}/build/Linux-Clang-Release/lib")
 
-add_executable(abi-tester src/main.cpp)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(HTTPLIB REQUIRED IMPORTED_TARGET cpp-httplib)
+find_package(nlohmann_json REQUIRED)
+
+add_executable(abi-tester src/main.cpp src/domains.cpp src/registry.cpp src/calls.cpp)
 
 target_compile_options(abi-tester PRIVATE -Wall -Wextra)
 
 target_include_directories(abi-tester PRIVATE "${MXL_ROOT}/lib/include")
 target_link_directories(abi-tester PRIVATE "${MXL_LIB_DIR}")
-target_link_libraries(abi-tester PRIVATE mxl)
+target_link_libraries(abi-tester PRIVATE mxl PkgConfig::HTTPLIB nlohmann_json::nlohmann_json)
 
 # Bake the library location into the binary so it runs without LD_LIBRARY_PATH.
 set_target_properties(abi-tester PROPERTIES BUILD_RPATH "${MXL_LIB_DIR}")
