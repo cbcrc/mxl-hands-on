@@ -35,6 +35,21 @@ void* Registry::find(std::string const& name, HandleKind kind) const
     return it->second.ptr;
 }
 
+void* Registry::take(std::string const& name, HandleKind kind)
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+
+    auto const it = _entries.find(name);
+    if ((it == _entries.end()) || (it->second.kind != kind))
+    {
+        return nullptr;
+    }
+
+    void* const ptr = it->second.ptr;
+    _entries.erase(it);
+    return ptr;
+}
+
 std::map<std::string, HandleEntry> Registry::snapshot() const
 {
     std::lock_guard<std::mutex> lock(_mutex);

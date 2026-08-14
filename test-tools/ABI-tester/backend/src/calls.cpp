@@ -7,6 +7,8 @@
 
 #include <mxl/mxl.h>
 #include <mxl/time.h>
+#include <mxl/dataformat.h>
+#include <mxl/flow.h>
 
 using nlohmann::json;
 
@@ -19,11 +21,56 @@ namespace
         return json{{"ok", false}, {"error", message}};
     }
 
+    char const* statusName(mxlStatus status)
+    {
+        switch (status)
+        {
+            case MXL_STATUS_OK:                  return "MXL_STATUS_OK";
+            case MXL_ERR_UNKNOWN:                return "MXL_ERR_UNKNOWN";
+            case MXL_ERR_FLOW_NOT_FOUND:         return "MXL_ERR_FLOW_NOT_FOUND";
+            case MXL_ERR_OUT_OF_RANGE_TOO_LATE:  return "MXL_ERR_OUT_OF_RANGE_TOO_LATE";
+            case MXL_ERR_OUT_OF_RANGE_TOO_EARLY: return "MXL_ERR_OUT_OF_RANGE_TOO_EARLY:";
+            case MXL_ERR_INVALID_FLOW_READER:    return "MXL_ERR_INVALID_FLOW_READER";
+            case MXL_ERR_INVALID_FLOW_WRITER:    return "MXL_ERR_INVALID_FLOW_WRITER";
+            case MXL_ERR_TIMEOUT:                return "MXL_ERR_TIMEOUT";
+            case MXL_ERR_INVALID_ARG:            return "MXL_ERR_INVALID_ARG";
+            case MXL_ERR_CONFLICT:               return "MXL_ERR_CONFLICT";
+            case MXL_ERR_PERMISSION_DENIED:      return "MXL_ERR_PERMISSION_DENIED";
+            case MXL_ERR_FLOW_INVALID:           return "MXL_ERR_FLOW_INVALID";
+            default:                             return "MXL_ERR_(other)";
+        }
+    }
+
+    // The common envelope for any call that returns an mxlStatus. Adapters add
+    // their out-params to it after checking the status themselves.
+    json statusJson(char const* call, mxlStatus status)
+    {
+        json result;
+        result["ok"]     = (status == MXL_STATUS_OK);
+        result["status"] = statusName(status);
+        if (status != MXL_STATUS_OK)
+        {
+            result["error"] = std::string(call) + " returned " + statusName(status);
+        }
+        return result;
+    }
+
     // Large uint64 values go out as strings: JSON numbers lose precision above 2^53.
     std::string nsText(uint64_t value)
     {
         char text[24];
         std::snprintf(text, sizeof(text), "%llu", (unsigned long long)value);
+        return text;
+    }
+
+    // The 16 raw bytes of a flow id as canonical 8-4-4-4-12 UUID text.
+    std::string uuidText(uint8_t const (&id)[16])
+    {
+        char text[37];
+        std::snprintf(text, sizeof(text),
+            "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+            id[0], id[1], id[2], id[3], id[4], id[5], id[6], id[7],
+            id[8], id[9], id[10], id[11], id[12], id[13], id[14], id[15]);
         return text;
     }
 
@@ -35,12 +82,54 @@ namespace
         return ((it != args.end()) && it->is_string()) ? it->get<std::string>() : fallback;
     }
 
+    // Resolve the handle named by args[argName]. On failure returns nullptr and puts the
+    // reason in `error` -- the caller turns that into failed(error)
+    void* handleArg(Registry& registry, json const& args, char const* argName,
+                    HandleKind kind, std::string& error)
+    {
+        std::string const name = argString(args, argName);
+        if (name.empty())
+        {
+            error = std::string("argument '") + argName + "' is required";
+            return nullptr;
+        }
+
+        void* const ptr = registry.find(name, kind);
+        if (ptr == nullptr)
+        {
+            error = std::string("no ") + handleKindName(kind) + " handle named " + name;
+        }
+        return ptr;
+    }
+
+    bool argRational(json const& args, char const* name, mxlRational& out)
+    {
+        auto const it = args.find(name);
+        if ((it == args.end()) || !it->is_object())
+        {
+            return false;
+        }
+
+        auto const num = it->find("num");
+        auto const den = it->find("den");
+        if ((num == it->end()) || (den == it->end()) ||
+            !num->is_number_integer() || !den->is_number_integer())
+        {
+            return false;
+        }
+
+        out.numerator   = num->get<int64_t>();
+        out.denominator = den->get<int64_t>();
+        return out.denominator != 0;
+    }
+
     // --- The catalog --------------------------------------------
 
     std::vector<CallSpec> buildCatalog()
     {
         std::vector<CallSpec> calls;
 
+        // ABI call mxlGetTime
         calls.push_back(CallSpec{
             "mxlGetTime", "time.h",
             "Current TAI time in nanoseconds since the SMPTE ST 2059 epoch.",
@@ -50,6 +139,7 @@ namespace
                 return json{{"ok", true}, {"time_ns", nsText(mxlGetTime())}};
             }});
         
+        // ABI call mxlGetVersion
         calls.push_back(CallSpec{
             "mxlGetVersion", "mxl.h",
             "The SDK's semantic version.",
@@ -67,6 +157,7 @@ namespace
                             {"bugfix", version.bugfix}};
             }});
         
+        // ABI call mxlIsTmpFs
         calls.push_back(CallSpec{
             "mxlIsTmpFs", "mxl.h",
             "Whether a path resides on a RAM-backed filesystem.",
@@ -88,6 +179,288 @@ namespace
                 return json{{"ok", true}, {"is_tmpfs", isTmpFs}};
             }});
         
+        // ABI call mxlCreateInstance
+        calls.push_back(CallSpec{
+            "mxlCreateInstance", "mxl.h",
+            "Open an MXL domain and return an instance handle. Returns NULL on failure -- this call has no status code.",
+            {{"domain", "string", true, "Domain directory, e.g. /Volumes/mxl/domain_1"},
+             {"store_as", "handle", true, "Registry name to store the new instance under"},
+             {"options", "string", false, "Reserved by the SDK; currently unused"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string const domain  = argString(args, "domain");
+                std::string const storeAs = argString(args, "store_as");
+                if (domain.empty() || storeAs.empty())
+                {
+                    return failed("arguments 'domain' and 'store_as' are required");
+                }
+
+                std::string const options = argString(args, "options");
+                mxlInstance const instance =
+                    mxlCreateInstance(domain.c_str(), options.empty() ? nullptr : options.c_str());
+                if (instance == nullptr)
+                {
+                    return failed("mxlCreateInstance returned NULL for domain " + domain);
+                }
+
+                registry.store(storeAs, HandleKind::Instance, instance, domain);
+                return json{{"ok", true}, {"stored_as", storeAs}};
+            }});
+        
+        // ABI call mxlDestroyInstance
+        calls.push_back(CallSpec{
+            "mxlDestroyInstance", "mxl.h",
+            "Destroy an instance and every flow reader and writer it owns.",
+            {{"instance", "handle", true, "Registry name of the instance to destroy"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string const name = argString(args, "instance");
+                if (name.empty())
+                {
+                    return failed("argument 'instance' is required");
+                }
+
+                // take(), not find(): the slot is gone before the pointer is used,
+                // so a second thread asking to destroy the same name gets nullptr
+                // rather than a second crack at the same instance.
+                void* const ptr = registry.take(name, HandleKind::Instance);
+                if (ptr == nullptr)
+                {
+                    return failed("no instance handle named " + name);
+                }
+                
+                mxlStatus const status = mxlDestroyInstance(static_cast<mxlInstance>(ptr));
+
+                json result = statusJson("mxlDestroyInstance", status);
+                result["released"] = name;
+                return result;
+            }});
+        
+        // ABI call mxlCreateFlowWriter
+        calls.push_back(CallSpec{
+            "mxlCreateFlowWriter", "flow.h",
+            "Create a flow from a flow definition -- or open the existing one with that id -- and return a writer handle.",
+            {{"instance", "handle", true, "Registry name of the instance"},
+             {"flow_def", "string", true, "The flow definition JSON, as a string"},
+             {"options", "string", false, "Reserved by the SDK, currently unused"},
+             {"store_as", "handle", true, "Registry name to store the new writer under"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string const flowDef      = argString(args, "flow_def");
+                std::string const storeAs      = argString(args, "store_as");
+                if (flowDef.empty() || storeAs.empty())
+                {
+                    return failed("arguments 'flow_def' and 'store_as' are required");
+                }
+
+                std::string error;
+                auto const  instance = static_cast<mxlInstance>(
+                    handleArg(registry, args, "instance", HandleKind::Instance, error));
+                if (instance == nullptr)
+                {
+                    return failed(error);
+                }
+
+                std::string const options = argString(args, "options");
+
+                mxlFlowWriter     writer{};
+                mxlFlowConfigInfo config{};
+                bool              created = false;
+
+                mxlStatus const status = mxlCreateFlowWriter(instance, flowDef.c_str(),
+                    options.empty() ? nullptr : options.c_str(), &writer, &config, &created);
+
+                json result = statusJson("mxlCreateFlowWriter", status);
+                if (status != MXL_STATUS_OK)
+                {
+                    return result;
+                }
+
+                std::string const flowId = uuidText(config.common.id);
+                registry.store(storeAs, HandleKind::FlowWriter, writer, flowId);
+
+                result["stored_as"]  = storeAs;
+                result["flow_id"]    = flowId;
+                result["created"]    = created;
+                result["grain_rate"] = std::to_string(config.common.grainRate.numerator) + "/" +
+                                       std::to_string(config.common.grainRate.denominator);
+                if (mxlIsDiscreteDataFormat((int)config.common.format))
+                {
+                    result["grain_count"] = config.discrete.grainCount;
+                }
+                return result;
+        }});
+
+        // ABI call mxlReleaseFlowWriter
+        calls.push_back(CallSpec{
+            "mxlReleaseFlowWriter", "flow.h",
+            "Release a flow writer. The flow itself stays in the domain until every writer and reader is gone.",
+            {{"instance", "handle", true, "Registry name of the instance that owns the writer"},
+                {"writer", "handle", true, "Registry name of the writer to release"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string const writerName   = argString(args, "writer");
+                if (writerName.empty())
+                {
+                    return failed("argument 'writer' is required");
+                }
+                std::string error;
+                auto const  instance = static_cast<mxlInstance>(
+                    handleArg(registry, args, "instance", HandleKind::Instance, error));
+                if (instance == nullptr)
+                {
+                    return failed(error);
+                }
+
+                void* const ptr = registry.take(writerName, HandleKind::FlowWriter);
+                if (ptr == nullptr)
+                {
+                    return failed("no flow_writer handle named " + writerName);
+                }
+
+                mxlStatus const status = 
+                    mxlReleaseFlowWriter(instance, static_cast<mxlFlowWriter>(ptr));
+                
+                json result = statusJson("mxlReleaseFlowWriter", status);
+                result["released"] = writerName;
+                return result;
+        }});
+
+        // ABI call mxlCreateFlowReader
+        calls.push_back(CallSpec{
+            "mxlCreateFlowReader", "flow.h",
+            "Attach a reader to an existing flow, by flow id. A reader never creates a flow.",
+            {{"instance", "handle", true, "Registry name of the instance"},
+                {"flow_id", "string", true, "UUID of the flow to attach to"},
+                {"options", "string", false, "Reserved by the SDK; currently unused"},
+                {"store_as", "handle", true, "Registry name to store the new reader under"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string const flowId       = argString(args, "flow_id");
+                std::string const storeAs      = argString(args, "store_as");
+                if (flowId.empty() || storeAs.empty())
+                {
+                    return failed("arguments 'flow_id' and 'store_as' are required");
+                }
+
+                std::string error;
+                auto const  instance = static_cast<mxlInstance>(
+                    handleArg(registry, args, "instance", HandleKind::Instance, error));
+                if (instance == nullptr)
+                {
+                    return failed(error);
+                }
+
+                std::string const options = argString(args, "options");
+
+                mxlFlowReader   reader{};
+                mxlStatus const status = mxlCreateFlowReader(instance, flowId.c_str(),
+                    options.empty() ? nullptr : options.c_str(), &reader);
+                
+                json result = statusJson("mxlCreateFlowReader", status);
+                if (status != MXL_STATUS_OK)
+                {
+                    return result;
+                }
+
+                registry.store(storeAs, HandleKind::FlowReader, reader, flowId);
+                result["stored_as"] = storeAs;
+                result["flow_id"]   = flowId;
+                return result;
+        }});
+
+        // ABI call mxlReleaseFlowReader
+        calls.push_back(CallSpec{
+            "mxlReleaseFlowReader", "flow.h",
+            "Release a flow reader.",
+            {{"instance", "handle", true, "Registry name of the instance that owns the reader"},
+                {"reader", "handle", true, "Registry name of the reader to release"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string const readerName   = argString(args, "reader");
+                if (readerName.empty())
+                {
+                    return failed("argument 'reader' is required");
+                }
+                std::string error;
+                auto const  instance = static_cast<mxlInstance>(
+                    handleArg(registry, args, "instance", HandleKind::Instance, error));
+                if (instance == nullptr)
+                {
+                    return failed(error);
+                }
+
+                void* const ptr = registry.take(readerName, HandleKind::FlowReader);
+                if (ptr == nullptr)
+                {
+                    return failed("no flow_reader handle named " + readerName);
+                }
+
+                mxlStatus const status =
+                    mxlReleaseFlowReader(instance, static_cast<mxlFlowReader>(ptr));
+                
+                json result = statusJson("mxlReleaseFlowReader", status);
+                result["released"] = readerName;
+                return result;
+        }});
+        
+        // ABI call mxlIsFlowActive
+        calls.push_back(CallSpec{
+            "mxlIsFlowActive", "flow.h",
+            "Whether the flow currently has an active writer. Reader do not count.",
+            {{"instance", "handle", true, "Registry name of the instance"},
+                {"flow_id", "string", true, "UUID of the flow to test"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string const flowId       = argString(args, "flow_id");
+                if (flowId.empty())
+                {
+                    return failed("arguments 'flow_id' is required");
+                }
+
+                std::string error;
+                auto const  instance = static_cast<mxlInstance>(
+                    handleArg(registry, args, "instance", HandleKind::Instance, error));
+                if (instance == nullptr)
+                {
+                    return failed(error);
+                }
+
+                bool            isActive = false;
+                mxlStatus const status   = mxlIsFlowActive(instance, flowId.c_str(), &isActive);
+
+                json result = statusJson("mxlIsFlowActive", status);
+                if (status == MXL_STATUS_OK)
+                {
+                    result["is_active"] = isActive;
+                }
+                return result;
+        }});
+
+        // ABI call mxlGetCurrentIndex
+        calls.push_back(CallSpec{
+            "mxlGetCurrentIndex", "time.h",
+            "The grain index for 'now' at the given edit rate. Rounds to nearest, so it can name a slot that has not started yet.",
+            {{"edit_rate", "rational", true, "Grain rate, e.g. {\"num\":30000,\"den\":1001}"}},
+            [](Registry&, json const& args)
+            {
+                mxlRational editRate{};
+                if (!argRational(args, "edit_rate", editRate))
+                {
+                    return failed("argument 'edit_rate' must be {\"num\":<int>,\"den\":<non-zero int>}");
+                }
+
+                uint64_t const index = mxlGetCurrentIndex(&editRate);
+                uint64_t const nowNs = mxlGetTime();
+                uint64_t const otsNs = mxlIndexToTimestamp(&editRate, index);
+
+                return json{{"ok", true},
+                            {"index", index},
+                            {"ots_ns", nsText(otsNs)},
+                            {"now_ns", nsText(nowNs)},
+                            {"age_ms", (int64_t)(nowNs - otsNs) / 1000000.0}};
+        }});
+
         return calls;
     }
 }

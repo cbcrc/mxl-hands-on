@@ -37,6 +37,12 @@ public:
     // The handle stored under `name`, or nullptr if absent or of a different kind.
     void* find(std::string const& name, HandleKind kind) const;
 
+    // Remove the slot named `name` and return the handle it held, or nullptr if
+    // it was absent or of a different kind. Removal and lookup happen under one
+    // lock, so exactly one caller can ever receive a given pointer -- which is
+    // what makes it safe to destroy it afterwards.
+    void* take(std::string const& name, HandleKind kind);
+
     // A copy of every slot, for GET /state.
     std::map<std::string, HandleEntry> snapshot() const;
 
