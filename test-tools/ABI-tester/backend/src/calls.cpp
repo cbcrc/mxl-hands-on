@@ -4,6 +4,8 @@
 #include "calls.hpp"
 
 #include <cstdio>
+#include <cerrno>
+#include <cstdlib>
 
 #include <mxl/mxl.h>
 #include <mxl/time.h>
@@ -121,6 +123,42 @@ namespace
         out.numerator   = num->get<int64_t>();
         out.denominator = den->get<int64_t>();
         return out.denominator != 0;
+    }
+
+    // Accepts a JSON number *or* a decimal string. Above 2^53 the frontend can only
+    // send these as strings, so both spellings have to work.
+    bool argUint64(json const& args, char const* name, uint64_t& out)
+    {
+        auto const it = args.find(name);
+        if (it == args.end())
+        {
+            return false;
+        }
+
+        if (it->is_number_unsigned())
+        {
+            out = it->get<uint64_t>();
+            return true;
+        }
+
+        if (!it->is_string())
+        {
+            return false;
+        }
+
+        std::string const text  = it->get<std::string>();
+        char const* const start = text.c_str();
+        char*             end   = nullptr;
+        
+        errno = 0;
+        unsigned long long const value = std::strtoull(start, &end, 10);
+        if ((end == start) || (*end != '\0') || (errno == ERANGE))
+        {
+            return false; // nothing consumed / trailing junk / overflow
+        }
+
+        out = value;
+        return true;
     }
 
     // --- The catalog --------------------------------------------
@@ -459,6 +497,59 @@ namespace
                             {"ots_ns", nsText(otsNs)},
                             {"now_ns", nsText(nowNs)},
                             {"age_ms", (int64_t)(nowNs - otsNs) / 1000000.0}};
+        }});
+
+        // ABI call mxlIndexToTimestamp
+        calls.push_back(CallSpec{
+            "mxlIndexToTimestamp", "time.h",
+            "The OTS in nanoseconds at which the given grain index starts.",
+            {{"edit_rate", "rational", true, "Grain rate, e.g. {\"num\":30000,\"den\":1001}"},
+                {"index", "uint64", true, "Grain index to convert"}},
+            [](Registry&, json const& args)
+            {
+                mxlRational editRate{};
+                if (!argRational(args, "edit_rate", editRate))
+                {
+                    return failed("argument 'edit_rate' must be {\"num\":<int>,\"den\":<non-zero int>}");
+                }
+
+                uint64_t index = 0;
+                if (!argUint64(args, "index", index))
+                {
+                    return failed("argument 'index' must be an unsigned integer or a decimal string");
+                }
+
+                return json{{"ok", true},
+                            {"index", index},
+                            {"ots_ns", nsText(mxlIndexToTimestamp(&editRate, index))}};
+        }});
+
+        // ABI call mxlTimestampToIndex
+        calls.push_back(CallSpec{
+            "mxlTimestampToIndex", "time.h",
+            "The grain index for a TAI timestamp. Rounds to nearest, so it is not the inverse of mxlIndexToTimestamp.",
+            {{"edit_rate", "rational", true, "Grain rate e.g. {\"num\":30000,\"den\":1001}"},
+                {"timestamp_ns", "uint64", true, "TAI ns since the ST 2059 epoch"}},
+            [](Registry&, json const& args)
+            {
+                mxlRational editRate{};
+                if (!argRational(args, "edit_rate", editRate))
+                {
+                    return failed("argument 'edit_rate' must be {\"num\":<int>,\"den\":<non-zero int>}");
+                }
+
+                uint64_t timestampNs = 0;
+                if (!argUint64(args, "timestamp_ns", timestampNs))
+                {
+                    return failed("argument 'timestamp_ns' must be an unsigned integer or a decimal string");
+                }
+
+                uint64_t const index = mxlTimestampToIndex(&editRate, timestampNs);
+
+                return json{{"ok", true},
+                            {"timestamp_ns", nsText(timestampNs)},
+                            {"index", index},
+                            {"ots_ns", nsText(mxlIndexToTimestamp(&editRate, index))}};
         }});
 
         return calls;
