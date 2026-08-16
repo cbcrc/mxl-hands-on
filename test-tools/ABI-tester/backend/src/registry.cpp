@@ -16,10 +16,14 @@ char const* handleKindName(HandleKind kind)
     return "unknown";
 }
 
-void Registry::store(std::string const& name, HandleKind kind, void* ptr, std::string note)
+bool Registry::store(std::string const& name, HandleKind kind, void* ptr, std::string note)
 {
     std::lock_guard<std::mutex> lock(_mutex);
-    _entries[name] = HandleEntry{kind, ptr, std::move(note)};
+
+    // try_emplace inserts only if the key is absent, under this one lock.
+    auto const [entry, inserted] =_entries.try_emplace(name, HandleEntry{kind, ptr, std::move(note)});
+    (void)entry;
+    return inserted;
 }
 
 void* Registry::find(std::string const& name, HandleKind kind) const

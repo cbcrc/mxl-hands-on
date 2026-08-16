@@ -31,7 +31,7 @@ namespace
             case MXL_ERR_UNKNOWN:                return "MXL_ERR_UNKNOWN";
             case MXL_ERR_FLOW_NOT_FOUND:         return "MXL_ERR_FLOW_NOT_FOUND";
             case MXL_ERR_OUT_OF_RANGE_TOO_LATE:  return "MXL_ERR_OUT_OF_RANGE_TOO_LATE";
-            case MXL_ERR_OUT_OF_RANGE_TOO_EARLY: return "MXL_ERR_OUT_OF_RANGE_TOO_EARLY:";
+            case MXL_ERR_OUT_OF_RANGE_TOO_EARLY: return "MXL_ERR_OUT_OF_RANGE_TOO_EARLY";
             case MXL_ERR_INVALID_FLOW_READER:    return "MXL_ERR_INVALID_FLOW_READER";
             case MXL_ERR_INVALID_FLOW_WRITER:    return "MXL_ERR_INVALID_FLOW_WRITER";
             case MXL_ERR_TIMEOUT:                return "MXL_ERR_TIMEOUT";
@@ -75,6 +75,10 @@ namespace
             id[8], id[9], id[10], id[11], id[12], id[13], id[14], id[15]);
         return text;
     }
+
+    // A sleep runs on the HTTP handler's own thread, so it must stay short enough
+    // that the connection never looks hung.
+    constexpr uint64_t kMaxSleepNs = 5'000'000'000ULL;
 
     // --- argument accessors -------------------------------------
 
@@ -241,8 +245,12 @@ namespace
                     return failed("mxlCreateInstance returned NULL for domain " + domain);
                 }
 
-                registry.store(storeAs, HandleKind::Instance, instance, domain);
-                return json{{"ok", true}, {"stored_as", storeAs}};
+                if (!registry.store(storeAs, HandleKind::Instance, instance, domain))
+                {
+                    mxlDestroyInstance(instance);   // nothing else can reach it -- undo the create
+                    return failed("handle name '" + storeAs + "' is already in use");
+                }
+                return json{{"ok", true}, {"store_as", storeAs}};
             }});
         
         // ABI call mxlDestroyInstance
@@ -315,7 +323,11 @@ namespace
                 }
 
                 std::string const flowId = uuidText(config.common.id);
-                registry.store(storeAs, HandleKind::FlowWriter, writer, flowId);
+                if (!registry.store(storeAs, HandleKind::FlowWriter, writer, flowId))
+                {
+                    mxlReleaseFlowWriter(instance, writer);
+                    return failed("handle name '" + storeAs + "' is already in use");
+                }
 
                 result["stored_as"]  = storeAs;
                 result["flow_id"]    = flowId;
@@ -401,7 +413,11 @@ namespace
                     return result;
                 }
 
-                registry.store(storeAs, HandleKind::FlowReader, reader, flowId);
+                if (!registry.store(storeAs, HandleKind::FlowReader, reader, flowId))
+                {
+                    mxlReleaseFlowReader(instance, reader);
+                    return failed("handle name '" + storeAs + "' is already in use");
+                }
                 result["stored_as"] = storeAs;
                 result["flow_id"]   = flowId;
                 return result;
@@ -550,6 +566,118 @@ namespace
                             {"timestamp_ns", nsText(timestampNs)},
                             {"index", index},
                             {"ots_ns", nsText(mxlIndexToTimestamp(&editRate, index))}};
+        }});
+
+        // ABI call mxlGetNsUntilIndex
+        calls.push_back(CallSpec{
+            "mxlGetNsUntilIndex", "time.h",
+            "Nanoseconds until the given grain index starts. Zero if that index has already passed.",
+            {{"edit_rate", "rational", true, "Grain rate, e.g. {\"num\":30000,\"den\":1001}"},
+                {"index", "uint64", true, "Grain index to wait for"}},
+            [](Registry&, json const& args)
+            {
+                mxlRational editRate{};
+                if (!argRational(args, "edit_rate", editRate))
+                {
+                    return failed("argument 'edit_rate' must be {\"num\":<int>,\"den\":<non-zero int>}");
+                }
+
+                uint64_t index = 0;
+                if (!argUint64(args, "index", index))
+                {
+                    return failed("argument 'index' must be an unsigned integer or a decimal string");
+                }
+
+                // No status code: MXL_UNDEFINED_INDEX (UINT64_MAX) *is* the error report.
+                uint64_t const waitNs = mxlGetNsUntilIndex(index, &editRate);
+                if (waitNs == MXL_UNDEFINED_INDEX)
+                {
+                    return failed("mxlGetNsUntilIndex rejected the edit rate");
+                }
+
+                return json{{"ok", true},
+                            {"index", index},
+                            {"wait_ns", nsText(waitNs)},
+                            {"wait_ms", waitNs / 1000000.0}};
+        }});
+
+        // ABI call mxlSleepForNs
+        calls.push_back(CallSpec{
+            "mxlSleepForNs", "time.h",
+            "Sleep for a duration on the TAI clock. Returns nothing -- the useful number is how much longer it actually slept.",
+            {{"ns", "uint64", true, "How long to sleep, in nanoseconds (5s maximum)"}},
+            [](Registry&, json const& args)
+            {
+                uint64_t ns = 0;
+                if (!argUint64(args, "ns", ns))
+                {
+                    return failed("argument 'ns' must be an unsigned integer or a decimal string");
+                }
+                if (ns > kMaxSleepNs)
+                {
+                    return failed("argument 'ns' exceeds the " + nsText(kMaxSleepNs) + " ns cap");
+                }
+
+                // Nothing to observe but the clock: bracket the call and report the overshoot.
+                uint64_t const startNs = mxlGetTime();
+                mxlSleepForNs(ns);
+                uint64_t const endNs = mxlGetTime();
+
+                uint64_t const actualNs = endNs - startNs;
+                return json{{"ok", true},
+                            {"requested_ns", nsText(ns)},
+                            {"actual_ns", nsText(actualNs)},
+                            {"overshoot_us", (int64_t)(actualNs - ns) / 1000.0}};
+        }});
+
+        // ABI call mxlSleepUntil
+        calls.push_back(CallSpec{
+            "mxlSleepUntil", "time.h",
+            "Sleep until an absolute TAI timestamp. Returns immediately if that moment has already passed.",
+            {{"timestamp_ns", "uint64", true, "TAI ns since the ST 2059 epoch, at most 5s ahead"}},
+            [](Registry&, json const& args)
+            {
+                uint64_t targetNs = 0;
+                if (!argUint64(args, "timestamp_ns", targetNs))
+                {
+                    return failed("argument 'timestamp_ns' must be an unsigned integer or a decimal string");
+                }
+
+                uint64_t const startNs = mxlGetTime();
+
+                // The > test guards the substraction: on a past target it would wrap.
+                if ((targetNs > startNs) && ((targetNs - startNs) > kMaxSleepNs))
+                {
+                    return failed("argument 'timestamp_ns' is more than " + nsText(kMaxSleepNs) +
+                                  " ns in the future");
+                }
+
+                mxlSleepUntil(targetNs);
+                uint64_t const endNs = mxlGetTime();
+
+                return json{{"ok", true},
+                            {"timestamp_ns", nsText(targetNs)},
+                            {"woke_ns", nsText(endNs)},
+                            {"slept_ms", (int64_t)(endNs - startNs) / 1000000.0},
+                            {"late_us", (int64_t(endNs - targetNs) / 1000.0)}};
+        }});
+
+        // ABI call mxlGarbageCollectFlows
+        calls.push_back(CallSpec{
+            "mxlGarbageCollectFlows", "mxl.h",
+            "Delete every flow in the domain that no longer has a reader or writer holding its lock -- the debris left by a crashed process.",
+            {{"instance", "handle", true, "Registry name of the instance"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string error;
+                auto const  instance = static_cast<mxlInstance>(
+                    handleArg(registry, args, "instance", HandleKind::Instance, error));
+                if (instance == nullptr)
+                {
+                    return failed(error);
+                }
+
+                return statusJson("mxlGarbageCollectFlows", mxlGarbageCollectFlows(instance));
         }});
 
         return calls;

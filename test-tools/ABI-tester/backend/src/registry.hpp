@@ -32,7 +32,7 @@ struct HandleEntry
 class Registry
 {
 public:
-    void store(std::string const& name, HandleKind kind, void* ptr, std::string note);
+    bool store(std::string const& name, HandleKind kind, void* ptr, std::string note = {});
 
     // The handle stored under `name`, or nullptr if absent or of a different kind.
     void* find(std::string const& name, HandleKind kind) const;
