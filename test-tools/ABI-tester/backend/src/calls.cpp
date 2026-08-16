@@ -250,7 +250,7 @@ namespace
                     mxlDestroyInstance(instance);   // nothing else can reach it -- undo the create
                     return failed("handle name '" + storeAs + "' is already in use");
                 }
-                return json{{"ok", true}, {"store_as", storeAs}};
+                return json{{"ok", true}, {"stored_as", storeAs}};
             }});
         
         // ABI call mxlDestroyInstance
@@ -373,6 +373,230 @@ namespace
                 
                 json result = statusJson("mxlReleaseFlowWriter", status);
                 result["released"] = writerName;
+                return result;
+        }});
+
+        // ABI call mxlFlowWriterOpenGrain
+        calls.push_back(CallSpec{
+            "mxlFlowWriterOpenGrain", "flow.h",
+            "Open the grain at `index` for writing and hand back its info and payload pointer. "
+            "A writer tracks one open grain at a time; close it with commitGrain or cancelGrain.",
+            {{"writer", "handle", true, "Registry name of the flow writer"},
+                {"index", "uint64", true, "Grain index to open"},
+                {"store_as", "handle", true, "Registry name to cache the open grain under"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string const writerName = argString(args, "writer");
+                std::string const storeAs    = argString(args, "store_as");
+                if (storeAs.empty())
+                {
+                    return failed("argument 'store as' is required");
+                }
+
+                std::string error;
+                auto const  writer = static_cast<mxlFlowWriter>(
+                    handleArg(registry, args, "writer", HandleKind::FlowWriter, error));
+                if (writer == nullptr)
+                {
+                    return failed(error);
+                }
+
+                uint64_t index = 0;
+                if (!argUint64(args, "index", index))
+                {
+                    return failed("argument 'index' must be a uint64 (number or decimal string)");
+                }
+
+                mxlGrainInfo grain{};
+                uint8_t*     payload = nullptr;
+
+                mxlStatus const status = mxlFlowWriterOpenGrain(writer, index, &grain, &payload);
+
+                json result = statusJson("mxlFlowWriterOpenGrain", status);
+                if (status != MXL_STATUS_OK)
+                {
+                    return result;
+                }
+
+                HandleEntry entry{HandleKind::Grain, writer,
+                    "open on writer " + writerName, grain, payload};
+                
+                if (!registry.store(storeAs, entry))
+                {
+                    // The undo is not "release a handle" -- there isn't one. The open
+                    // grain lives in the writer, so cancelling is what puts it back.
+                    mxlFlowWriterCancelGrain(writer);
+                    return failed("handle name '" + storeAs + "' is already in use");
+                }
+
+                result["stored_as"]     = storeAs;
+                result["index"]         = grain.index;
+                result["grain_size"]    = grain.grainSize;
+                result["total_slices"]  = grain.totalSlices;
+                result["valid_slices"]  = grain.validSlices;
+                result["flags"]         = grain.flags;
+                return result;
+        }});
+
+        // ABI call mxlFlowWriterCommitGrain
+        calls.push_back(CallSpec{
+            "mxlFlowWriterCommitGrain", "flow.h",
+            "Commit the open grain. The writer closes it only when validSlices reaches totalSlices, "
+            "so several partial commits against one open grain are legal.",
+            {{"writer", "handle", true, "Registry name of the flow writer"},
+                {"grain", "handle", true, "Registry name of the grain cached by OpenGrain"},
+                {"valid_slices", "uint64", false, "Slices to declare valid; default totalSlices"},
+                {"flags", "uint64", false, "Grain flags; default 0. 1 = MXL_GRAIN_FLAG_INVALID"}},
+        [](Registry& registry, json const& args)
+        {
+            std::string const grainName = argString(args, "grain");
+            if (grainName.empty())
+            {
+                return failed("argument 'grain' is required");
+            }
+
+            std::string error;
+            auto const writer = static_cast<mxlFlowWriter>(
+                handleArg(registry, args, "writer", HandleKind::FlowWriter, error));
+            if (writer == nullptr)
+            {
+                return failed(error);
+            }
+
+            HandleEntry entry{};
+            if (!registry.findEntry(grainName, HandleKind::Grain, entry))
+            {
+                return failed("no grain handle named " + grainName);
+            }
+
+            // The struct OpenGrain produced, index and all -- commit rejects
+            // anything whose index is not the writer's currently open one.
+            mxlGrainInfo grain = entry.grain;
+
+            uint64_t validSlices = grain.totalSlices;
+            if (args.contains("valid_slices") && !argUint64(args, "valid_slices", validSlices))
+            {
+                return failed("argument 'valid_slices' must be a uint64");
+            }
+            if (validSlices > grain.totalSlices)
+            {
+                return failed("valid_slices " + std::to_string(validSlices) +
+                              " exceeds totalSlices " + std::to_string(grain.totalSlices));
+            }
+
+            uint64_t flags = 0;
+            if (args.contains("flags") && !argUint64(args, "flags", flags))
+            {
+                return failed("argument 'flags' must be a uint64");
+            }
+
+            grain.validSlices = static_cast<uint16_t>(validSlices);
+            grain.flags       = static_cast<uint32_t>(flags);
+
+            mxlStatus const status = mxlFlowWriterCommitGrain(writer, &grain);
+
+            json result = statusJson("mxlFlowWriterCommitGrain", status);
+            if (status != MXL_STATUS_OK)
+            {
+                return result;
+            }
+
+            bool const complete = (grain.validSlices == grain.totalSlices);
+            if (complete)
+            {
+                // The ABI just closed the grain, so the cached slot is dead. This is
+                // not atomic with the findEntry above, and does not need to be: two
+                // lanes racing one grain both reach the ABI, the loser gets
+                // MXL_ERR_INVALID_ARG, and the grain slot owns no resource to leak.
+                HandleEntry dropped{};
+                registry.takeEntry(grainName, HandleKind::Grain, dropped);
+            }
+
+            result["index"]         = grain.index;
+            result["valid_slices"]  = grain.validSlices;
+            result["total_slices"]  = grain.totalSlices;
+            result["flags"]         = grain.flags;
+            result["complete"]      = complete;
+            return result;
+        }});
+
+        // ABI call mxlFlowWriterCancelGrain
+        calls.push_back(CallSpec{
+            "mxlFlowWriterCancelGrain", "flow.h",
+            "Abandon the writer's open grain. Reset the writer's tracked index only -- bytes "
+            "already written into the payload stay written.",
+            {{"writer", "handle", true, "Registry name of the flow writer"},
+                {"grain", "handle", false, "Registry name of the cached grain to drop as well"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string error;
+                auto const  writer = static_cast<mxlFlowWriter>(
+                    handleArg(registry, args, "writer", HandleKind::FlowWriter, error));
+                if (writer == nullptr)
+                {
+                    return failed(error);
+                }
+
+                mxlStatus const status = mxlFlowWriterCancelGrain(writer);
+
+                json result = statusJson("mxlFlowWriterCancelGrain", status);
+                if (status != MXL_STATUS_OK)
+                {
+                    return result;
+                }
+
+                // The ABI forgot the grain; drop the tool's cached copy too, or the two
+                // disagree and the next commit fails with a confusing MXL_ERR_INVALID_ARGS.
+                std::string const grainName = argString(args, "grain");
+                if (!grainName.empty())
+                {
+                    HandleEntry dropped{};
+                    result["dropped"] = registry.takeEntry(grainName, HandleKind::Grain, dropped);
+                }
+                return result;
+        }});
+
+        // ABI call mxlFlowWriterGetGrainInfo
+        calls.push_back(CallSpec{
+            "mxlFlowWriterGetGrainInfo", "flow.h",
+            "Peek at the header of the ring slot an index map to. Does not open the grain, and "
+            "does not validate the index -- the slot may hold an entirely different grain.",
+            {{"writer", "handle", true, "Registry name of the flow writer"},
+                {"index", "uint64", true, "Grain index to look up"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string error;
+                auto const  writer = static_cast<mxlFlowWriter>(
+                    handleArg(registry, args, "writer", HandleKind::FlowWriter, error));
+                if (writer == nullptr)
+                {
+                    return failed(error);
+                }
+
+                uint64_t index = 0;
+                if (!argUint64(args, "index", index))
+                {
+                    return failed("argument 'index' must be a uint64 (number or decimal string)");
+                }
+
+                mxlGrainInfo grain{};
+                mxlStatus const status = mxlFlowWriterGetGrainInfo(writer, index, &grain);
+
+                json result = statusJson("mxlFlowWriterGetGrainInfo", status);
+                if (status != MXL_STATUS_OK)
+                {
+                    return result;
+                }
+
+                // The call cannot fail on a bad index -- it hands back slot index % grainCount
+                // whatever lives there. Comparing the two is the only staleness signal there is.
+                result["requested_index"] = index;
+                result["index"]           = grain.index;
+                result["matches"]         = (grain.index == index);
+                result["grain_size"]      = grain.grainSize;
+                result["total_slices"]    = grain.totalSlices;
+                result["valid_slices"]    = grain.validSlices;
+                result["flags"]           = grain.flags;
                 return result;
         }});
 
