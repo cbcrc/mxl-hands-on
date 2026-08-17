@@ -19,7 +19,11 @@ find_package(nlohmann_json REQUIRED)
 
 add_executable(abi-tester src/main.cpp src/domains.cpp src/registry.cpp src/calls.cpp)
 
-target_compile_options(abi-tester PRIVATE -Wall -Wextra)
+# -Werror=return-type only: falling off the end of a non-void function is undefined
+# behaviour, not an error the standard requires the compiler to reject, so GCC warns
+# and links anyway. A blanket -Werror would also stop the build on the harmless
+# unused-function notices a helper produces before its caller is typed.
+target_compile_options(abi-tester PRIVATE -Wall -Wextra -Werror=return-type)
 
 target_include_directories(abi-tester PRIVATE "${MXL_ROOT}/lib/include")
 target_link_directories(abi-tester PRIVATE "${MXL_LIB_DIR}")

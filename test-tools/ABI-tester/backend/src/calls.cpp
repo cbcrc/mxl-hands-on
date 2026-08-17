@@ -1668,6 +1668,81 @@ namespace
                 return statusJson("mxlGarbageCollectFlows", mxlGarbageCollectFlows(instance));
         }});
 
+        // ABI call mxlCreateFlowSynchronizationGroup
+        calls.push_back(CallSpec{
+            "mxlCreateFlowSynchronizationGroup", "flow.h",
+            "Create en empty synchronization group. Readers are added to it afterwards, and "
+            "WaitForDataAt then block until every member has data for one timestamp.",
+            {{"instance", "handle", true, "Registry name of the instance"},
+                {"store_as", "handle", true, "Registry name to store the new group under"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string const storeAs = argString(args, "store_as");
+                if (storeAs.empty())
+                {
+                    return failed("argument 'store_as' is required");
+                }
+
+                std::string error;
+                auto const  instance = static_cast<mxlInstance>(
+                    handleArg(registry, args, "instance", HandleKind::Instance, error));
+                if (instance == nullptr)
+                {
+                    return failed(error);
+                }
+
+                mxlFlowSynchronizationGroup group = nullptr;
+                mxlStatus const status = mxlCreateFlowSynchronizationGroup(instance, &group);
+
+                json result = statusJson("mxlCreateFlowSynchronizationGroup", status);
+                if (status != MXL_STATUS_OK)
+                {
+                    return result;
+                }
+
+                if (!registry.store(storeAs, HandleKind::SyncGroup, group, "empty"))
+                {
+                    mxlReleaseFlowSynchronizationGroup(instance, group);
+                    return failed("handle name '" + storeAs + "' is already in use");
+                }
+                result["stored_as"] = storeAs;
+                return result;
+        }});
+
+        // ABI call mxlReleaseFlowSynchronizationGroup
+        calls.push_back(CallSpec{
+            "mxlReleaseFlowSynchronizationGroup", "flow.h",
+            "Release a synchronization group. Release it BEFORE the readers it holds -- the "
+            "group keeps raw reader pointers and cannot know they died.",
+            {{"instance", "handle", true, "Registry name of the instance that owns the group"},
+                {"group", "handle", true, "Registry name of the group to release"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string const groupName = argString(args, "group");
+                if (groupName.empty())
+                {
+                    return failed("argument 'group' is required");
+                }
+
+                std::string error;
+                auto const  instance = static_cast<mxlInstance>(
+                    handleArg(registry, args, "instance", HandleKind::Instance, error));
+                if (instance == nullptr)
+                {
+                    return failed(error);
+                }
+
+                auto const group = static_cast<mxlFlowSynchronizationGroup>(
+                    registry.take(groupName, HandleKind::SyncGroup));
+                if (group == nullptr)
+                {
+                    return failed("no sync_group handle named " + groupName);
+                }
+
+                return statusJson("mxlReleaseFlowSynchronizationGroup",
+                                  mxlReleaseFlowSynchronizationGroup(instance, group));
+        }});
+
         return calls;
     }
 }

@@ -13,6 +13,7 @@ char const* handleKindName(HandleKind kind)
         case HandleKind::FlowWriter: return "flow_writer";
         case HandleKind::FlowReader: return "flow_reader";
         case HandleKind::Grain:      return "grain";
+        case HandleKind::SyncGroup:  return "sync_group";
     }
     return "unknown";
 }

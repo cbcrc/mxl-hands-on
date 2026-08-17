@@ -17,6 +17,7 @@ enum class HandleKind
     FlowWriter,
     FlowReader,
     Grain,
+    SyncGroup,
 };
 
 char const* handleKindName(HandleKind kind);
