@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cerrno>
 #include <cstdlib>
+#include <cstring>
 
 #include <mxl/mxl.h>
 #include <mxl/time.h>
@@ -79,6 +80,13 @@ namespace
     // A sleep runs on the HTTP handler's own thread, so it must stay short enough
     // that the connection never looks hung.
     constexpr uint64_t kMaxSleepNs = 5'000'000'000ULL;
+    
+    // float32 has a 24-bit mantissa, so consecutive intergers stop being exactly
+    // representable above 2^24. Sample indices are ~8.6e13, where the gap between
+    // representable floats is ~5  million -- a whole batch would collapse onto one
+    // value. Modulo keeps the ramp exact and still unique over 349 s at 48 kHz.
+    constexpr uint64_t kRampModulus = 1ULL << 24;
+    
 
     // --- argument accessors -------------------------------------
 
@@ -165,6 +173,367 @@ namespace
         return true;
     }
 
+    // --- shared adapter bodies ----------------------------------
+
+    // Shared adapter for mxlFlowInfo, mxlFlowConfigInfo and mxlFlowRuntimeInfo
+    char const* dataFormatName(uint32_t format)
+    {
+        switch (format)
+        {
+            case MXL_DATA_FORMAT_UNSPECIFIED: return "unspecified";
+            case MXL_DATA_FORMAT_VIDEO:       return "video";
+            case MXL_DATA_FORMAT_AUDIO:       return "audio";
+            case MXL_DATA_FORMAT_DATA:        return "data";
+            default:                          return "unknown";
+        }
+    }
+
+    json configJson(mxlFlowConfigInfo const& config)
+    {
+        auto const& common = config.common;
+
+        json result;
+        result["flow_id"]       = uuidText(common.id);
+        result["format"]        = dataFormatName(common.format);
+        result["flags"]         = common.flags;
+        result["grain_rate"]    = json{{"num", common.grainRate.numerator},
+                                       {"den", common.grainRate.denominator}};
+        result["max_commit_batch_size_hint"] = common.maxCommitBatchSizeHint;
+        result["max_sync_batch_size_hint"]   = common.maxSyncBatchSizeHint;
+        result["payload_location"] =
+            (common.payloadLocation == MXL_PAYLOAD_LOCATION_DEVICE_MEMORY) ? "device" : "host";
+        result["device_index"] = common.deviceIndex;
+
+        // discrete and continuous share one union. common.format is the only
+        // discriminator there is -- read the wrong arm and you get the other
+        // arm's bytes, silently and with no error.
+        if (mxlIsDiscreteDataFormat((int)common.format))
+        {
+            json sizes = json::array();
+            for (auto const size : config.discrete.sliceSizes)
+            {
+                sizes.push_back(size);
+            }
+            result["slice_sizes"] = sizes;
+            result["grain_count"] = config.discrete.grainCount;
+        }
+        else if (mxlIsContinuousDataFormat((int)common.format))
+        {
+            result["channel_count"] = config.continuous.channelCount;
+            result["buffer_length"] = config.continuous.bufferLength;
+        }
+        return result;
+    }
+
+    json runtimeJson(mxlFlowRuntimeInfo const& runtime)
+    {
+        uint64_t const now = mxlGetTime();
+
+        json result;
+        result["head_index"]      = runtime.headIndex;
+        result["last_write_time"] = nsText(runtime.lastWriteTime);
+        result["last_read_time"]  = nsText(runtime.lastReadTime);
+
+        // lastWriteTime is set synchronously by the committing writer -- trustworthy.
+        // lastReadTime is stamped by a watcher thread in the *writer's* process, tens of
+        // microseconds late, and survives across process exits. It is a liveness hint and
+        // never a latency, so it goes out with its own age and no other interpretation.
+        result["last_write_age_ms"] = (double)((int64_t)(now - runtime.lastWriteTime)) / 1e6;
+        result["last_read_age_ms"]  = (double)((int64_t)(now - runtime.lastReadTime)) / 1e6;
+        return result;
+    }
+
+    // The four reader-side grain accessors are one function in the library, wearing
+    // four names: GetGrain is GetGrainSlice with MXL_GRAIN_VALID_SLICES_ALL, and the
+    // NonBlocking pair is the same again with no deadline. Everything except the
+    // dispatch line is shared. We still call the *named* symbol so a step that says
+    // mxlFlowReaderGetGrain really enters mxlFlowReaderGetGrain.
+    json readGrain(Registry& registry, json const& args, char const* call,
+                   bool blocking, bool sliced)
+    {
+        std::string const readerName = argString(args, "reader");
+
+        std::string error;
+        auto const  reader = static_cast<mxlFlowReader>(
+            handleArg(registry, args, "reader", HandleKind::FlowReader, error));
+        if (reader == nullptr)
+        {
+            return failed(error);
+        }
+
+        uint64_t index = 0;
+        if (!argUint64(args, "index", index))
+        {
+            return failed("argument 'index' must be a uint64 (number or decimal string)");
+        }
+
+        uint16_t minValidSlices = MXL_GRAIN_VALID_SLICES_ALL;
+        if (sliced)
+        {
+            uint64_t requested = 0;
+            if (!argUint64(args, "min_valid_slices", requested))
+            {
+                return failed("argument 'min_valid_slices' must be a uint64");
+            }
+            if (requested > UINT16_MAX)
+            {
+                return failed("min_valid_slices " + std::to_string(requested) +
+                              " exceeds the uint16 the ABI takes");
+            }
+            minValidSlices = (uint16_t)requested;
+        }
+
+        // Rejected, not clamped: the wait runs on a cpp-httplib pool thread.
+        // 0 is a safe default -- toDeadline(0) is "now", so it does not wait.
+        uint64_t timeoutNs = 0;
+        if (blocking && args.contains("timeout_ns"))
+        {
+            if (!argUint64(args, "timeout_ns", timeoutNs))
+            {
+                return failed("argument 'timeout_ns' must be a uint64");
+            }
+            if (timeoutNs > kMaxSleepNs)
+            {
+                return failed("timeout_ns exceeds the " +
+                              std::to_string(kMaxSleepNs / 1'000'000) + " ms cap");
+            }
+        }
+        
+        mxlGrainInfo grain{};
+        uint8_t*     payload = nullptr;
+        mxlStatus    status  = MXL_ERR_UNKNOWN;
+
+        if (blocking && sliced)
+        {
+            status = mxlFlowReaderGetGrainSlice(reader, index, minValidSlices,
+                                                timeoutNs, &grain, &payload);
+        }
+        else if (blocking)
+        {
+            status = mxlFlowReaderGetGrain(reader, index, timeoutNs, &grain, &payload);
+        }
+        else if (sliced)
+        {
+            status = mxlFlowReaderGetGrainSliceNonBlocking(reader, index, minValidSlices,
+                                                           &grain, &payload);
+        }
+        else
+        {
+            status = mxlFlowReaderGetGrainNonBlocking(reader, index, &grain, &payload);
+        }
+
+        json result = statusJson(call, status);
+
+        // Before the early return: a refused read still says what if refused.
+        result["requested_index"]  = index;
+        result["min_valid_slices"] = minValidSlices;
+        if (blocking)
+        {
+            result["timeout_ns"] = nsText(timeoutNs);
+        }
+        if (status != MXL_STATUS_OK)
+        {
+            return result;
+        }
+
+        std::string const storeAs = argString(args, "store_as");
+        if (!storeAs.empty())
+        {
+            HandleEntry entry{HandleKind::Grain, reader,
+                "read from reader " + readerName, grain, payload};
+            if (!registry.store(storeAs, entry))
+            {
+                // No ABI undo: a read grain owns nothing that needs closing.
+                return failed("handle name '" + storeAs + "' is already in use");
+            }
+            result["stored_as"] = storeAs;
+        }
+
+        result["index"]        = grain.index;
+        result["grain_size"]   = grain.grainSize;
+        result["total_slices"] = grain.totalSlices;
+        result["valid_slices"] = grain.validSlices;
+        result["flags"]        = grain.flags;
+        result["invalid"]      = ((grain.flags & MXL_GRAIN_FLAG_INVALID) != 0);
+        return result;
+    }
+
+    // The slice geometry, reported identically for the writer's mutable slices and the
+    // reader's const ones. A template because those are to distinct C types with the
+    // same field names -- this is compile-time duck typing, the nearest C++ gets to
+    // Python's "if it has .stride, it works".
+    template<typename SliceT>
+    json sliceJson(SliceT const& slices, size_t sampleWordSize)
+    {
+        size_t const first  = slices.base.fragments[0].size;
+        size_t const second = slices.base.fragments[1].size;
+
+        json result;
+        result["channel_count"]       = slices.count;
+        result["stride_bytes"]        = slices.stride;
+        result["fragment_0_bytes"]    = first;
+        result["fragment_1_bytes"]    = second;
+        result["wrapped"]             = (second != 0);
+        result["samples_per_channel"] = (first + second) / sampleWordSize;
+        return result;
+    }
+
+    // Fill every channel with a ramp whose value *is* the index modulo 2^24, so a
+    // reader can prove a wrapped batch was reassembled in the right order.
+    // Two nested rings: fragment[0] then fragment[1] (empty unless the range straddles
+    // the wraparound point), and each channel sits `stride` bytes after the one before it.
+    size_t fillRamp(mxlMutableWrappedMultiBufferSlice const& slices,
+                    uint64_t firstIndex, size_t sampleWordSize)
+    {
+        size_t ordinal = 0; // position within the batch, continuing across the seam
+
+        for (int f = 0; f < 2; ++f)
+        {
+            size_t const samples = slices.base.fragments[f].size / sampleWordSize;
+            for (size_t c = 0; c < slices.count; ++c)
+            {
+                auto* const channel =
+                    static_cast<uint8_t*>(slices.base.fragments[f].pointer) + (c * slices.stride);
+                
+                for (size_t s = 0; s < samples; ++s)
+                {
+                    float const value = (float)((firstIndex + ordinal +s) % kRampModulus);
+                    std::memcpy(channel + (s* sampleWordSize), &value, sizeof(value));
+                }
+            }
+            ordinal += samples;
+        }
+        return ordinal;
+    }
+
+    // Walk the ramp back out. Check every channel, so a wrong `stride` fails here too,
+    // and continues the ordinal across the seam so a mis-ordered wrapped slice fails.
+    json checkRamp(mxlWrappedMultiBufferSlice const& slices, uint64_t firstIndex, size_t wordSize)
+    {
+        bool    intact  = true;
+        size_t  ordinal = 0;
+        double  first   = 0.0;
+        double  last    = 0.0;
+
+        for (int f = 0; f < 2; ++f)
+        {
+            size_t const samples = slices.base.fragments[f].size / wordSize;
+            for (size_t c = 0; c < slices.count; ++c)
+            {
+                auto const* const channel =
+                    static_cast<uint8_t const*>(slices.base.fragments[f].pointer)
+                    + (c * slices.stride);
+                
+                    for (size_t s =0; s < samples; ++s)
+                    {
+                        float value = 0.0f;
+                        std::memcpy(&value, channel + (s * wordSize), sizeof(value));
+
+                        if (value != (float)((firstIndex + ordinal + s) % kRampModulus))
+                        {
+                            intact = false;
+                        }
+                        if (c == 0)
+                        {
+                            if ((f == 0) && (s == 0))
+                            {
+                                first = value;
+                            }
+                            last = value;
+                        }
+                    }
+            }
+            ordinal += samples;
+        }
+
+        json result;
+        result["first_value"] = first;
+        result["last_value"]  = last;
+        result["ramp_intact"] = intact;
+        return result;
+    }
+
+    json readSamples(Registry& registry, json const& args, char const* call, bool blocking)
+    {
+        std::string error;
+        auto const  reader = static_cast<mxlFlowReader>(
+            handleArg(registry, args, "reader", HandleKind::FlowReader, error));
+        if (reader == nullptr)
+        {
+            return failed(error);
+        }
+
+        uint64_t index = 0;
+        if (!argUint64(args, "index", index))
+        {
+            return failed("argument 'index' must be a uint64");
+        }
+
+        uint64_t count = 0;
+        if (!argUint64(args, "count", count))
+        {
+            return failed("argument 'count' must be a uint64");
+        }
+        if ((count == 0) || (count > index))
+        {
+            return failed("count must be > 0 and <= index; range is [index - count, index]");
+        }
+
+        uint64_t wordSize = 4;
+        if (args.contains("sample_word_size") && !argUint64(args, "sample_word_size", wordSize))
+        {
+            return failed("argument 'sample_word_size' must be a uint64");
+        }
+        if (wordSize == 0)
+        {
+            return failed("sample_word_size must not be zero");
+        }
+
+        uint64_t timeoutNs = 0;
+        if (blocking && args.contains("timeout_ns"))
+        {
+            if (!argUint64(args, "timeout_ns", timeoutNs))
+            {
+                return failed("argument 'timeout_ns' must be a uint64");
+            }
+            if (timeoutNs > kMaxSleepNs)
+            {
+                return failed("timeout_ns exceeds the " +
+                              std::to_string(kMaxSleepNs / 1'000'000) + " ms cap");
+            }
+        }
+
+        uint64_t const startNs = mxlGetTime();
+
+        mxlWrappedMultiBufferSlice slices{};
+        mxlStatus const            status = 
+            blocking ? mxlFlowReaderGetSamples(reader, index, count, timeoutNs, &slices)
+                     : mxlFlowReaderGetSamplesNonBlocking(reader, index, count, &slices);
+        
+        uint64_t const endNs = mxlGetTime();
+
+        json result = statusJson(call, status);
+        result["head_index"]         = index;
+        result["first_sample_index"] = index - count;
+        result["count"]              = count;
+        if (blocking)
+        {
+            result["timeout_ns"] = nsText(timeoutNs);
+            // This call never reports MXL_ERR_TIMEOUT -- a timeout comes back as
+            // MXL_ERR_OUT_OF_RAGE_TOO_EARLY (flow.h:432-435). Measuring is the only
+            // way to tell "not written yet" from "waited the whole deadline".
+            result["waited_ms"] = (double)((int64_t)(endNs - startNs)) / 1e6;
+        }
+        if (status != MXL_STATUS_OK)
+        {
+            return result;
+        }
+
+        result["slices"] = sliceJson(slices, wordSize);
+        result["ramp"]   = checkRamp(slices, index - count, wordSize);
+        return result;
+    }
+    
     // --- The catalog --------------------------------------------
 
     std::vector<CallSpec> buildCatalog()
@@ -556,6 +925,119 @@ namespace
                 return result;
         }});
 
+        // ABI call mxlFlowWriterOpenSamples
+        calls.push_back(CallSpec{
+            "mxlFlowWriterOpenSamples", "flow.h",
+            "Open `count` samples ending at `index` across every channel. The range is "
+            "[index - count, index] -- index is the head, not the start. Continuous flows only.",
+            {{"writer", "handle", true, "Registry name of a continuous flow writer"},
+                {"index", "uint64", true, "Head index; the batch ends just before this"},
+                {"count", "uint64", true, "Samples per channel, at most maxWriteLength"},
+                {"sample_word_size", "uint64", false, "Bytes per sample; default 4 (float32)"},
+                {"fill", "string", false, "ramp (default) writes each sample's own index; none"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string error;
+                auto const  writer = static_cast<mxlFlowWriter>(
+                    handleArg(registry, args, "writer", HandleKind::FlowWriter, error));
+                if (writer == nullptr)
+                {
+                    return failed(error);
+                }
+
+                uint64_t index = 0;
+                if (!argUint64(args, "index", index))
+                {
+                    return failed("argument 'index' must be a uint64");
+                }
+
+                uint64_t count = 0;
+                if (!argUint64(args, "count", count))
+                {
+                    return failed("argument 'count' must be a uint64");
+                }
+                // count > index would underflow index - count into a huge uint64.
+                if ((count == 0) || (count > index))
+                {
+                    return failed("count must be > 0 and <= index; range is [index - count, index]");
+                }
+
+                uint64_t wordSize = 4;
+                if (args.contains("sample_word_size") &&
+                    !argUint64(args, "sample_word_size", wordSize))
+                {
+                    return failed("argument 'sample_word_size' must be a uint64");
+                }
+                if (wordSize == 0)
+                {
+                    return failed("sample_word_size must not be zero");
+                }
+
+                std::string const fill = argString(args, "fill", "ramp");
+                if ((fill != "ramp") && (fill != "none"))
+                {
+                    return failed("argument 'fill' must be \"ramp\" or \"none\"");
+                }
+
+                mxlMutableWrappedMultiBufferSlice slices{};
+                mxlStatus const status = mxlFlowWriterOpenSamples(writer, index, count, &slices);
+
+                json result = statusJson("mxlFlowWriterOpenSamples", status);
+                result["head_index"]         = index;
+                result["first_sample_index"] = index - count;
+                result["count"]              = count;
+                if (status != MXL_STATUS_OK)
+                {
+                    return result;
+                }
+
+                result["slices"] = sliceJson(slices, wordSize);
+                result["fill"]   = fill;
+                if (fill == "ramp")
+                {
+                    result["samples_filled"] = fillRamp(slices, index - count, wordSize);
+                }
+                return result;
+        }});
+
+        // ABI call mxlFlowWriterCommitSamples
+        calls.push_back(CallSpec{
+            "mxlFlowWriterCommitSamples", "flow.h",
+            "Publish the open sample range: headIndex moves to it and waiting readers are woken. "
+            "Takes no range -- the writer remembers what OpenSamples opened.",
+            {{"writer", "handle", true, "Registry name of the continuous flow writer"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string error;
+                auto const writer = static_cast<mxlFlowWriter>(
+                    handleArg(registry, args, "writer", HandleKind::FlowWriter, error));
+                if (writer == nullptr)
+                {
+                    return failed(error);
+                }
+                return statusJson("mxlFlowWriterCommitSamples",
+                                  mxlFlowWriterCommitSamples(writer));
+        }});
+
+        // ABI call mxlFlowWriterCancelSamples
+        calls.push_back(CallSpec{
+            "mxlFlowWriterCancelSamples", "flow.h",
+            "Abandon the open sample range. One line in the library: the index is forgotten, "
+            "no bytes are rolled back. Always MXL_STATUS_OK, even with nothing open.",
+            {{"writer", "handle", true, "Registry name of a continuous flow writer"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string error;
+                auto const  writer = static_cast<mxlFlowWriter>(
+                    handleArg(registry, args, "writer", HandleKind::FlowWriter, error));
+                if (writer == nullptr)
+                {
+                    return failed(error);
+                }
+                return statusJson("mxlFlowWriterCancelSamples",
+                                  mxlFlowWriterCancelSamples(writer));
+        }});
+
         // ABI call mxlFlowWriterGetGrainInfo
         calls.push_back(CallSpec{
             "mxlFlowWriterGetGrainInfo", "flow.h",
@@ -597,6 +1079,35 @@ namespace
                 result["total_slices"]    = grain.totalSlices;
                 result["valid_slices"]    = grain.validSlices;
                 result["flags"]           = grain.flags;
+                return result;
+        }});
+
+        // ABI call mxlFlowWriterGetMaxWriteLengthSamples
+        calls.push_back(CallSpec{
+            "mxlFlowWriterGetMaxWriteLengthSamples", "flow.h",
+            "The largest sample count one OpenSamples call may ask for -- half the ring. "
+            "Continuous flow only.",
+            {{"writer", "handle", true, "Registry name of a continuous flow writer"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string error;
+                auto const  writer = static_cast<mxlFlowWriter>(
+                    handleArg(registry, args, "writer", HandleKind::FlowWriter, error));
+                if (writer == nullptr)
+                {
+                    return failed(error);
+                }
+
+                size_t          maxLength = 0;
+                mxlStatus const status =
+                    mxlFlowWriterGetMaxWriteLengthSamples(writer, &maxLength);
+
+                json result = statusJson("mxlFlowWriterGetMaxWriteLengthSamples", status);
+                if (status != MXL_STATUS_OK)
+                {
+                    return result;
+                }
+                result["max_write_length_samples"] = maxLength;
                 return result;
         }});
 
@@ -682,6 +1193,205 @@ namespace
                 return result;
         }});
         
+        // ABI call mxlFlowReaderGetGrain
+        calls.push_back(CallSpec{
+            "mxlFlowReaderGetGrain", "flow.h",
+            "Read the complete grain at `index`, waiting up to timeout_ns for it. "
+            "MXL_ERR_OUT_OF_RANGE_TOO_EARLY covers both the future and a grain that is "
+            "commited but not yet complete.",
+            {{"reader", "handle", true, "Registry name of the flow reader"},
+                {"index", "uint64", true, "Grain index to read"},
+                {"timeout_ns", "uint64", true, "How long to wait; default 0, i.e. return at once"},
+                {"store_as", "handle", false, "Registry name to cache the grain under"}},
+            [](Registry& registry, json const& args)
+            {
+                return readGrain(registry, args, "mxlFlowReaderGetGrain", true, false);
+        }});
+
+        // ABI call mxlFlowReaderGetGrainSlice
+        calls.push_back(CallSpec{
+            "mxlFlowReaderGetGrainSlice", "flow.h",
+            "Read the grain at `index` once at least min_valid_slices of it are valid. "
+            "This is the call that can see a partially committed grain.",
+            {{"reader", "handle", true, "Registry name of the flow reader"},
+                {"index", "uint64", true, "Grain index to read"},
+                {"min_valid_slices", "uint64", true, "Slices required before the grain is returned"},
+                {"timeout_ns", "uint64", false, "How long to wait; default 0, i.e return at once"},
+                {"store_as", "handle", false, "Registry name to cache the grain under"}},
+            [](Registry& registry, json const& args)
+            {
+                return readGrain(registry, args, "mxlFlowReaderGetGrainSlice", true, true);
+        }});
+
+        // ABI call mxlFlowReaderGetGrainNonBlocking
+        calls.push_back(CallSpec{
+            "mxlFlowReaderGetGrainNonBlocking", "flow.h",
+            "Read the complete grain at `index` or fail immediately. Takes no timeout.",
+            {{"reader", "handle", true, "Registry name of the flow reader"},
+                {"index", "uint64", true, "Grain index to read"},
+                {"store_as", "handle", false, "Registry name to cache the grain under"}},
+            [](Registry& registry, json const& args)
+            {
+                return readGrain(registry, args, "mxlFlowReaderGetGrainNonBlocking", false, false);
+        }});
+
+        // ABI call mxlFlowReaderGetGrainSliceNonBlocking
+        calls.push_back(CallSpec{
+            "mxlFlowReaderGetGrainSliceNonBlocking", "flow.h",
+            "Read the grain at `index` if min_valid_slices are already valid, or fail immediately.",
+            {{"reader", "handle", true, "Registry name of the flow reader"},
+                {"index", "uint64", true, "Grain index to read"},
+                {"min_valid_slices", "uint64", true, "Slices required before the grain is returned"},
+                {"store_as", "handle", false, "Registry name to cache the grain under"}},
+            [](Registry& registry, json const& args)
+            {
+                return readGrain(registry, args, "mxlFlowReaderGetGrainSliceNonBlocking", false, true);
+        }});
+
+        // ABI call mxlFlowReaderGetSamples
+        calls.push_back(CallSpec{
+            "mxlFlowReaderGetSamples", "flow.h",
+            "Read `count` samples ending at `index` across every channel, waiting up to "
+            "timeout_ns. Never reports MXL_ERR_TIMEOUT -- see waited_ms.",
+            {{"reader", "handle", true, "Registry name of a continuous flow reader"},
+                {"index", "uint64", true, "Head index; the batch ends just before this"},
+                {"count", "uint64", true, "Samples per channel, at most maxReadLength"},
+                {"timeout_ns", "uint64", false, "How long to wait; default 0"},
+                {"sample_word_size", "uint64", false, "Bytes per sample; default 4 (float32)"}},
+            [](Registry& registry, json const& args)
+            {
+                return readSamples(registry, args, "mxlFlowReaderGetSamples", true);
+        }});
+
+        // ABI call mxlFlowReaderGetSamplesNonBlocking
+        calls.push_back(CallSpec{
+            "mxlFlowReaderGetSamplesNonBlocking", "flow.h",
+            "Read `count` samples ending at `index` across every channel, or fail at once.",
+            {{"reader", "handle", true, "Registry name of a continuous flow reader"},
+                {"index", "uint64", true, "Head index; the batch ends just before this"},
+                {"count", "uint64", true, "Samples per channel, at most maxReadLength"},
+                {"sample_word_size", "uint64", false, "Bytes per sample; default 4 (float32)"}},
+            [](Registry& registry, json const& args)
+            {
+                return readSamples(registry, args, "mxlFlowReaderGetSamplesNonBlocking", false);
+        }});
+
+        // ABI call mxlFlowReaderGetConfigInfo
+        calls.push_back(CallSpec{
+            "mxlFlowReaderGetConfigInfo", "flow.h",
+            "The flow's immutable configuration as the reader sees it: id, format, grain rate "
+            "and ring geometry. Nothing here changes while the flow exists.",
+            {{"reader", "handle", true, "Registry name of the flow reader"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string error;
+                auto const  reader = static_cast<mxlFlowReader>(
+                    handleArg(registry, args, "reader", HandleKind::FlowReader, error));
+                if (reader == nullptr)
+                {
+                    return failed(error);
+                }
+
+                mxlFlowConfigInfo config{};
+                mxlStatus const   status = mxlFlowReaderGetConfigInfo(reader, &config);
+
+                json result = statusJson("mxlFlowReaderGetConfigInfo", status);
+                if (status != MXL_STATUS_OK)
+                {
+                    return result;
+                }
+                result["config"] = configJson(config);
+                return result;
+        }});
+
+        // ABI call mxlFlowReaderGetRuntimeInfo
+        calls.push_back(CallSpec{
+            "mxlFlowReaderGetRuntimeInfo", "flow.h",
+            "The flow's mutable state: head index, last write time, last read time. "
+            "lastReadTime is advisory -- see last_read_age_ms.",
+            {{"reader", "handle", true, "Registry name of the flow reader"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string error;
+                auto const  reader = static_cast<mxlFlowReader>(
+                    handleArg(registry, args, "reader", HandleKind::FlowReader, error));
+                if (reader == nullptr)
+                {
+                    return failed(error);
+                }
+
+                mxlFlowRuntimeInfo runtime{};
+                mxlStatus const    status = mxlFlowReaderGetRuntimeInfo(reader, &runtime);
+
+                json result = statusJson("mxlFlowReaderGetRuntimeInfo", status);
+                if (status != MXL_STATUS_OK)
+                {
+                    return result;
+                }
+                result["runtime"] = runtimeJson(runtime);
+                return result;
+        }});
+
+        // ABI call mxlFlowReaderGetInfo
+        calls.push_back(CallSpec{
+            "mxlFlowReaderGetInfo", "flow.h",
+            "Config and runtime in one struct, plus the shared-memory layout version. "
+            "One call where GetConfigInfo and GetRuntimeInfo are two.",
+            {{"reader", "handle", true, "Registry name of the flow reader"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string error;
+                auto const  reader = static_cast<mxlFlowReader>(
+                    handleArg(registry, args, "reader", HandleKind::FlowReader, error));
+                if (reader == nullptr)
+                {
+                    return failed(error);
+                }
+
+                mxlFlowInfo     info{};
+                mxlStatus const status = mxlFlowReaderGetInfo(reader, &info);
+                
+                json result = statusJson("mxlFlowReaderGetInfo", status);
+                if (status != MXL_STATUS_OK)
+                {
+                    return result;
+                }
+                result["version"] = info.version;
+                result["size"]    = info.size;
+                result["config"]  = configJson(info.config);
+                result["runtime"] = runtimeJson(info.runtime);
+                return result;
+        }});
+
+        // ABI call mxlFlowReaderGetMaxReadLengthSamples
+        calls.push_back(CallSpec{
+            "mxlFlowReaderGetMaxReadLengthSamples", "flow.h",
+            "The largest sample count one GetSamples call may ask for -- half the ring, since "
+            "the other half is being written. Continuous flows only",
+            {{"reader", "handle", true, "Registry name of a continuous flow reader"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string error;
+                auto const  reader = static_cast<mxlFlowReader>(
+                    handleArg(registry, args, "reader", HandleKind::FlowReader, error));
+                if (reader == nullptr)
+                {
+                    return failed(error);
+                }
+
+                size_t          maxLength = 0;
+                mxlStatus const status =
+                    mxlFlowReaderGetMaxReadLengthSamples(reader, &maxLength);
+                
+                json result = statusJson("mxlFlowReaderGetMaxReadLengthSamples", status);
+                if (status != MXL_STATUS_OK)
+                {
+                    return result;
+                }
+                result["max_read_length_samples"] = maxLength;
+                return result;
+        }});
+
         // ABI call mxlIsFlowActive
         calls.push_back(CallSpec{
             "mxlIsFlowActive", "flow.h",
@@ -712,6 +1422,60 @@ namespace
                 {
                     result["is_active"] = isActive;
                 }
+                return result;
+        }});
+
+        // ABI call mxlGetFlowDef
+        calls.push_back(CallSpec{
+            "mxlGetFlowDef", "flow.h",
+            "Fetch the flow definition a flow was created from. Two ABI calls: one to learn "
+            "the required size, one to fill the buffer.",
+            {{"instance", "handle", true, "Registry name of the instance"},
+                {"flow_id", "string", true, "UUID of the flow"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string const flowId = argString(args, "flow_id");
+                if (flowId.empty())
+                {
+                    return failed("argument 'flow_id' is required");
+                }
+
+                std::string error;
+                auto const  instance = static_cast<mxlInstance>(
+                    handleArg(registry, args, "instance", HandleKind::Instance, error));
+                if (instance == nullptr)
+                {
+                    return failed(error);
+                }
+
+                // The sizing call. MXL_ERR_INVALID_ARG is the *expected* answer: it means
+                // "your buffer was too small, there is how big it must be". The same code
+                // also means a genuinely bad argument, and the only way to tell the two
+                // apart is whether a size came back (flow.cpp:100-107).
+                size_t    required = 0;
+                mxlStatus status   = mxlGetFlowDef(instance, flowId.c_str(), nullptr, &required);
+                if (required == 0)
+                {
+                    json sizing     = statusJson("mxlGetFlowDef", status);
+                    sizing["phase"] = "sizing";
+                    return sizing;
+                }
+
+                // Frees itself on every path out of this lambda, errors included.
+                std::vector<char> buffer(required);
+                size_t            written = required;
+                status = mxlGetFlowDef(instance, flowId.c_str(), buffer.data(), &written);
+
+                json result = statusJson("mxlGetFlowDef", status);
+                result["required_size"] = required;
+                if (status != MXL_STATUS_OK)
+                {
+                    return result;
+                }
+
+                // written counts the null terminator; a std::string must not.
+                result["size_bytes"] = written;
+                result["flow_def"]   = std::string(buffer.data(), written - 1);
                 return result;
         }});
 

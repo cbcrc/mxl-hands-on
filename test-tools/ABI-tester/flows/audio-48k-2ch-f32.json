@@ -1,0 +1,18 @@
+{
+    "id": "a1b2c3d4-0002-4000-8000-000000000002",
+    "label": "ABI Tester Audio",
+    "description": "48 kHz 2-channel float32 test flow written by the ABI tester",
+    "format": "urn:x-nmos:format:audio",
+    "media_type": "audio/float32",
+    "tags": {
+        "urn:x-nmos:tag:grouphint/v1.0": [
+            "ABI-Tester:Audio"
+        ]
+    },
+    "parents": [],
+    "sample_rate": {
+        "numerator": 48000
+    },
+    "channel_count": 2,
+    "bit_depth": 32
+}
