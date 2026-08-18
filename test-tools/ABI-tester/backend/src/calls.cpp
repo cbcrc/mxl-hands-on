@@ -1743,6 +1743,170 @@ namespace
                                   mxlReleaseFlowSynchronizationGroup(instance, group));
         }});
 
+        // ABI call mxlFlowSynchronizationGroupAddReader
+        calls.push_back(CallSpec{
+            "mxlFlowSynchronizationGroupAddReader", "flow.h",
+            "Add a reader to a synchronization group, waiting for the whole grains (or the "
+            "sample at the timestamp). Adding the same reader twice is silently ignored, "
+            "except that it resets a grain reader's minValidSlices to ALL.",
+            {{"group", "handle", true, "Registry name of the synchronization group"},
+                {"reader", "handle", true, "Registry name of the flow reader to add"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string error;
+                auto const  group = static_cast<mxlFlowSynchronizationGroup>(
+                    handleArg(registry, args, "group", HandleKind::SyncGroup, error));
+                if (group == nullptr)
+                {
+                    return failed(error);
+                }
+
+                auto const reader = static_cast<mxlFlowReader>(
+                    handleArg(registry, args, "reader", HandleKind::FlowReader, error));
+                if (reader == nullptr)
+                {
+                    return failed(error);
+                }
+
+                json result = statusJson("mxlFlowSynchronizationGroupAddReader",
+                                         mxlFlowSynchronizationGroupAddReader(group, reader));
+                result["group"]  = argString(args, "group");
+                result["reader"] = argString(args, "reader");
+                return result;
+        }});
+
+        // ABI call mxlFlowSynchronizationGroupAddPartialGrainReader
+        calls.push_back(CallSpec{
+            "mxlFlowSynchronizationGroupAddPartialGrainReader", "flow.h",
+            "Add a grain reader to a synchronization group, waiting for only "
+            "min_valid_slices of each grain instead of the whole grain. A later plain "
+            "AddReader on the same reader resets this back to ALL.",
+            {{"group", "handle", true, "Registry name of the synchronization group"},
+                {"reader", "handle", true, "Registry name of the grain reader to add"},
+                {"min_valid_slices", "uint64", true, "Slices to wait for within each grain"}},
+            [](Registry& registry, json const& args)
+            {
+                uint64_t requested = 0;
+                if (!argUint64(args, "min_valid_slices", requested))
+                {
+                    return failed("argument 'min_valid_slices' must be a uint64");
+                }
+                if (requested > UINT16_MAX)
+                {
+                    return failed("min_valid_slices " + std::to_string(requested) +
+                                  " exceeds the uint16 the ABI takes");
+                }
+
+                std::string error;
+                auto const  group = static_cast<mxlFlowSynchronizationGroup>(
+                    handleArg(registry, args, "group", HandleKind::SyncGroup, error));
+                if (group == nullptr)
+                {
+                    return failed(error);
+                }
+
+                auto const reader = static_cast<mxlFlowReader>(
+                    handleArg(registry, args, "reader", HandleKind::FlowReader, error));
+                if (reader == nullptr)
+                {
+                    return failed(error);
+                }
+
+                json result = statusJson(
+                    "mxlFlowSynchronizationGroupAddPartialGrainReader",
+                    mxlFlowSynchronizationGroupAddPartialGrainReader(
+                        group, reader, (uint16_t)requested));
+                result["group"]            = argString(args, "group");
+                result["reader"]           = argString(args, "reader");
+                result["min_valid_slices"] = requested;
+                return result;
+        }});
+
+        // ABI call mxlFlowSynchronizationGroupRemoveReader
+        calls.push_back(CallSpec{
+            "mxlFlowSynchronizationGroupRemoveReader", "flow.h",
+            "Remove a reader from a synchronization group. The reader handle itself is "
+            "untouched and stays in the registry.",
+            {{"group", "handle", true, "Registry name of the synchronization group"},
+                {"reader", "handle", true, "Registry name of the flow reader to remove"}},
+            [](Registry& registry, json const& args)
+            {
+                std::string error;
+                auto const  group = static_cast<mxlFlowSynchronizationGroup>(
+                    handleArg(registry, args, "group", HandleKind::SyncGroup, error));
+                if (group == nullptr)
+                {
+                    return failed(error);
+                }
+
+                auto const reader = static_cast<mxlFlowReader>(
+                    handleArg(registry, args, "reader", HandleKind::FlowReader, error));
+                if (reader == nullptr)
+                {
+                    return failed(error);
+                }
+
+                json result = statusJson("mxlFlowSynchronizationGroupRemoveReader",
+                                         mxlFlowSynchronizationGroupRemoveReader(group, reader));
+                result["group"]  = argString(args, "group");
+                result["reader"] = argString(args, "reader");
+                return result;
+        }});
+
+        // ABI call mxlFlowSynchronizationGroupWaitForDataAt
+        calls.push_back(CallSpec{
+            "mxlFlowSynchronizationGroupWaitForDataAt", "flow.h",
+            "Block until every reader in the group has data for `timestamp_ns`. Each member "
+            "converts that one timestamp with its own edit rate. Returns the first failing "
+            "member's status -- a timeout arrives as MXL_ERR_OUT_OF_RANGE_TOO_EARLY, and "
+            "nothing says which member it was. See waited_ms.",
+            {{"group", "handle", true, "Registry name of the synchronization group"},
+                {"timestamp_ns", "uint64", true, "TAI timestamp to wait for, in ns"},
+                {"timeout_ns", "uint64", false, "How long to wait: 0 (default) does not wait"}},
+            [](Registry& registry, json const& args)
+            {
+                uint64_t timestampNs = 0;
+                if (!argUint64(args, "timestamp_ns", timestampNs))
+                {
+                    return failed("argument 'timestamp_ns' must be a uint64 "
+                                  "(number or decimal string)");
+                }
+
+                uint64_t timeoutNs = 0;
+                if (args.contains("timeout_ns"))
+                {
+                    if (!argUint64(args, "timeout_ns", timeoutNs))
+                    {
+                        return failed("argument 'timeout_ns' must be a uint64");
+                    }
+                    if (timeoutNs > kMaxSleepNs)
+                    {
+                        return failed("timeout_ns exceeds the " +
+                                      std::to_string(kMaxSleepNs / 1'000'000) + " ms cap");
+                    }
+                }
+
+                std::string error;
+                auto const  group = static_cast<mxlFlowSynchronizationGroup>(
+                    handleArg(registry, args, "group", HandleKind::SyncGroup, error));
+                if (group == nullptr)
+                {
+                    return failed(error);
+                }
+
+                uint64_t const  startNs = mxlGetTime();
+                mxlStatus const status  =
+                    mxlFlowSynchronizationGroupWaitForDataAt(group, timestampNs, timeoutNs);
+                uint64_t const  endNs   = mxlGetTime();
+
+                json result = statusJson("mxlFlowSynchronizationGroupWaitForDataAt", status);
+                result["group"]         = argString(args, "group");
+                result["timestamp_ns"] = nsText(timestampNs);
+                result["timeout_ns"]   = nsText(timeoutNs);
+                result["waited_ms"]    = (double)((int64_t)(endNs - startNs)) / 1e6;
+                return result;
+        }});
+
         return calls;
     }
 }
