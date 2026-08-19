@@ -19,6 +19,7 @@
 #include "domains.hpp"
 #include "registry.hpp"
 #include "calls.hpp"
+#include "engine.hpp"
 
 // A record we stamp into the head of every grain payload, so the reader can
 // measure true producer -> consumer transit instead of index-derived age.
@@ -32,20 +33,6 @@ struct PayloadStamp
 static_assert(sizeof(PayloadStamp) == 24, "PayloadStamp must be exactly 24 bytes");
 
 static constexpr uint64_t kStampMagic = 0x4D584C5354414D50ULL;  // "MXLSTAMP"
-
-// File reader helper
-static std::string readFile(char const* path)
-{
-    std::ifstream file(path);
-    if (!file)
-    {
-        return {};
-    }
-
-    std::ostringstream buffer;
-    buffer << file.rdbuf();
-    return buffer.str();
-}
 
 // Main loop
 int main(int argc, char** argv)
@@ -79,163 +66,13 @@ int main(int argc, char** argv)
         std::printf("Domain on RAM disk: %s\n", isTmpFs ? "yes" : "no");
     }
     
-    // Create MXL instance
-    mxlInstance instance = mxlCreateInstance(domain, nullptr);
-    if (instance == nullptr)
-    {
-        std::fprintf(stderr, "mxlCreateInstance failed for domain %s\n", domain);
-        return 1;
-    }
-
-    std::printf("Instance created.\n");
-
-    // load flow_def.json
-    char const* flowDefPath = (argc > 2) ? argv[2] : "../flows/video-1080p2997-v210.json";
-
-    std::string flowDef = readFile(flowDefPath);
-    if (flowDef.empty())
-    {
-        std::fprintf(stderr, "could not read flow definition %s\n", flowDefPath);
-        return 1;
-    }
-
-    // Create flow writer
-    mxlFlowWriter       writer{};
-    mxlFlowConfigInfo   config{};
-    bool                created = false;
-
-    status = mxlCreateFlowWriter(instance, flowDef.c_str(), nullptr, &writer, &config, &created);
-    if (status != MXL_STATUS_OK)
-    {
-        std::fprintf(stderr, "mxlCreateFlowWriter failed with status %d\n", status);
-        return 1;
-    }
-
-    std::printf("Flow writer ready (%s).\n", created ? "new flow" : "existing flow");
-    std::printf("  grain rate : %lld/%lld\n",
-                (long long)config.common.grainRate.numerator,
-                (long long)config.common.grainRate.denominator);
-    std::printf("  grain count: %u\n", config.discrete.grainCount);
-    std::printf("  slice size : %u bytes\n", config.discrete.sliceSizes[0]);
-    
-    // Open, fill and commit one grain
-    uint64_t index = mxlGetCurrentIndex(&config.common.grainRate);
-
-    mxlGrainInfo grain{};
-    uint8_t*    payload = nullptr;
-
-    status = mxlFlowWriterOpenGrain(writer, index, &grain, &payload);
-    if (status != MXL_STATUS_OK)
-    {
-        std::fprintf(stderr, "mxlFlowWriterOpenGrain failed with status %d\n", status);
-        return 1;
-    }
-
-    std::printf("Grain %llu opened: %u bytes, %u slices.\n",
-                (unsigned long long)index, grain.grainSize, grain.totalSlices);
-    
-    std::memset(payload, 0, grain.grainSize);
-    // Insert MXLSTAMP
-    PayloadStamp stamp{};
-    stamp.magic = kStampMagic;
-    stamp.index = index;
-    stamp.writeNs = mxlGetTime();
-
-    std::memcpy(payload, &stamp, sizeof(stamp));
-    // End of insert MXLSTAMP
-    grain.validSlices = grain.totalSlices;
-
-    status = mxlFlowWriterCommitGrain(writer, &grain);
-    if (status != MXL_STATUS_OK)
-    {
-        std::fprintf(stderr, "mxlFlowWriterCommitGrain failed with status %d\n", status);
-        return 1;
-    }
-
-    std::printf("Grain %llu commited.\n", (unsigned long long)index);
-
-    // Attach a reader to the flow we just wrote
-    char const* flowId = "a1b2c3d4-0001-4000-8000-000000000001";
-
-    mxlFlowReader reader{};
-
-    status = mxlCreateFlowReader(instance, flowId, nullptr, &reader);
-    if (status != MXL_STATUS_OK)
-    {
-        std::fprintf(stderr, "mxlCreateFlowReader failed with status %d\n", status);
-        return 1;
-    }
-
-    mxlGrainInfo readGrain{};
-    uint8_t*    readPayload = nullptr;
-
-    // mxlSleepForNs(2000000000ULL);   // Temporarily wait for 2 sec
-
-    status = mxlFlowReaderGetGrain(reader, index, 1000000000ULL, &readGrain, &readPayload);
-    if (status != MXL_STATUS_OK)
-    {
-        std::fprintf(stderr, "mxlFlowReaderGetGrain failed with status %d\n", status);
-        return 1;
-    }
-
-    std::printf("Read grain %llu: %u bytes, %u/%u slices valid.\n",
-                (unsigned long long)readGrain.index, readGrain.grainSize,
-                readGrain.validSlices, readGrain.totalSlices);
-
-    // The index IS the timestamp
-    uint64_t otsNs = mxlIndexToTimestamp(&config.common.grainRate, readGrain.index);
-    uint64_t wallNs = mxlGetTime();
-    int64_t ageNs = (int64_t)(wallNs -  otsNs);
-
-    std::printf("  ots  : %llu ns\n", (unsigned long long)otsNs);
-    std::printf("  wall : %llu ns\n", (unsigned long long)wallNs);
-    std::printf("  age  : %.3f ms\n", ageNs / 1000000.0);
-
-    PayloadStamp readStamp{};
-    std::memcpy(&readStamp, readPayload, sizeof(readStamp));
-
-    if (readStamp.magic != kStampMagic)
-    {
-        std::fprintf(stderr, "  stamp: absent or corrupt (magic %llx)\n",
-                    (unsigned long long)readStamp.magic);
-    }
-    else
-    {
-        int64_t transitNs = (int64_t)(wallNs - readStamp.writeNs);
-        std::printf("  stamp index  : %llu\n", (unsigned long long)readStamp.index);
-        std::printf("  transit      : %.3f ms (%lld ns)\n",
-                    transitNs / 1000000.0, (long long)transitNs);
-    }
-
-    mxlFlowRuntimeInfo runtime{};
-
-    status = mxlFlowReaderGetRuntimeInfo(reader, &runtime);
-    if (status != MXL_STATUS_OK)
-    {
-        std::fprintf(stderr, "mxlFlowReaderGetRuntimeInfo failed with status %d\n", status);
-        return 1;
-    }
-
-    std::printf("  head : %llu\n", (unsigned long long)runtime.headIndex);
-    std::printf("  last write: %llu ns\n", (unsigned long long)runtime.lastWriteTime);
-    std::printf("  last read : %llu ns\n", (unsigned long long)runtime.lastReadTime);
-    
-    mxlSleepForNs(100000000ULL); // 100 ms - let the watcher thread run
-
-    mxlFlowRuntimeInfo runtime2{};
-    (void)mxlFlowReaderGetRuntimeInfo(reader, &runtime2);
-    std::printf("  last read (after 100 ms): %llu ns (delta %.3f ms)\n",
-                (unsigned long long)runtime2.lastReadTime,
-                (int64_t)(runtime2.lastReadTime - runtime.lastReadTime) / 1000000.0);
-
-
-    // Serve what we just measured, instead of sleeping on it.
     httplib::Server server;
     
     // The handle table every step will name its operands through.
     Registry registry;
-    registry.store("main", HandleKind::Instance, instance, domain);
 
+    EventLog log;
+    
     server.Get("/health",
         [&](httplib::Request const&, httplib::Response& res)
         {
@@ -244,10 +81,6 @@ int main(int argc, char** argv)
             body["sdk_version"] = version.full;
             body["domain"]      = domain;
             body["tmpfs"]       = isTmpFs;
-            body["flow_id"]     = flowId;
-            body["grain_index"] = readGrain.index;
-            body["ots_ns"]      = otsNs;
-            body["age_ms"]      = (int64_t)(mxlGetTime() - otsNs) / 1000000.0;
 
             res.set_content(body.dump(2) + "\n", "application/json");
         });
@@ -300,7 +133,7 @@ int main(int argc, char** argv)
             res.set_content(list.dump(2) + "\n", "application/json");
         });
     
-    server.Post("/step",
+    server.Post("/call",
         [&](httplib::Request const& req, httplib::Response& res)
         {
             auto respond = [&res](int status, nlohmann::json body)
@@ -343,6 +176,7 @@ int main(int argc, char** argv)
 
             result["call"]        = name;
             result["duration_us"] = (endNs - startNs) / 1000.0;
+            result["seq"]         = log.append("-", "", endNs, result);
 
             respond(result.value("ok", false) ? 200 : 500, result);
         });
@@ -367,37 +201,20 @@ int main(int argc, char** argv)
 
             res.set_content(handles.dump(2) + "\n", "application/json");
         });
+
+    server.Get("/log",
+        [&](httplib::Request const& req, httplib::Response& res)
+        {
+            uint64_t sinceSeq = 0;
+            if (req.has_param("since"))
+            {
+                sinceSeq = std::strtoull(req.get_param_value("since").c_str(), nullptr, 10);
+            }
+            res.set_content(log.since(sinceSeq).dump(2) + "\n", "application/json");
+        });
     
     std::printf("Listening on http://0.0.0.0:9600 (Ctrl-C to stop)\n");
     server.listen("0.0.0.0", 9600);
-    
-    // Release flow reader
-    status = mxlReleaseFlowReader(instance, reader);
-    if (status != MXL_STATUS_OK)
-    {
-        std::fprintf(stderr, "mxlReleaseFlowReader failed with status %d\n", status);
-        return 1;
-    }
-
-    // Release flow writer
-    status = mxlReleaseFlowWriter(instance, writer);
-    if (status != MXL_STATUS_OK)
-    {
-        std::fprintf(stderr, "mxlReleaseFlowWriter failed with status %d\n", status);
-        return 1;
-    }
-
-    std::printf("Flow writer and reader released.\n");
-
-    // Destroy mxl instance
-    status = mxlDestroyInstance(instance);
-    if (status != MXL_STATUS_OK)
-    {
-        std::fprintf(stderr, "mxlDestroyInstance failed with status %d\n", status);
-        return 1;
-    }
-
-    std::printf("Instance destroyed.\n");
-
+            
     return 0;
 }
