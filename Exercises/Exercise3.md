@@ -82,7 +82,7 @@ This exercise also showcases the gstreamer clip player plugin (added in [PR #22]
 1. Look at the docker-compose.yaml file and notice the addition of the mxl2webrtc and mediamtx containers. These containers are there to give you access to a web application that will convert mxl flow into webrtc and display them in your browser.
 
    ```sh
-   cat docker-compose.yaml
+   cat docker-compose.yml
    ```
 
 1. Start the containers
