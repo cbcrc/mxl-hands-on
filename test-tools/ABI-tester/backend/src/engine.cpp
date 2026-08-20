@@ -75,8 +75,8 @@ namespace
 {
     // One index expression -> one number. This is the only place the four modes
     // are spelled out; `current` and `head` join it later.
-    bool resolveIndex(nlohmann::json const& expr, uint64_t cursor,
-                      uint64_t&out, std::string& error)
+    bool resolveIndex(nlohmann::json const& expr, nlohmann::json const& args,
+                      uint64_t cursor, uint64_t&out, std::string& error)
     {
         std::string const mode   = expr.value("mode", std::string{"literal"});
         int64_t const     offset = expr.value("offset", (int64_t)0);
@@ -93,6 +93,21 @@ namespace
         else if (mode == "cursor")
         {
             out = cursor;
+        }
+        else if (mode == "current")
+        {
+            // The expression wins; the step's own edit_rate is the fallback, so the
+            // four time.h calls do not have to spell the same rational twice.
+            mxlRational editRate{};
+            if (!argRational(expr, "edit_rate", editRate) &&
+                !argRational(args, "edit_rate", editRate))
+            {
+                error = "index mode \"current\" needs an "
+                        "\"edit_rate\" {\"num\":<int>,\"den\":<non-zero int>}";
+                return false;
+            }
+
+            out = mxlGetCurrentIndex(&editRate);
         }
         else
         {
@@ -117,7 +132,7 @@ namespace
             }
 
             uint64_t index = 0;
-            if (!resolveIndex(value, cursor, index, error))
+            if (!resolveIndex(value, args, cursor, index, error))
             {
                 error = key + ": " + error;
                 return false;
@@ -150,8 +165,11 @@ namespace
 
             Step step;
             step.call = item["call"].get<std::string>();
-
-            if (findCall(step.call) == nullptr)
+            
+            // setCursor is lane bookkeeping, not an ABI call. It is deliberately absent
+            // from the catalog so /abi-calls keeps listing exactly 42 and stays diffable
+            // against nm on the shared object.
+            if ((step.call != "setCursor") && (findCall(step.call) == nullptr))
             {
                 error = std::string("lane ") + laneName + ": unknown call: " + step.call;
                 return false;
@@ -199,10 +217,12 @@ bool Engine::loadScenario(nlohmann::json const& doc, std::string& error)
     }
 
     std::lock_guard<std::mutex> guard(_mutex);
-    _laneA.steps = std::move(stepsA);
-    _laneA.next  = 0;
-    _laneB.steps = std::move(stepsB);
-    _laneB.next  = 0;
+    _laneA.steps  = std::move(stepsA);
+    _laneA.next   = 0;
+    _laneA.cursor = 0;
+    _laneB.steps  = std::move(stepsB);
+    _laneB.next   = 0;
+    _laneB.cursor = 0;
     return true;
 }
 
@@ -317,17 +337,6 @@ uint64_t Engine::execute(std::string const& laneName, Step const& step, uint64_t
         mxlSleepForNs((uint64_t)(delayMs * 1000000.0));
     }
 
-    CallSpec const* spec = findCall(step.call);
-    if (spec == nullptr)
-    {
-        // Cannot happen: parseLane refused unknown names. Logged, not asserted.
-        _log.append(laneName, step.id, mxlGetTime(),
-                    nlohmann::json{{"ok", false},
-                                   {"call", step.call},
-                                   {"error", "unknown call"}});
-        return cursor;
-    }
-
     // Resolve index expressions against *this* lane's cursor -- on a copy, so the
     // scenario itself is never rewritten and the same step re-runs identically
     // after a /reset.
@@ -339,6 +348,43 @@ uint64_t Engine::execute(std::string const& laneName, Step const& step, uint64_t
     {
         _log.append(laneName, step.id, mxlGetTime(),
                     nlohmann::json{{"ok", false}, {"call", step.call}, {"error", error}});
+        return cursor;
+    }
+
+    if (step.call == "setCursor")
+    {
+        if (!args.contains("index") || !args["index"].is_number_unsigned())
+        {
+            _log.append(laneName, step.id, mxlGetTime(),
+                        nlohmann::json{{"ok", false},
+                                       {"call", step.call},
+                                       {"error", "setCursor needs an unsigned \"index\""}});
+            return cursor;
+        }
+
+        uint64_t const seeded = args["index"].get<uint64_t>();
+
+        nlohmann::json event{{"ok", true}, {"call", step.call},
+                             {"abi", false}, {"cursor", seeded}};
+        if (!resolved.empty())
+        {
+            event["resolved"] = resolved;
+        }
+        _log.append(laneName, step.id, mxlGetTime(), event);
+
+        // advance_cursor is ignored on purpose: setCursor names an absolute index, and
+        // stacking a relative advance on the seed would make it unreadable in the log.
+        return seeded;
+    }
+
+    CallSpec const* spec = findCall(step.call);
+    if (spec == nullptr)
+    {
+        // Cannot happen: parseLane refused unknown names. Logged, not asserted.
+        _log.append(laneName, step.id, mxlGetTime(),
+                    nlohmann::json{{"ok", false},
+                                   {"call", step.call},
+                                   {"error", "unknown call"}});
         return cursor;
     }
 

@@ -15,6 +15,27 @@
 
 using nlohmann::json;
 
+bool argRational(json const& args, char const* name, mxlRational& out)
+{
+    auto const it = args.find(name);
+    if ((it == args.end()) || !it->is_object())
+    {
+        return false;
+    }
+
+    auto const num = it->find("num");
+    auto const den = it->find("den");
+    if ((num == it->end()) || (den == it->end()) ||
+        !num->is_number_integer() || !den->is_number_integer())
+    {
+        return false;
+    }
+
+    out.numerator   = num->get<int64_t>();
+    out.denominator = den->get<int64_t>();
+    return out.denominator != 0;
+}
+
 namespace
 {
     // --- result helpers ----------------------------------------
@@ -114,27 +135,6 @@ namespace
             error = std::string("no ") + handleKindName(kind) + " handle named " + name;
         }
         return ptr;
-    }
-
-    bool argRational(json const& args, char const* name, mxlRational& out)
-    {
-        auto const it = args.find(name);
-        if ((it == args.end()) || !it->is_object())
-        {
-            return false;
-        }
-
-        auto const num = it->find("num");
-        auto const den = it->find("den");
-        if ((num == it->end()) || (den == it->end()) ||
-            !num->is_number_integer() || !den->is_number_integer())
-        {
-            return false;
-        }
-
-        out.numerator   = num->get<int64_t>();
-        out.denominator = den->get<int64_t>();
-        return out.denominator != 0;
     }
 
     // Accepts a JSON number *or* a decimal string. Above 2^53 the frontend can only

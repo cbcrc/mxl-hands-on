@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+#include <mxl/rational.h>
 
 #include "registry.hpp"
 
@@ -36,3 +37,7 @@ std::vector<CallSpec> const& callCatalog();
 
 // One entry by ABI name, or nullptr.
 CallSpec const* findCall(std::string const& name);
+
+// Parse args[name] as {"num":<int>, "den":<non-zero int>}. Shared with the engine:
+// the `current` index mode needs the same validation the time.h adapters use.
+bool argRational(nlohmann::json const& args, char const* name, mxlRational& out);
