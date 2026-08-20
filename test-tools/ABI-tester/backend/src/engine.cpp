@@ -73,6 +73,62 @@ Engine::~Engine()
 
 namespace
 {
+    // One index expression -> one number. This is the only place the four modes
+    // are spelled out; `current` and `head` join it later.
+    bool resolveIndex(nlohmann::json const& expr, uint64_t cursor,
+                      uint64_t&out, std::string& error)
+    {
+        std::string const mode   = expr.value("mode", std::string{"literal"});
+        int64_t const     offset = expr.value("offset", (int64_t)0);
+
+        if (mode == "literal")
+        {
+            if (!expr.contains("value") || !expr["value"].is_number_unsigned())
+            {
+                error = "index mode \"literal\" needs an unsigned \"value\"";
+                return false;
+            }
+            out = expr["value"].get<uint64_t>();
+        }
+        else if (mode == "cursor")
+        {
+            out = cursor;
+        }
+        else
+        {
+            error = "unknown index mode: " + mode;
+            return false;
+        }
+
+        out = (uint64_t)((int64_t)out + offset);    // offset is signed: head-1 is a real case
+        return true;
+    }
+
+    // Rewrite every objet-valued argument carrying a "mode" into the index it
+    // resolves to. `resolved` collects what was substituted, for the event log.
+    bool resolveArgs(nlohmann::json& args, uint64_t cursor,
+                     nlohmann::json& resolved, std::string& error)
+    {
+        for (auto& [key, value] : args.items())
+        {
+            if (!value.is_object() || !value.contains("mode"))
+            {
+                continue;       // edit_rate's {num,den}, and every plain scalar
+            }
+
+            uint64_t index = 0;
+            if (!resolveIndex(value, cursor, index, error))
+            {
+                error = key + ": " + error;
+                return false;
+            }
+
+            value         = index;    // the adapter sees a number, as it always has
+            resolved[key] = index;
+        }
+        return true;
+    }
+    
     // One lane's step array -> a vector<Step>. Fails on the first step that names a
     // call the catalog does not have -- validating at load time is the whole point.
     bool parseLane(nlohmann::json const& array, char const* laneName,
@@ -103,6 +159,7 @@ namespace
 
             step.id             = item.value("id", std::string{});
             step.delayBeforeMs  = item.value("delay_before_ms", 0.0);
+            step.advanceCursor  = item.value("advance_cursor", (int64_t)0);
             if (item.contains("args") && item["args"].is_object())
             {
                 step.args = item["args"];
@@ -157,8 +214,9 @@ nlohmann::ordered_json Engine::state() const
         for (Lane const* lane : {&_laneA, &_laneB})
         {
             nlohmann::ordered_json item;
-            item["steps"] = lane->steps.size();
-            item["next"]  = lane->next;
+            item["steps"]     = lane->steps.size();
+            item["next"]      = lane->next;
+            item["cursor"]    = lane->cursor;
             lanes[lane->name] = item;
         }
     }   // _mutex released here, deliberately: snapshot() takes the registry's own lock,
@@ -217,10 +275,11 @@ bool Engine::stepOnce(std::string const& laneName, std::string& error)
 
     // Claim the step under the lock -- a copy, not a reference: a concurrent
     // /scenario would free the vector the reference points into.
-    Step step;
+    Step     step;
+    uint64_t cursor = 0;
     {
         std::lock_guard<std::mutex> guard(_mutex);
-
+        
         if (_resetting)
         {
             error = "reset in progress";
@@ -233,17 +292,24 @@ bool Engine::stepOnce(std::string const& laneName, std::string& error)
             return false;
         }
 
-        step = lane->steps[lane->next];
+        step   = lane->steps[lane->next];
+        cursor = lane->cursor;
         ++lane->next;   // claimed before it runs: a step is never executed twice
         ++_busy;        // inside the lock: the gap between claiming and marking busy
     }                   // is exactly the window reset would slip through
 
-    execute(laneName, step);
+    uint64_t const nextCursor = execute(laneName, step, cursor);
+
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        lane->cursor = nextCursor;      // `lane` stays valid: it is a member address
+    }
+
     --_busy;
     return true;
 }
 
-void Engine::execute(std::string const& laneName, Step const& step)
+uint64_t Engine::execute(std::string const& laneName, Step const& step, uint64_t cursor)
 {
     double const delayMs = step.delayBeforeMs * _delayScale.load();
     if (delayMs > 0.0)
@@ -259,11 +325,25 @@ void Engine::execute(std::string const& laneName, Step const& step)
                     nlohmann::json{{"ok", false},
                                    {"call", step.call},
                                    {"error", "unknown call"}});
-        return;
+        return cursor;
+    }
+
+    // Resolve index expressions against *this* lane's cursor -- on a copy, so the
+    // scenario itself is never rewritten and the same step re-runs identically
+    // after a /reset.
+    nlohmann::json args     = step.args;
+    nlohmann::json resolved = nlohmann::json::object();
+    std::string    error;
+
+    if (!resolveArgs(args, cursor, resolved, error))
+    {
+        _log.append(laneName, step.id, mxlGetTime(),
+                    nlohmann::json{{"ok", false}, {"call", step.call}, {"error", error}});
+        return cursor;
     }
 
     uint64_t const startNs = mxlGetTime();
-    nlohmann::json result  = spec->invoke(_registry, step.args);
+    nlohmann::json result  = spec->invoke(_registry, args);
     uint64_t const endNs   = mxlGetTime();
 
     if (!result.is_object())
@@ -274,7 +354,13 @@ void Engine::execute(std::string const& laneName, Step const& step)
     result["call"]        = step.call;
     result["duration_us"] = (endNs - startNs) / 1000.0;
 
+    if (!resolved.empty())
+    {
+        result["resolved"] = resolved;
+    }
+
     _log.append(laneName, step.id, endNs, result);
+    return (uint64_t)((int64_t)cursor + step.advanceCursor);
 }
 
 void Engine::laneLoop(Lane& lane)
@@ -323,8 +409,10 @@ nlohmann::ordered_json Engine::reset()
             std::lock_guard<std::mutex> guard(_mutex);
             if (_busy == 0)
             {
-                _laneA.next = 0;
-                _laneB.next = 0;
+                _laneA.next   = 0;
+                _laneA.cursor = 0;
+                _laneB.next   = 0;
+                _laneB.cursor = 0;
                 break;
             }
         }

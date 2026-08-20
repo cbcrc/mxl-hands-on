@@ -44,6 +44,7 @@ struct Step
     std::string    call;
     double         delayBeforeMs = 0.0;
     nlohmann::json args = nlohmann::json::object();
+    int64_t        advanceCursor = 0; // added to the lane cursor after the step runs
 };
 
 // One lane: a name, its step list, and where it is in that list.
@@ -52,6 +53,7 @@ struct Lane
     std::string       name;
     std::vector<Step> steps;
     std::size_t       next = 0;     // index of the step that runs next
+    uint64_t          cursor = 0; // the index the scenario advances by hand, not the wall clock
 };
 
 // Owns the two lanes and the transport. Borrows the registry and the log; both
@@ -93,14 +95,16 @@ class Engine
         Lane* laneFor(std::string const& name);
 
         // Sleep the step's delay, invoke the adapter, log the event. Called with
-        // _mutex NOT held -- and adapter may block for seconds.
-        void execute(std::string const& laneName, Step const& step);
+        // _mutex NOT held -- and adapter may block for seconds. The cursor comes in
+        // by value and the new one goes out by return: a reference into the Lane
+        // would dangle for the same reason the Step is copied.
+        uint64_t execute(std::string const& laneName, Step const& step, uint64_t cursor);
 
         void laneLoop(Lane& lane);
 
         mutable std::mutex _mutex;      // guards _laneA/_laneB only, never the registry
-        Lane               _laneA{"A", {}, 0};
-        Lane               _laneB{"B", {}, 0};
+        Lane               _laneA{"A", {}, 0, 0};
+        Lane               _laneB{"B", {}, 0, 0};
 
         std::atomic<bool>   _running{false};
         std::atomic<int>    _busy{0};           //lane threads currently inside an adapter
