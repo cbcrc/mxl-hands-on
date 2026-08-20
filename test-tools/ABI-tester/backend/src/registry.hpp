@@ -28,12 +28,19 @@ struct HandleEntry
     HandleKind  kind;
     void*       ptr;    // the MXL handle; for a Grain slot, the writer/reader it came from
     std::string note;   // where it came from: a domain path, a flow id, ...
-
+    
     // Grain slots only. CommitGrain must be handed back the same mxlGrainInfo that
     // OpenGrain produced, and the payload pointer is where a fill step writes, so
     // both have to outlive the request that opened the grain.
     mxlGrainInfo grain{};
     uint8_t*     payload = nullptr;
+    
+    // The mxlInstance this handle was created from. Every mxlReleaseX call needs it
+    // and it cannot be recovered from the handle, so reset would have nothing to pass.
+    // Null for Instance entries (they are their own owner) and for Grain slots,
+    // whose `ptr` already holds the writer they came from.
+    // Last on purpose: appending to an aggregate leaves positional initializers alone.
+    void* owner = nullptr;
 };
 
 // A named table of live MXL handles, safe to touch from several lane threads.
@@ -43,7 +50,8 @@ public:
     // Store a fully-built entry. The only way to store a Grain slot.
     bool store(std::string const& name, HandleEntry entry);
 
-    bool store(std::string const& name, HandleKind kind, void* ptr, std::string note = {});
+    bool store(std::string const& name, HandleKind kind, void* ptr, std::string note = {},
+               void* owner = nullptr);
 
     // The handle stored under `name`, or nullptr if absent or of a different kind.
     void* find(std::string const& name, HandleKind kind) const;
@@ -63,6 +71,10 @@ public:
 
     // A copy of every slot, for GET /state.
     std::map<std::string, HandleEntry> snapshot() const;
+
+    // Remove and return every slot, under on lock. Same guarantee as take():
+    // exactly one caller ever receives these handles, so it can safely release them.
+    std::map<std::string, HandleEntry> drain();
 
 private:
     mutable std::mutex                  _mutex;

@@ -692,7 +692,7 @@ namespace
                 }
 
                 std::string const flowId = uuidText(config.common.id);
-                if (!registry.store(storeAs, HandleKind::FlowWriter, writer, flowId))
+                if (!registry.store(storeAs, HandleKind::FlowWriter, writer, flowId, instance))
                 {
                     mxlReleaseFlowWriter(instance, writer);
                     return failed("handle name '" + storeAs + "' is already in use");
@@ -1148,7 +1148,7 @@ namespace
                     return result;
                 }
 
-                if (!registry.store(storeAs, HandleKind::FlowReader, reader, flowId))
+                if (!registry.store(storeAs, HandleKind::FlowReader, reader, flowId, instance))
                 {
                     mxlReleaseFlowReader(instance, reader);
                     return failed("handle name '" + storeAs + "' is already in use");
@@ -1700,7 +1700,7 @@ namespace
                     return result;
                 }
 
-                if (!registry.store(storeAs, HandleKind::SyncGroup, group, "empty"))
+                if (!registry.store(storeAs, HandleKind::SyncGroup, group, "empty", instance))
                 {
                     mxlReleaseFlowSynchronizationGroup(instance, group);
                     return failed("handle name '" + storeAs + "' is already in use");

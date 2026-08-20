@@ -72,6 +72,8 @@ int main(int argc, char** argv)
     Registry registry;
 
     EventLog log;
+
+    Engine engine(registry, log);
     
     server.Get("/health",
         [&](httplib::Request const&, httplib::Response& res)
@@ -184,22 +186,7 @@ int main(int argc, char** argv)
     server.Get("/state",
         [&](httplib::Request const&, httplib::Response& res)
         {
-            nlohmann::json handles = nlohmann::json::object();
-
-            for (auto const& [name, entry] : registry.snapshot())
-            {
-                char ptrText[32];
-                std::snprintf(ptrText, sizeof(ptrText), "%p", entry.ptr);
-
-                nlohmann::json item;
-                item["kind"] = handleKindName(entry.kind);
-                item["note"] = entry.note;
-                item["ptr"] = ptrText;
-
-                handles[name] = item;
-            }
-
-            res.set_content(handles.dump(2) + "\n", "application/json");
+            res.set_content(engine.state().dump(2) + "\n", "application/json");
         });
 
     server.Get("/log",
@@ -211,6 +198,87 @@ int main(int argc, char** argv)
                 sinceSeq = std::strtoull(req.get_param_value("since").c_str(), nullptr, 10);
             }
             res.set_content(log.since(sinceSeq).dump(2) + "\n", "application/json");
+        });
+
+    server.Post("/scenario",
+        [&](httplib::Request const& req, httplib::Response& res)
+        {
+            auto respond = [&res](int status, nlohmann::json body)
+            {
+                res.status = status;
+                res.set_content(body.dump(2) + "\n", "application/json");
+            };
+
+            nlohmann::json const doc = nlohmann::json::parse(req.body, nullptr, false);
+            if (doc.is_discarded())
+            {
+                respond(400, nlohmann::json{{"ok", false}, {"error", "body is not valid JSON"}});
+                return;
+            }
+
+            std::string error;
+            if (!engine.loadScenario(doc, error))
+            {
+                respond(400, nlohmann::json{{"ok", false}, {"error", error}});
+                return;
+            }
+
+            res.set_content(engine.state().dump(2) + "\n", "application/json");
+        });
+    
+    server.Post("/step",
+        [&](httplib::Request const& req, httplib::Response& res)
+        {
+            auto respond = [&res](int status, nlohmann::json body)
+            {
+                res.status = status;
+                res.set_content(body.dump(2) + "\n", "application/json");
+            };
+
+            nlohmann::json const request = nlohmann::json::parse(req.body, nullptr, false);
+            if (request.is_discarded() || !request.is_object() ||
+                !request.contains("lane") || !request["lane"].is_string())
+            {
+                respond(400, nlohmann::json{{"ok", false},
+                                            {"error", "body must be an object with a string \"lane\""}});
+                return;
+            }
+
+            std::string error;
+            if (!engine.stepOnce(request["lane"].get<std::string>(), error))
+            {
+                respond(400, nlohmann::json{{"ok", false}, {"error", error}});
+                return;
+            }
+
+            res.set_content(engine.state().dump(2) + "\n", "application/json");
+        });
+    
+    server.Post("/run",
+        [&](httplib::Request const& req, httplib::Response& res)
+        {
+            nlohmann::json const request = nlohmann::json::parse(req.body, nullptr, false);
+            if (!request.is_discarded() && request.is_object() &&
+                request.contains("delay_scale") && request["delay_scale"].is_number())
+            {
+                engine.setDelayScale(request["delay_scale"].get<double>());
+            }
+
+            engine.run();
+            res.set_content(engine.state().dump(2) + "\n", "application/json");
+        });
+    
+    server.Post("/pause",
+        [&](httplib::Request const&, httplib::Response& res)
+        {
+            engine.pause();
+            res.set_content(engine.state().dump(2) + "\n", "application/json");
+        });
+    
+    server.Post("/reset",
+        [&](httplib::Request const&, httplib::Response& res)
+        {
+            res.set_content(engine.reset().dump(2) + "\n", "application/json");
         });
     
     std::printf("Listening on http://0.0.0.0:9600 (Ctrl-C to stop)\n");

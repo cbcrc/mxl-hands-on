@@ -28,9 +28,10 @@ bool Registry::store(std::string const& name, HandleEntry entry)
     return inserted;
 }
 
-bool Registry::store(std::string const& name, HandleKind kind, void* ptr, std::string note)
+bool Registry::store(std::string const& name, HandleKind kind, void* ptr, std::string note,
+                     void* owner)
 {
-    return store(name, HandleEntry{kind, ptr, std::move(note)});
+    return store(name, HandleEntry{kind, ptr, std::move(note), {}, nullptr, owner});
 }
 
 void* Registry::find(std::string const& name, HandleKind kind) const
@@ -94,4 +95,13 @@ std::map<std::string, HandleEntry> Registry::snapshot() const
 {
     std::lock_guard<std::mutex> lock(_mutex);
     return _entries; // copied under the lock, so the caller holds no reference into it
+}
+
+std::map<std::string, HandleEntry> Registry::drain()
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+
+    std::map<std::string, HandleEntry> taken;
+    taken.swap(_entries);   // removed and handed over in one locked operation
+    return taken;
 }
