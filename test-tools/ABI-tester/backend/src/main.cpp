@@ -21,19 +21,6 @@
 #include "calls.hpp"
 #include "engine.hpp"
 
-// A record we stamp into the head of every grain payload, so the reader can
-// measure true producer -> consumer transit instead of index-derived age.
-struct PayloadStamp
-{
-    uint64_t magic;
-    uint64_t index;
-    uint64_t writeNs;
-};
-
-static_assert(sizeof(PayloadStamp) == 24, "PayloadStamp must be exactly 24 bytes");
-
-static constexpr uint64_t kStampMagic = 0x4D584C5354414D50ULL;  // "MXLSTAMP"
-
 // Main loop
 int main(int argc, char** argv)
 {
@@ -162,8 +149,14 @@ int main(int argc, char** argv)
                 return;
             }
 
-            nlohmann::json const args =
+            nlohmann::json args =
                 request.contains("args") ? request["args"] : nlohmann::json::object();
+            
+            // Same spelling as scenario step: fill is a sibling of args, not a member.
+            if (request.contains("fill") && request["fill"].is_object())
+            {
+                args["fill"] = request["fill"];
+            }
             
             uint64_t const startNs = mxlGetTime();
             nlohmann::json result = spec->invoke(registry, args);

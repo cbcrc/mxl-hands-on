@@ -108,6 +108,20 @@ namespace
     // value. Modulo keeps the ramp exact and still unique over 349 s at 48 kHz.
     constexpr uint64_t kRampModulus = 1ULL << 24;
     
+    // A record we stamp into the head of every grain payload, so the reader can
+    // measure true producer -> consumer transit instead of index-derived age.
+    // Moved out of main.cpp in chunk 9: only this translation unit ever writes or
+    // parses it.
+    struct PayloadStamp
+    {
+        uint64_t magic;
+        uint64_t index;
+        uint64_t writeNs;
+    };
+
+    static_assert(sizeof(PayloadStamp) == 24, "PayloadStamp must be exactly 24 bytes");
+
+    constexpr uint64_t kStampMagic = 0x4D584C5354414D50ULL;  // "MXLSTAMP"
 
     // --- argument accessors -------------------------------------
 
@@ -322,6 +336,9 @@ namespace
             status = mxlFlowReaderGetGrainNonBlocking(reader, index, &grain, &payload);
         }
 
+        // The honest instant: right after ABI returned, before any JSON exists.
+        uint64_t const readNs = mxlGetTime();
+
         json result = statusJson(call, status);
 
         // Before the early return: a refused read still says what if refused.
@@ -355,6 +372,38 @@ namespace
         result["valid_slices"] = grain.validSlices;
         result["flags"]        = grain.flags;
         result["invalid"]      = ((grain.flags & MXL_GRAIN_FLAG_INVALID) != 0);
+
+        if (args.value("verify_stamp", false))
+        {
+            json stampInfo;
+
+            if ((payload == nullptr) || (grain.grainSize < sizeof(PayloadStamp)))
+            {
+                stampInfo["valid"] = false;
+                stampInfo["error"] = "grain payload is smaller thant the 24-byte stamp";
+            }
+            else
+            {
+                // memcpy out, never a pointer cast: the payload carries no alignment
+                // guarantee, and reading it through a PayloadStamp* is undefined
+                // behaviour even where it happens to work. (M5)
+                PayloadStamp stamp{};
+                std::memcpy(&stamp, payload, sizeof(stamp));
+
+                bool const valid = (stamp.magic == kStampMagic);
+                stampInfo["valid"] = valid;
+
+                if (valid)
+                {
+                    stampInfo["index"]      = stamp.index;
+                    stampInfo["matches"]    = (stamp.index == grain.index);
+                    stampInfo["write_ns"]   = nsText(stamp.writeNs);
+                    stampInfo["transit_ms"] =
+                        (double)((int64_t)(readNs - stamp.writeNs)) / 1000000.0; 
+                }
+            }
+            result["stamp"] = stampInfo;
+        }
         return result;
     }
 
@@ -451,6 +500,67 @@ namespace
         result["last_value"]  = last;
         result["ramp_intact"] = intact;
         return result;
+    }
+
+    // Fill an open grain's payload and optionally stamp it. false on a bad spec, with
+    // `out` describing what was actually written for the event.
+    bool applyFill(json const& fill, uint8_t* payload, mxlGrainInfo const& grain,
+                   json& out, std::string& error)
+    {
+        if ((payload == nullptr) || (grain.grainSize == 0))
+        {
+            error = "fill: the grain has no payload to write";
+            return false;
+        }
+
+        std::string const mode  = fill.value("mode", std::string{"none"});
+        u_int64_t const   start = mxlGetTime();
+        size_t const      size  = (size_t)grain.grainSize;
+
+        if (mode == "none")
+        {
+            // Deliberate no-op: the slot keeps whatever its last occupant left behind,
+            // which is the state every grain this tool has written so far was in.
+        }
+        else if (mode == "const")
+        {
+            uint64_t byte = 0;
+            if (!argUint64(fill, "byte", byte) || (byte > 255))
+            {
+                error = "fill mode \"const\" needs a \"byte\" in 0..255";
+                return false;
+            }
+            std::memset(payload, (int)byte, size);
+        }
+        else if (mode == "ramp")
+        {
+            for (size_t i = 0; i < size; ++i)
+            {
+                payload[i] = (uint8_t)i;    // wraps every 256 bytes, by design
+            }
+        }
+        else
+        {
+            error = "unknown fill mode: " + mode;
+            return false;
+        }
+
+        out["mode"]  = mode;
+        out["bytes"] = size;
+
+        if (fill.value("stamp", false))
+        {
+            // After the fill, never before -- a memset would erase it. That is the M5
+            // lesson, and it is the whole reason this is one function and not two.
+            PayloadStamp const stamp{kStampMagic, grain.index, mxlGetTime()};
+            std::memcpy(payload, &stamp, sizeof(stamp));
+
+            out["stamp"]    = true;
+            out["stamp_ns"] = nsText(stamp.writeNs);
+        }
+
+        out["fill_us"] = (double)(mxlGetTime() - start) / 1000.0;
+        return true;
     }
 
     json readSamples(Registry& registry, json const& args, char const* call, bool blocking)
@@ -752,7 +862,9 @@ namespace
             "A writer tracks one open grain at a time; close it with commitGrain or cancelGrain.",
             {{"writer", "handle", true, "Registry name of the flow writer"},
                 {"index", "uint64", true, "Grain index to open"},
-                {"store_as", "handle", true, "Registry name to cache the open grain under"}},
+                {"store_as", "handle", true, "Registry name to cache the open grain under"},
+                {"fill", "object", false,
+                 "{\"mode\":\"none|const|ramp\", \"byte\":0-255, \"stamp\":true}"}},
             [](Registry& registry, json const& args)
             {
                 std::string const writerName = argString(args, "writer");
@@ -787,6 +899,25 @@ namespace
                     return result;
                 }
 
+                json fillResult = json::object();
+                if (args.contains("fill"))
+                {
+                    if (!args["fill"].is_object())
+                    {
+                        mxlFlowWriterCancelGrain(writer);
+                        return failed("argument 'fill' must be an object");
+                    }
+
+                    std::string fillError;
+                    if (!applyFill(args["fill"], payload, grain, fillResult, fillError))
+                    {
+                        // Same undo as a refused handle name: the grain is open, and
+                        // retruning without closing it is what leaks the writer's slot.
+                        mxlFlowWriterCancelGrain(writer);
+                        return failed(fillError);
+                    }
+                }
+
                 HandleEntry entry{HandleKind::Grain, writer,
                     "open on writer " + writerName, grain, payload};
                 
@@ -804,6 +935,12 @@ namespace
                 result["total_slices"]  = grain.totalSlices;
                 result["valid_slices"]  = grain.validSlices;
                 result["flags"]         = grain.flags;
+
+                if (!fillResult.empty())
+                {
+                    result["fill"] = fillResult;
+                }
+
                 return result;
         }});
 
@@ -1202,7 +1339,8 @@ namespace
             {{"reader", "handle", true, "Registry name of the flow reader"},
                 {"index", "uint64", true, "Grain index to read"},
                 {"timeout_ns", "uint64", true, "How long to wait; default 0, i.e. return at once"},
-                {"store_as", "handle", false, "Registry name to cache the grain under"}},
+                {"store_as", "handle", false, "Registry name to cache the grain under"},
+                {"verify_stamp", "bool", false, "Parse the 24-bytes payload stamp and report transit"}},
             [](Registry& registry, json const& args)
             {
                 return readGrain(registry, args, "mxlFlowReaderGetGrain", true, false);
@@ -1217,7 +1355,8 @@ namespace
                 {"index", "uint64", true, "Grain index to read"},
                 {"min_valid_slices", "uint64", true, "Slices required before the grain is returned"},
                 {"timeout_ns", "uint64", false, "How long to wait; default 0, i.e return at once"},
-                {"store_as", "handle", false, "Registry name to cache the grain under"}},
+                {"store_as", "handle", false, "Registry name to cache the grain under"},
+                {"verify_stamp", "bool", false, "Parse the 24-bytes payload stamp and report transit"}},
             [](Registry& registry, json const& args)
             {
                 return readGrain(registry, args, "mxlFlowReaderGetGrainSlice", true, true);
@@ -1229,7 +1368,8 @@ namespace
             "Read the complete grain at `index` or fail immediately. Takes no timeout.",
             {{"reader", "handle", true, "Registry name of the flow reader"},
                 {"index", "uint64", true, "Grain index to read"},
-                {"store_as", "handle", false, "Registry name to cache the grain under"}},
+                {"store_as", "handle", false, "Registry name to cache the grain under"},
+                {"verify_stamp", "bool", false, "Parse the 24-bytes payload stamp and report transit"}},
             [](Registry& registry, json const& args)
             {
                 return readGrain(registry, args, "mxlFlowReaderGetGrainNonBlocking", false, false);
@@ -1242,7 +1382,8 @@ namespace
             {{"reader", "handle", true, "Registry name of the flow reader"},
                 {"index", "uint64", true, "Grain index to read"},
                 {"min_valid_slices", "uint64", true, "Slices required before the grain is returned"},
-                {"store_as", "handle", false, "Registry name to cache the grain under"}},
+                {"store_as", "handle", false, "Registry name to cache the grain under"},
+                {"verify_stamp", "bool", false, "Parse the 24-bytes payload stamp and report transit"}},
             [](Registry& registry, json const& args)
             {
                 return readGrain(registry, args, "mxlFlowReaderGetGrainSliceNonBlocking", false, true);

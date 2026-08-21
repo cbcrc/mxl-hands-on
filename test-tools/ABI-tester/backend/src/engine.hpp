@@ -45,6 +45,7 @@ struct Step
     double         delayBeforeMs = 0.0;
     nlohmann::json args = nlohmann::json::object();
     int64_t        advanceCursor = 0; // added to the lane cursor after the step runs
+    nlohmann::json fill;    // step-level; merged into args after index resolution
 };
 
 // One lane: a name, its step list, and where it is in that list.

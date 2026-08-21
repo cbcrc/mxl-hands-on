@@ -5,6 +5,7 @@
 #include <mxl/time.h>
 #include <mxl/flow.h>
 #include <mxl/mxl.h>
+#include <mxl/dataformat.h>
 
 #include "engine.hpp"
 #include "calls.hpp"
@@ -74,9 +75,10 @@ Engine::~Engine()
 namespace
 {
     // One index expression -> one number. This is the only place the four modes
-    // are spelled out; `current` and `head` join it later.
-    bool resolveIndex(nlohmann::json const& expr, nlohmann::json const& args,
-                      uint64_t cursor, uint64_t&out, std::string& error)
+    // are spelled out.
+    bool resolveIndex(Registry const& registry, nlohmann::json const& expr,
+                      nlohmann::json const& args, uint64_t cursor,
+                      uint64_t&out, nlohmann::json& resolved, std::string& error)
     {
         std::string const mode   = expr.value("mode", std::string{"literal"});
         int64_t const     offset = expr.value("offset", (int64_t)0);
@@ -109,6 +111,54 @@ namespace
 
             out = mxlGetCurrentIndex(&editRate);
         }
+        else if (mode == "head")
+        {
+            // Same fallback rule as edit_rate: the expression wins, the step's own
+            // argument fills in -- a read step already names its reader.
+            std::string readerName = expr.value("reader", std::string{});
+            if (readerName.empty())
+            {
+                readerName = args.value("reader", std::string{});
+            }
+
+            auto const reader = static_cast<mxlFlowReader>(
+                registry.find(readerName, HandleKind::FlowReader));
+            if (reader == nullptr)
+            {
+                error = "index mode \"head\" needs a flow reader handle in \"reader\"";
+                return false;
+            }
+
+            // One call, not two: GetInfo returns config and runtime together, so the
+            // format branch and the head index cost a single trip through the ABI.
+            mxlFlowInfo     info{};
+            mxlStatus const status = mxlFlowReaderGetInfo(reader, &info);
+            if (status != MXL_STATUS_OK)
+            {
+                error = "index mode \"head\": mxlFlowReaderGetInfo returned status " +
+                        std::to_string(status);
+                return false;
+            }
+
+            bool const     discrete = mxlIsDiscreteDataFormat(info.config.common.format) != 0;
+            uint64_t const head     = info.runtime.headIndex;
+
+            if (!discrete && (head == 0))
+            {
+                // 0 - 1 in uint64_t is 1.8e19: the M9 argUint64 lesson, arriving at the
+                // ABI as perfectly plausible-looking index.
+                error = "index mode \"head\": flow has no committed data yet";
+                return false;
+            }
+
+            // Discrete headIndex is the last committed grain, inclusive; continuous is
+            // the exclusive end of the last committed range. Normalising both to "the
+            // newest readable index" is what makes one expression mean one thing.
+            out = discrete ? head : (head - 1);
+
+            resolved["head"] = head;
+            resolved["flow"] = discrete ? "discrete" : "continuous";
+        }
         else
         {
             error = "unknown index mode: " + mode;
@@ -121,7 +171,7 @@ namespace
 
     // Rewrite every objet-valued argument carrying a "mode" into the index it
     // resolves to. `resolved` collects what was substituted, for the event log.
-    bool resolveArgs(nlohmann::json& args, uint64_t cursor,
+    bool resolveArgs(Registry const& registry, nlohmann::json& args, uint64_t cursor,
                      nlohmann::json& resolved, std::string& error)
     {
         for (auto& [key, value] : args.items())
@@ -132,7 +182,7 @@ namespace
             }
 
             uint64_t index = 0;
-            if (!resolveIndex(value, args, cursor, index, error))
+            if (!resolveIndex(registry, value, args, cursor, index, resolved,  error))
             {
                 error = key + ": " + error;
                 return false;
@@ -143,7 +193,7 @@ namespace
         }
         return true;
     }
-    
+
     // One lane's step array -> a vector<Step>. Fails on the first step that names a
     // call the catalog does not have -- validating at load time is the whole point.
     bool parseLane(nlohmann::json const& array, char const* laneName,
@@ -178,6 +228,11 @@ namespace
             step.id             = item.value("id", std::string{});
             step.delayBeforeMs  = item.value("delay_before_ms", 0.0);
             step.advanceCursor  = item.value("advance_cursor", (int64_t)0);
+            if (item.contains("fill") && item["fill"].is_object())
+            {
+                step.fill = item["fill"];
+            }
+
             if (item.contains("args") && item["args"].is_object())
             {
                 step.args = item["args"];
@@ -223,6 +278,7 @@ bool Engine::loadScenario(nlohmann::json const& doc, std::string& error)
     _laneB.steps  = std::move(stepsB);
     _laneB.next   = 0;
     _laneB.cursor = 0;
+    _running      = false;
     return true;
 }
 
@@ -344,11 +400,20 @@ uint64_t Engine::execute(std::string const& laneName, Step const& step, uint64_t
     nlohmann::json resolved = nlohmann::json::object();
     std::string    error;
 
-    if (!resolveArgs(args, cursor, resolved, error))
+    if (!resolveArgs(_registry, args, cursor, resolved, error))
     {
         _log.append(laneName, step.id, mxlGetTime(),
                     nlohmann::json{{"ok", false}, {"call", step.call}, {"error", error}});
         return cursor;
+    }
+
+    // Merged AFTER resolution, never before: fill is an object carrying a "mode" key,
+    // which is exactly the shape resolveArgs treats as an index expression. Keeping
+    // fill a sibling of args in the scenario -- as the spec spells it -- is what saves
+    // the structural rule from growing a special case.
+    if (!step.fill.is_null())
+    {
+        args["fill"] = step.fill;
     }
 
     if (step.call == "setCursor")
@@ -370,6 +435,7 @@ uint64_t Engine::execute(std::string const& laneName, Step const& step, uint64_t
         {
             event["resolved"] = resolved;
         }
+        
         _log.append(laneName, step.id, mxlGetTime(), event);
 
         // advance_cursor is ignored on purpose: setCursor names an absolute index, and
