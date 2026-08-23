@@ -54,6 +54,12 @@ int main(int argc, char** argv)
         std::printf("Domain on RAM disk: %s\n", isTmpFs ? "yes" : "no");
     }
 
+    // The root /domains scans, distinct from the instance domain above. Named
+    // here rather than inside the handler so the default lives in one place and
+    // the server states it in the terminal it was actually launched from.
+    char const* domainRootEnv = std::getenv("MXL_DOMAIN_ROOT");
+    char const* domainRoot    = (domainRootEnv != nullptr) ? domainRootEnv : "/Volumes/mxl";
+    std::printf("Domain root: %s\n", domainRoot);
     std::printf("Scenario dir: %s\n", scenarioDir().c_str());
     
     httplib::Server server;
@@ -79,13 +85,11 @@ int main(int argc, char** argv)
     
     // Calls for the mxl domain finder function.
     server.Get("/domains",
-        [](httplib::Request const&, httplib::Response& res)
+        [domainRoot](httplib::Request const&, httplib::Response& res)
         {
-            char const* root = std::getenv("MXL_DOMAIN_ROOT");
-
             nlohmann::json list = nlohmann::json::array();
 
-            for (auto const& d : scanDomains(root ? root : "/Volumes/mxl"))
+            for (auto const& d : scanDomains(domainRoot))
             {
                 nlohmann::json item;
                 item["id"]                      = d.id;
