@@ -9,6 +9,8 @@
 #include <vector>
 #include <atomic>
 #include <thread>
+#include <map>
+#include <condition_variable>
 
 #include <nlohmann/json.hpp>
 #include "registry.hpp"
@@ -109,9 +111,12 @@ class Engine
 
         void laneLoop(Lane& lane);
 
-        mutable std::mutex _mutex;      // guards _laneA/_laneB only, never the registry
-        Lane               _laneA{"A", {}, 0, 0};
-        Lane               _laneB{"B", {}, 0, 0};
+        mutable std::mutex _mutex;      // guards _lanes only, never the registry
+        // The pool, built once in the ctor and never resized. A map's nodes have
+        // stable addresses, so the Lane* laneFor hands out stays valid across the
+        // unlocked execute() -- and an immutable pool is what makes that lookup
+        // safe without _mutex.
+        std::map<std::string, Lane> _lanes;
         nlohmann::json     _scenario = nlohmann::json::object();
 
         std::atomic<bool>   _running{false};
@@ -120,10 +125,12 @@ class Engine
         std::atomic<bool>   _shutdown{false};
         std::atomic<double> _delayScale{1.0};
 
+        // Lanes sleep on this instead of polling. Everything its predicate reads --
+        // _shutdown, _running, _resetting, lane.next, lane.steps -- is written under
+        // _mutex, which is the only thing that prevents a lost wakeup.
+        std::condition_variable _wake;
+
         // Last: members are constructed in declaration order, ant these start running
         // immediately, so everything they touch must already exist.
-        std::thread _threadA;
-        std::thread _threadB;
-
-        
+        std::vector<std::thread> _threads;      // one per lane        
 };

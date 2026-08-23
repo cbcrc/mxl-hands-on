@@ -6,6 +6,7 @@
 #include <mxl/flow.h>
 #include <mxl/mxl.h>
 #include <mxl/dataformat.h>
+#include <cstdlib>
 
 #include "engine.hpp"
 #include "calls.hpp"
@@ -48,32 +49,87 @@ void EventLog::clear()
     _events.clear();
 }
 
+namespace
+{
+    // A..Z, then AA, AB, ... -- bijective base 26. Note there is no zero digit:
+    // "A" is 0 *and* 1 depending of position, which is why the loop substract one
+    // before dividing. Plain base 26 would emit "@A" for 26.
+    std::string laneName(int ordinal)
+    {
+        std::string name;
+        for (int n = ordinal; n >= 0; n = n / 26 - 1)
+        {
+            name.insert(name.begin(), (char)('A' + (n % 26)));
+        }
+        return name;
+    }
+
+    // Pool size from the environment. One OS thread per lane, and an idle lane
+    // wakes every 5 ms, so the ceiling is about the instrument's own load -- not
+    // about how many names we can spell.
+    int laneCount()
+    {
+        char const* fromEnv = std::getenv("ABI_TESTER_LANES");
+        if (fromEnv == nullptr)
+        {
+            return 8;
+        }
+
+        char*      end = nullptr;
+        long const n   = std::strtol(fromEnv, &end, 10);
+        
+        if ((end == fromEnv) || (*end != '\0') || (n < 1) || (n > 1024))
+        {
+            std::fprintf(stderr, "ABI_TESTER_LANES=%s ignored (want 1..1024); using 8\n", fromEnv);
+            return 8;
+        }
+        return (int)n;
+    }
+}
+
 Engine::Engine(Registry& registry, EventLog& log)
     : _registry(registry)
     , _log(log)
 {
-    // Started in the body, not the member-init list: a thread launched there could
-    // reach a member that has not been constructed yet.
-    _threadA = std::thread([this] { laneLoop(_laneA); });
-    _threadB = std::thread([this] { laneLoop(_laneB); });
+    int const count = laneCount();
+
+    for (int i = 0; i < count; ++i)
+    {
+        std::string const name = laneName(i);
+        _lanes[name].name      = name;
+    }
+
+    // Second loop, not merged into the first: a thread calls laneFor, which reads
+    // _lanes without the lock. Nothing may still be inserting when that starts.
+    for (auto& entry: _lanes)
+    {
+        Lane* lane = &entry.second;     // not a structured binding: a lambda cannot capture one
+        _threads.emplace_back([this, lane] { laneLoop(*lane); });
+    }
+
+    std::printf("Lanes: %d (%s..%s)\n", count,
+                laneName(0).c_str(), laneName(count - 1).c_str());
 }
 
 Engine::~Engine()
 {
-    _shutdown = true;
-
-    if (_threadA.joinable())
     {
-        _threadA.join();
+        std::lock_guard<std::mutex> guard(_mutex);
+        _shutdown = true;
     }
-    if (_threadB.joinable())
+    _wake.notify_all();
+
+    for (std::thread& thread : _threads)
     {
-        _threadB.join();
+        if (thread.joinable())
+        {
+            thread.join();
+        }
     }
 }
 
 namespace
-{
+{   
     // One index expression -> one number. This is the only place the four modes
     // are spelled out.
     bool resolveIndex(Registry const& registry, nlohmann::json const& expr,
@@ -297,27 +353,47 @@ bool Engine::loadScenario(nlohmann::json const& doc, std::string& error)
         return false;
     }
 
-    // Parse into locals first. A lane B that fails must not leave lane A replaced --
-    // and B is parsed only if A succeeded, because || short-circuits.
-    std::vector<Step> stepsA;
-    std::vector<Step> stepsB;
+    // Parse into a locals map first: a lane that fails must not leave every loaded
+    // lane exactly as it was.
+    std::map<std::string, std::vector<Step>> parsed;
 
-    if (!parseLane(lanes.contains("A") ? lanes["A"] : nlohmann::json::array(), "A", stepsA, error) ||
-        !parseLane(lanes.contains("B") ? lanes["B"] : nlohmann::json::array(), "B", stepsB, error))
+    for (auto const& item : lanes.items())
     {
-        return false;
+        std::string const& name = item.key();
+
+        // Reading the immutable pool without the lock, as laneFor does.
+        if (_lanes.find(name)  == _lanes.end())
+        {
+            error = "unknown lane \"" + name + "\": the pool is " + laneName(0) + ".." +
+                    laneName((int)_lanes.size() - 1) +
+                    "; set ABI_TESTER_LANES to widen it";
+            return false;
+        }
+
+        if (!parseLane(item.value(), name.c_str(), parsed[name], error))
+        {
+            return false;
+        }
     }
 
     std::lock_guard<std::mutex> guard(_mutex);
-    _laneA.steps  = std::move(stepsA);
-    _laneA.next   = 0;
-    _laneA.cursor = 0;
-    _laneB.steps  = std::move(stepsB);
-    _laneB.next   = 0;
-    _laneB.cursor = 0;
-    _running      = false;
-    _scenario     = doc;
+
+    for (auto& entry : _lanes)
+    {
+        auto const found = parsed.find(entry.first);
+
+        // A pool lane the document does not name is emptied, never left behind:
+        // the previous scenario's steps must not survive into this one.
+        entry.second.steps  = (found == parsed.end()) ? std::vector<Step>{}
+                                                      : std::move(found->second);
+        entry.second.next   = 0;
+        entry.second.cursor = 0;
+    }
+
+    _running  = false;
+    _scenario = doc;
     return true;
+    
 }
 
 nlohmann::ordered_json Engine::state() const
@@ -325,13 +401,19 @@ nlohmann::ordered_json Engine::state() const
     nlohmann::ordered_json lanes = nlohmann::ordered_json::object();
     {
         std::lock_guard<std::mutex> guard(_mutex);
-        for (Lane const* lane : {&_laneA, &_laneB})
+        for (auto const& entry : _lanes)
         {
+            Lane const& lane = entry.second;
+            if (lane.steps.empty())
+            {
+                continue;   // a pool lane nobody loaded: not part of this scenario
+            }
+
             nlohmann::ordered_json item;
-            item["steps"]     = lane->steps.size();
-            item["next"]      = lane->next;
-            item["cursor"]    = lane->cursor;
-            lanes[lane->name] = item;
+            item["steps"]     = lane.steps.size();
+            item["next"]      = lane.next;
+            item["cursor"]    = lane.cursor;
+            lanes[entry.first] = item;
         }
     }   // _mutex released here, deliberately: snapshot() takes the registry's own lock,
         // and holding two locks at once is how deadlocks get built.
@@ -360,6 +442,7 @@ nlohmann::ordered_json Engine::state() const
     nlohmann::ordered_json body;
     body["running"]     = _running.load();
     body["delay_scale"] = _delayScale.load();
+    body["lane_pool"]   = _lanes.size();
     body["lanes"]       = lanes;
     body["handles"]     = handles;
     return body;
@@ -367,15 +450,10 @@ nlohmann::ordered_json Engine::state() const
 
 Lane* Engine::laneFor(std::string const& name)
 {
-    if (name == "A")
-    {
-        return &_laneA;
-    }
-    if (name == "B")
-    {
-        return &_laneB;
-    }
-    return nullptr;
+    // No lock: the pool is complete before the first thread starts and is never
+    // touched again, so this is a read of an immutable container.
+    auto const it = _lanes.find(name);
+    return (it == _lanes.end()) ? nullptr : &it->second;
 }
 
 bool Engine::stepOnce(std::string const& laneName, std::string& error)
@@ -520,22 +598,37 @@ uint64_t Engine::execute(std::string const& laneName, Step const& step, uint64_t
 
 void Engine::laneLoop(Lane& lane)
 {
-    // lane.name is set at construction and never written again, so reading it
-    // outside the lock is safe. steps/next are only ever touched by stepOnce.
-    while (!_shutdown)
+    for (;;)
     {
-        std::string error;
-
-        if (!_running || !stepOnce(lane.name, error))
         {
-            mxlSleepForNs(5000000);     // 5 ms: paused, or out of steps
-        }
+            std::unique_lock<std::mutex> lock(_mutex);
+
+            _wake.wait(lock,
+                       [this, &lane]
+                       {
+                            return _shutdown || (_running && !_resetting &&
+                                                 (lane.next < lane.steps.size()));
+                        });
+            
+            if (_shutdown)
+            {
+                return;
+            }
+        }   // the lock is released here, deliberately: stepOnce takes _mutex itself,
+            // and this mutex is not recursive (the session-5 rule).
+        
+        std::string error;
+        stepOnce(lane.name, error);     // may find the state changed and refuse; we just re-wait
     }
 }
 
 void Engine::run()
 {
-    _running = true;
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        _running = true;    // under the lock even though it is atomic: see laneLoop
+    }
+    _wake.notify_all();
 }
 
 void Engine::pause()
@@ -564,10 +657,11 @@ nlohmann::ordered_json Engine::reset()
             std::lock_guard<std::mutex> guard(_mutex);
             if (_busy == 0)
             {
-                _laneA.next   = 0;
-                _laneA.cursor = 0;
-                _laneB.next   = 0;
-                _laneB.cursor = 0;
+                for (auto& entry : _lanes)
+                {
+                    entry.second.next   = 0;
+                    entry.second.cursor = 0;
+                }
                 break;
             }
         }

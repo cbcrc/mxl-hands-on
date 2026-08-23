@@ -41,3 +41,13 @@ idx() { curl -sS -X POST $B/call -H 'Content-Type: application/json' \
 
 # The whole log, one line per event.
 logs() { curl -sS "$B/log?since=${1:-0}" | jq -c '.[]'; }
+
+# Average CPU of the server over N seconds, from /proc. Fields 14+15 of
+# /proc/<pid>/stat are utime+stime in clock ticks.
+cpu() {
+  local P=$(pgrep abi-tester) T=${1:-10}
+  local A=$(awk '{print $14+$15}' /proc/$P/stat)
+  sleep "$T"
+  local B=$(awk '{print $14+$15}' /proc/$P/stat)
+  echo "cpu% = $(echo "($B-$A)*100/($T*$(getconf CLK_TCK))" | bc -l)"
+}

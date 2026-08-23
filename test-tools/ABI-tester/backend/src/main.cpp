@@ -53,6 +53,8 @@ int main(int argc, char** argv)
     {
         std::printf("Domain on RAM disk: %s\n", isTmpFs ? "yes" : "no");
     }
+
+    std::printf("Scenario dir: %s\n", scenarioDir().c_str());
     
     httplib::Server server;
     
