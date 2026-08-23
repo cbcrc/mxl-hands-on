@@ -546,7 +546,7 @@ namespace
         }
 
         out["mode"]  = mode;
-        out["bytes"] = size;
+        out["bytes"] = (mode == "none") ? (size_t)0 : size;
 
         if (fill.value("stamp", false))
         {

@@ -233,6 +233,43 @@ namespace
                 step.fill = item["fill"];
             }
 
+            // "out": {"grain": "g"} is the spec's spelling for naming a step's product.
+            // The key names the kind and is documentation only; the value is the
+            // registry name, which is what every creating adapter reads as "store_as".
+            if (item.contains("out"))
+            {
+                if (!item["out"].is_object() || (item["out"].size() != 1) ||
+                    !item["out"].begin().value().is_string())
+                {
+                    error = std::string("lane ") + laneName +
+                            ": \"out\" must be an object with exactly one string value";
+                    return false;
+                }
+
+                CallSpec const* spec   = findCall(step.call);
+                bool            stores = false;
+                if (spec != nullptr)
+                {
+                    for (ParamSpec const& param : spec->params)
+                    {
+                        if (param.name == "store_as")
+                        {
+                            stores = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!stores)
+                {
+                    error = std::string("lane ") + laneName + ": " + step.call +
+                    " stores no handle, so it takes no \"out\"";
+                    return false;
+                }
+
+                step.out = item["out"].begin().value().get<std::string>();
+            }
+
             if (item.contains("args") && item["args"].is_object())
             {
                 step.args = item["args"];
@@ -414,6 +451,11 @@ uint64_t Engine::execute(std::string const& laneName, Step const& step, uint64_t
     if (!step.fill.is_null())
     {
         args["fill"] = step.fill;
+    }
+
+    if (!step.out.empty())
+    {
+        args["store_as"] = step.out;
     }
 
     if (step.call == "setCursor")

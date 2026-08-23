@@ -46,6 +46,7 @@ struct Step
     nlohmann::json args = nlohmann::json::object();
     int64_t        advanceCursor = 0; // added to the lane cursor after the step runs
     nlohmann::json fill;    // step-level; merged into args after index resolution
+    std::string    out;     // step-level registry name; merge into args as "store_as"
 };
 
 // One lane: a name, its step list, and where it is in that list.

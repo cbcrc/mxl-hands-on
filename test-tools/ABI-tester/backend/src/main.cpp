@@ -157,6 +157,14 @@ int main(int argc, char** argv)
             {
                 args["fill"] = request["fill"];
             }
+
+            // Same spelling as scenario step. /call has no lane and no resolver, so
+            // "store_as" inside args still works too.
+            if (request.contains("out") && request["out"].is_object() &&
+                (request["out"].size() == 1) && request["out"].begin().value().is_string())
+            {
+                args["store_as"] = request["out"].begin().value();
+            }
             
             uint64_t const startNs = mxlGetTime();
             nlohmann::json result = spec->invoke(registry, args);
