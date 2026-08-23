@@ -17,7 +17,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(HTTPLIB REQUIRED IMPORTED_TARGET cpp-httplib)
 find_package(nlohmann_json REQUIRED)
 
-add_executable(abi-tester src/main.cpp src/domains.cpp src/registry.cpp src/calls.cpp src/engine.cpp)
+add_executable(abi-tester src/main.cpp src/domains.cpp src/registry.cpp src/calls.cpp src/engine.cpp src/scenario.cpp)
 
 # -Werror=return-type only: falling off the end of a non-void function is undefined
 # behaviour, not an error the standard requires the compiler to reject, so GCC warns

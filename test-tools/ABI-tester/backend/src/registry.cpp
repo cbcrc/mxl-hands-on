@@ -105,3 +105,18 @@ std::map<std::string, HandleEntry> Registry::drain()
     taken.swap(_entries);   // removed and handed over in one locked operation
     return taken;
 }
+
+bool Registry::grainRate(std::string const& name, HandleKind kind, mxlRational& out) const
+{
+    std::lock_guard<std::mutex> guard(_mutex);
+
+    auto const it = _entries.find(name);
+    if ((it == _entries.end()) || (it->second.kind != kind) ||
+        (it->second.grainRate.numerator == 0))
+    {
+        return false;
+    }
+
+    out = it->second.grainRate;
+    return true;
+}

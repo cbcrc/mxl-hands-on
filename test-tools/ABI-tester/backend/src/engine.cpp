@@ -316,6 +316,7 @@ bool Engine::loadScenario(nlohmann::json const& doc, std::string& error)
     _laneB.next   = 0;
     _laneB.cursor = 0;
     _running      = false;
+    _scenario     = doc;
     return true;
 }
 
@@ -623,4 +624,10 @@ nlohmann::ordered_json Engine::reset()
     nlohmann::ordered_json body = state();
     body["released"] = released;
     return body;
+}
+
+nlohmann::json Engine::scenario() const
+{
+    std::lock_guard<std::mutex> guard(_mutex);
+    return _scenario;       // a copy made under the lock, same rule as Registry::snapshot
 }

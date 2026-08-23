@@ -20,6 +20,7 @@
 #include "registry.hpp"
 #include "calls.hpp"
 #include "engine.hpp"
+#include "scenario.hpp"
 
 // Main loop
 int main(int argc, char** argv)
@@ -94,6 +95,16 @@ int main(int argc, char** argv)
                 list.push_back(item);
             }
 
+            res.set_content(list.dump(2) + "\n", "application/json");
+        });
+
+    server.Get("/scenarios",
+        [](httplib::Request const&, httplib::Response& res)
+        {
+            // nlohmann converts any container of convertible values into an array
+            // by itself -- no loop, no push_back. It finds the conversion through
+            // a to_json overload for std::vector, chosen by argument type.
+            nlohmann::json const list = listScenarios();
             res.set_content(list.dump(2) + "\n", "application/json");
         });
     
@@ -225,6 +236,71 @@ int main(int argc, char** argv)
             }
 
             res.set_content(engine.state().dump(2) + "\n", "application/json");
+        });
+
+    server.Get("/scenario",
+        [&](httplib::Request const&, httplib::Response& res)
+        {
+            res.set_content(engine.scenario().dump(2) + "\n", "application/json");
+        });
+    
+    // A regex route: the capture group arrives as req.matches[1], a std::smatch.
+    // Deliberately permissive -- ([\w-]+) here would trun a bad name into httplib's
+    // own empty-bodied 404 instead of our named 400.
+    server.Get(R"(/scenarios/(.+))",
+        [](httplib::Request const& req, httplib::Response& res)
+        {
+            auto respond = [&res](int status, nlohmann::json body)
+            {
+                res.status = status;
+                res.set_content(body.dump(2) + "\n", "application/json");
+            };
+
+            std::string const name = req.matches[1].str();
+            std::string       error;
+
+            if (!validScenarioName(name, error))
+            {
+                respond(400, nlohmann::json{{"ok", false}, {"error", error}});
+                return;
+            }
+
+            nlohmann::json doc;
+            if (!readScenario(name, doc, error))
+            {
+                respond(404, nlohmann::json{{"ok", false}, {"error", error}});
+                return;
+            }
+
+            res.set_content(doc.dump(2) + "\n", "application/json");
+        });
+
+    server.Post(R"(/scenarios/(.+))",
+        [](httplib::Request const& req, httplib::Response& res)
+        {
+            auto respond = [&res](int status, nlohmann::json body)
+            {
+                res.status = status;
+                res.set_content(body.dump(2) + "\n", "application/json");
+            };
+
+            nlohmann::json const doc = nlohmann::json::parse(req.body, nullptr, false);
+            if (doc.is_discarded())
+            {
+                respond(400, nlohmann::json{{"ok", false}, {"error", "body is not valid JSON"}});
+                return;
+            }
+
+            std::string const name = req.matches[1].str();
+            std::string       error;
+
+            if (!writeScenario(name, doc, error))
+            {
+                respond(400, nlohmann::json{{"ok", false}, {"error", error}});
+                return;
+            }
+
+            respond(200, nlohmann::json{{"ok", true}, {"saved_as", name}});
         });
     
     server.Post("/step",

@@ -88,6 +88,11 @@ class Engine
         // Stop the lanes, release every handle, clear the log and both cursors.
         // The loaded scenario is kept -- you reset in order to run it again.
         nlohmann::ordered_json reset();
+
+        // The scenario document exactly as it was loaded. Kept verbatim rather than
+        // rebuilt from the steps: parseLane ignores "name", "description" and "note",
+        // so a save-after-load rebuilt from Steps would quietly drop them.
+        nlohmann::json scenario() const;
     
     private:
         Registry& _registry;
@@ -107,6 +112,7 @@ class Engine
         mutable std::mutex _mutex;      // guards _laneA/_laneB only, never the registry
         Lane               _laneA{"A", {}, 0, 0};
         Lane               _laneB{"B", {}, 0, 0};
+        nlohmann::json     _scenario = nlohmann::json::object();
 
         std::atomic<bool>   _running{false};
         std::atomic<int>    _busy{0};           //lane threads currently inside an adapter

@@ -1,0 +1,216 @@
+{
+  "description": "Baseline discrete round trip. Lane A writes one grain per second; the index advances one grain (33.4 ms) per second of wall clock, so the age of the head grain climbs by ~967 ms per cycle.",
+  "lanes": {
+    "A": [
+      {
+        "args": {
+          "domain": "/Volumes/mxl/domain_1"
+        },
+        "call": "mxlCreateInstance",
+        "id": "a0",
+        "note": "also absorbs the ~10 ms first-call-in-a-process cost",
+        "out": {
+          "instance": "I"
+        }
+      },
+      {
+        "args": {
+          "flow_def": "{\n    \"id\": \"a1b2c3d4-0001-4000-8000-000000000001\",\n    \"label\": \"ABI Tester Video\",\n    \"description\": \"1080p29.97 v210 test flow written by the ABI tester\",\n    \"format\": \"urn:x-nmos:format:video\",\n    \"media_type\": \"video/v210\",\n    \"tags\": {\n      \"urn:x-nmos:tag:grouphint/v1.0\": [\n        \"ABI-Tester:Video\"\n      ]\n    },\n    \"parents\": [],\n    \"grain_rate\": {\n      \"numerator\": 30000,\n      \"denominator\": 1001\n    },\n    \"frame_width\": 1920,\n    \"frame_height\": 1080,\n    \"interlace_mode\": \"progressive\",\n    \"colorspace\": \"BT709\",\n    \"components\": [\n      { \"name\": \"Y\",  \"width\": 1920, \"height\": 1080, \"bit_depth\": 10 },\n      { \"name\": \"Cb\", \"width\": 960,  \"height\": 1080, \"bit_depth\": 10 },\n      { \"name\": \"Cr\", \"width\": 960,  \"height\": 1080, \"bit_depth\": 10 }\n    ]\n}",
+          "instance": "I"
+        },
+        "call": "mxlCreateFlowWriter",
+        "id": "a1",
+        "note": "flow_def is spliced in by jq from flows/video-1080p2997-v210.json",
+        "out": {
+          "writer": "W"
+        }
+      },
+      {
+        "args": {
+          "index": {
+            "edit_rate": {
+              "den": 1001,
+              "num": 30000
+            },
+            "mode": "current"
+          }
+        },
+        "call": "setCursor",
+        "id": "a2",
+        "note": "seed at now; every index after this is the scenario's, not the clock's"
+      },
+      {
+        "args": {
+          "index": {
+            "mode": "cursor"
+          },
+          "writer": "W"
+        },
+        "call": "mxlFlowWriterOpenGrain",
+        "fill": {
+          "mode": "none"
+        },
+        "id": "a3",
+        "note": "warm-up: the first OpenGrain in a process is an outlier",
+        "out": {
+          "grain": "g"
+        }
+      },
+      {
+        "args": {
+          "grain": "g",
+          "writer": "W"
+        },
+        "call": "mxlFlowWriterCancelGrain",
+        "id": "a4",
+        "note": "naming the grain drops the cached slot as well as the open grain"
+      },
+      {
+        "args": {
+          "index": {
+            "mode": "cursor"
+          },
+          "writer": "W"
+        },
+        "call": "mxlFlowWriterOpenGrain",
+        "delay_before_ms": 1000,
+        "fill": {
+          "byte": 16,
+          "mode": "const",
+          "stamp": true
+        },
+        "id": "a5",
+        "out": {
+          "grain": "g"
+        }
+      },
+      {
+        "advance_cursor": 1,
+        "args": {
+          "grain": "g",
+          "writer": "W"
+        },
+        "call": "mxlFlowWriterCommitGrain",
+        "id": "a6"
+      },
+      {
+        "args": {
+          "index": {
+            "mode": "cursor"
+          },
+          "writer": "W"
+        },
+        "call": "mxlFlowWriterOpenGrain",
+        "delay_before_ms": 1000,
+        "fill": {
+          "byte": 32,
+          "mode": "const",
+          "stamp": true
+        },
+        "id": "a7",
+        "out": {
+          "grain": "g"
+        }
+      },
+      {
+        "advance_cursor": 1,
+        "args": {
+          "grain": "g",
+          "writer": "W"
+        },
+        "call": "mxlFlowWriterCommitGrain",
+        "id": "a8"
+      },
+      {
+        "args": {
+          "index": {
+            "mode": "cursor"
+          },
+          "writer": "W"
+        },
+        "call": "mxlFlowWriterOpenGrain",
+        "delay_before_ms": 1000,
+        "fill": {
+          "byte": 48,
+          "mode": "const",
+          "stamp": true
+        },
+        "id": "a9",
+        "out": {
+          "grain": "g"
+        }
+      },
+      {
+        "advance_cursor": 1,
+        "args": {
+          "grain": "g",
+          "writer": "W"
+        },
+        "call": "mxlFlowWriterCommitGrain",
+        "id": "a10"
+      }
+    ],
+    "B": [
+      {
+        "args": {
+          "domain": "/Volumes/mxl/domain_1"
+        },
+        "call": "mxlCreateInstance",
+        "delay_before_ms": 1500,
+        "id": "b0",
+        "note": "its own instance -- a lane never depends on another lane's handles",
+        "out": {
+          "instance": "I2"
+        }
+      },
+      {
+        "args": {
+          "flow_id": "a1b2c3d4-0001-4000-8000-000000000001",
+          "instance": "I2"
+        },
+        "call": "mxlCreateFlowReader",
+        "id": "b1",
+        "out": {
+          "reader": "R"
+        }
+      },
+      {
+        "args": {
+          "index": {
+            "mode": "head"
+          },
+          "reader": "R",
+          "verify_stamp": true
+        },
+        "call": "mxlFlowReaderGetGrainNonBlocking",
+        "delay_before_ms": 1000,
+        "id": "b2"
+      },
+      {
+        "args": {
+          "index": {
+            "mode": "head"
+          },
+          "reader": "R",
+          "verify_stamp": true
+        },
+        "call": "mxlFlowReaderGetGrainNonBlocking",
+        "delay_before_ms": 1000,
+        "id": "b3"
+      },
+      {
+        "args": {
+          "index": {
+            "mode": "head"
+          },
+          "reader": "R",
+          "verify_stamp": true
+        },
+        "call": "mxlFlowReaderGetGrainNonBlocking",
+        "delay_before_ms": 1000,
+        "id": "b4"
+      }
+    ]
+  },
+  "name": "01-video-write-read"
+}

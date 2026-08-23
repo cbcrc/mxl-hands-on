@@ -41,6 +41,11 @@ struct HandleEntry
     // whose `ptr` already holds the writer they came from.
     // Last on purpose: appending to an aggregate leaves positional initializers alone.
     void* owner = nullptr;
+
+    // Writers and readers only; num == 0 means "not a flow handle, or never cached".
+    // Cached because every index<->timestamp conversion needs it, and fetching it
+    // per read would put a second ABI call inside the step's timing bracket.
+    mxlRational grainRate{};
 };
 
 // A named table of live MXL handles, safe to touch from several lane threads.
@@ -59,6 +64,10 @@ public:
     // A copy of the whole slot rather than just its pointer -- a Grain slot's payload
     // and cached mxlGrainInfo do not fit through find(). false if absent or wrong kind.
     bool findEntry(std::string const& name, HandleKind kind, HandleEntry& out) const;
+
+    // The cached grain rate of a writer or reader. Not findEntry: that copies a
+    // ~4 KB entry, and this runs on every grain read.
+    bool grainRate(std::string const& name, HandleKind kind, mxlRational& out) const;
 
     // Remove the slot named `name` and return the handle it held, or nullptr if
     // it was absent or of a different kind. Removal and lookup happen under one

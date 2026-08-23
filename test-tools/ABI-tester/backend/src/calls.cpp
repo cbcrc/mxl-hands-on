@@ -373,6 +373,19 @@ namespace
         result["flags"]        = grain.flags;
         result["invalid"]      = ((grain.flags & MXL_GRAIN_FLAG_INVALID) != 0);
 
+        // The OTS is derived from the index, never measured -- the M4 payoff. The
+        // rate comes from the reader's cached entry, so no second ABI call joins the
+        // timing bracket. Signed: mxlGetCurrentIndex rounds to nearest, so a grain
+        // written "now" can carry OTS up to half a grain period in the future.
+        mxlRational rate{};
+        if (registry.grainRate(readerName, HandleKind::FlowReader, rate))
+        {
+            uint64_t const otsNs = mxlIndexToTimestamp(&rate, grain.index);
+
+            result["ots_ns"] = nsText(otsNs);
+            result["age_ms"] = (double)((int64_t)(readNs - otsNs)) / 1000000.0;
+        }
+
         if (args.value("verify_stamp", false))
         {
             json stampInfo;
@@ -802,7 +815,15 @@ namespace
                 }
 
                 std::string const flowId = uuidText(config.common.id);
-                if (!registry.store(storeAs, HandleKind::FlowWriter, writer, flowId, instance))
+
+                HandleEntry entry{};
+                entry.kind      = HandleKind::FlowWriter;
+                entry.ptr       = writer;
+                entry.note      = flowId;
+                entry.owner     = instance;
+                entry.grainRate = config.common.grainRate;
+
+                if (!registry.store(storeAs, entry))
                 {
                     mxlReleaseFlowWriter(instance, writer);
                     return failed("handle name '" + storeAs + "' is already in use");
@@ -1285,13 +1306,28 @@ namespace
                     return result;
                 }
 
-                if (!registry.store(storeAs, HandleKind::FlowReader, reader, flowId, instance))
+                mxlFlowConfigInfo config{};
+                mxlStatus const   configStatus = mxlFlowReaderGetConfigInfo(reader, &config);
+
+                HandleEntry entry{};
+                entry.kind  = HandleKind::FlowReader;
+                entry.ptr   = reader;
+                entry.note  = flowId;
+                entry.owner = instance;
+                if (configStatus == MXL_STATUS_OK)
+                {
+                    entry.grainRate = config.common.grainRate;
+                }
+
+                if (!registry.store(storeAs, entry))
                 {
                     mxlReleaseFlowReader(instance, reader);
                     return failed("handle name '" + storeAs + "' is already in use");
                 }
-                result["stored_as"] = storeAs;
-                result["flow_id"]   = flowId;
+                result["stored_as"]  = storeAs;
+                result["flow_id"]    = flowId;
+                result["grain_rate"] = std::to_string(entry.grainRate.numerator) + "/" +
+                                       std::to_string(entry.grainRate.denominator);
                 return result;
         }});
 
