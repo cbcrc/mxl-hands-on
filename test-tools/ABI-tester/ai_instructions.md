@@ -8,10 +8,10 @@ SPDX-License-Identifier: CC-BY-4.0
 ## Project Overview
 
 Build a Dockerized bench instrument that exposes **every public C ABI call of the MXL SDK**
-as a queueable step in a web UI. The operator composes two parallel lanes of ABI calls,
-inserts explicit delays between them, runs the sequence **slower than real time**, and
-reads every return value in a console. Sequences save to and load from `.json` so a
-failure becomes a reproducible test scenario.
+as a queueable step in a web UI. The operator composes parallel lanes of ABI calls, inserts
+explicit delays between them, runs the sequence **slower than real time** (or paced to the
+media clock), and reads every return value in a console. Sequences save to and load from
+`.json` so a failure becomes a reproducible test scenario.
 
 Each grain/sample step logs its media timestamp (OTS) beside the wall clock at which the
 call actually happened, so **latency and propagation delay are measured, not guessed**.
@@ -36,25 +36,33 @@ host-port mapping (`9607:9600`) can change freely without rebuilding.
 **Why the backend must be C/C++ and must be one long-lived process:** MXL handles
 (`mxlInstance`, `mxlFlowWriter`, `mxlFlowReader`, `mxlFlowSynchronizationGroup`) are opaque
 per-process pointers. A queued sequence only makes sense if every step runs in the process
-that owns the handles. The two lanes are therefore two `std::thread`s inside one binary;
-they still meet through the same shared-memory domain files, exactly as two separate
+that owns the handles. The lanes are therefore a fixed pool of `std::thread`s inside one
+binary; they still meet through the same shared-memory domain files, exactly as separate
 applications would.
 
 ## Environment & File Specifications
 
 - **MXL public headers (source of truth):** `./dmf-mxl/lib/include/mxl/`
   — `mxl.h`, `flow.h`, `flowinfo.h`, `time.h`, `dataformat.h`, `rational.h`, `platform.h`.
-  > ⚠️ `./dmf-mxl/build/Linux-Clang-Release/lib/include/mxl/` holds only the generated
+  > ⚠️ `./dmf-mxl/build/<preset>/lib/include/mxl/` holds only the generated
   > `version.h`, which no public header includes. `./dmf-mxl/lib/include` alone is enough
   > to compile. There is **no** `mxl/dataflow.h` — all flow/grain/sample calls are in `flow.h`.
 - **MXL shared library:** `./dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.1`
   → `/opt/mxl/lib/libmxl.so.1.1` in the image, with the conventional
   `libmxl.so.1` → `libmxl.so` symlink chain.
-- **ABI reference documentation:** `./ea-ema-upp-mxl-sdk/Docs/C-MXL-ABI.md` — pinned to
-  commit `ff0ece65e1f5f106122ecf315156cc84b5467b99`, which is the checked-out `dmf-mxl`
-  HEAD. Call descriptions in the catalog are lifted from it. `Docs/Lexique.md` defines the
-  terminology.
-- **MXL domain root:** `/mxl-domain` (mounted Docker volume), overridable via `MXL_DOMAIN`.
+  > The build directory is named after the CMake preset that produced it, so a **native**
+  > build outside Docker finds the library under `Darwin-Clang-Release/lib/libmxl.1.1.dylib`
+  > on macOS. The image is always `linux/amd64`, so the Dockerfile paths above stay as they
+  > are. `backend/CMakeLists.txt` picks the preset directory from the host and takes a
+  > `-DMXL_PRESET=` override.
+- **ABI reference documentation:** `./ea-ema-upp-mxl-sdk/Docs/C-MXL-ABI.md` — regenerated
+  for `dmf-mxl` commit `84350f7c`, which is the pinned submodule HEAD. Call descriptions in
+  the catalog are lifted from it. `Docs/Lexique.md` defines the terminology. The directory is
+  a **separate clone and is git-ignored**, so it does not arrive with a `git pull`.
+- **MXL domain scan root:** `MXL_DOMAIN_ROOT`, default `/Volumes/mxl` — the tree `/domains`
+  walks. Distinct from the **instance domain**, which is a single domain directory passed as
+  `argv[1]` and handed to `mxlCreateInstance`. In the container the scan root is the mounted
+  Docker volume, `/mxl-domain`.
 - **Scenario directory:** `/app/scenarios` (bind-mounted to `test-tools/ABI-tester/scenarios`).
 - **Flow templates:** `/app/flows` (baked into the image from `flows/`).
 
@@ -67,9 +75,22 @@ Read this section before writing any code — three of these change the shape of
 
 ### 1. Lanes
 
-Two **generic** lanes, `A` and `B`. Either lane accepts any ABI call. Lanes are not
-"writer" and "reader" — that restriction would make it impossible to express
-writer-vs-writer conflict tests, reader-only tests, or reader-before-writer races.
+**Generic** lanes — any lane accepts any ABI call. Lanes are not "writer" and "reader":
+that restriction would make it impossible to express writer-vs-writer conflict tests,
+reader-only tests, or reader-before-writer races.
+
+**A fixed pool of N, created once at startup**, N from `ABI_TESTER_LANES` (default 8, range
+1..1024). This supersedes the original two-lane design, and is the one deviation that had to
+land before the frontend: M14/M15 build their UI against whatever lane model exists, and
+changing the lane count afterwards means rewriting JSX. The pool exists to load a machine
+with many concurrent lanes and watch what that does to per-call latency.
+
+Lane names are **bijective base 26** — `A`..`Z`, `AA`, `AB`, … — so `A` and `B` still mean
+lanes 0 and 1 and every scenario file written against the two-lane design loads unchanged.
+The pool is immutable after construction: lanes are never created or destroyed per scenario,
+because the engine holds a raw `Lane*` across an unlocked `execute` and a lane must not die
+under a thread standing in it. A scenario simply names whichever lanes it uses; loading one
+empties every pool lane it does not name.
 
 ### 2. The index cursor — why the tool can run slower than real time
 
@@ -111,14 +132,22 @@ base, so `mxlGetTime() - ots_ns` is a meaningful age. `mxlFlowRuntimeInfo`
 | **Time helpers return `MXL_UNDEFINED_INDEX` (`UINT64_MAX`)** on a null or zero edit rate, rather than a status code. | Render that value by name, never as `18446744073709551615`. |
 | **Two options channels.** `mxlCreateFlowWriter`'s `options` takes plain keys `maxCommitBatchSizeHint` / `maxSyncBatchSizeHint` (both ≥ 1, sync a multiple of commit). The *domain* `options.json` takes the URN `urn:x-mxl:option:history_duration/v1.0`. `mxlCreateFlowReader`'s `options` is silently ignored in the current implementation. | Say so in the catalog descriptions. |
 | **Flow definitions are validated**: `id`, `media_type`, non-empty `label`, a valid `urn:x-nmos:tag:grouphint/v1.0` tag, and `grain_rate` (video/data) or `sample_rate` (audio) are required. | A malformed template fails as `MXL_ERR_UNKNOWN`, which is unhelpful — validate in the UI before submitting. |
-| **Known upstream bug:** in the continuous writer, `commit()` clears `_currentIndex` before `signalCompletedBatch()` reads it, so blocking audio readers block to their full deadline. | Bundled audio scenarios use short timeouts or the non-blocking accessor plus a poll. Reproducing this is a legitimate use of the tool. |
+| **The continuous-writer wakeup bug is fixed in the pinned SDK.** `commit()` assigns `flow->info.runtime.headIndex` *before* clearing `_currentIndex`, and `signalCompletedBatch()` reads `headIndex` (`PosixContinuousFlowWriter.cpp:113-114, 141`). Verified: a blocking read with a 3000 ms deadline returned in **506.0 ms** against a writer committing at +0.5 s, and **505.3 ms** for a 100-sample commit landing mid-batch, so wakeup is not quantised to sync-batch boundaries either. | Blocking audio reads are usable, and lanes may pace on them — no short-hop polling. **Still untested:** repeated small commits *inside one sync batch*, where `signalCompletedBatch()`'s `currentSyncSampleBatch == _lastSyncSampleBatch` branch only signals once `headIndex % syncBatchSize` passes `_earlySyncThreshold`. That is the shape a real audio writer produces — make it a bundled scenario. |
 
 ## The ABI Call Catalog
 
-`libmxl.so.1.1` exports **exactly 42 functions** (verified with `nm -D`): 5 from `mxl.h`,
+`libmxl.so.1.1` exports **exactly 42 functions**: 5 from `mxl.h`,
 30 from `flow.h`, 7 from `time.h`. All 42 must be queueable. The backend holds this as one
-table and serves it at `GET /abi-calls`; **the frontend renders its call palette and every
-argument form from that endpoint**, so the two cannot drift.
+table and serves it at `GET /abi-calls`.
+
+> The completeness check is a **diff, not a count** — a count of 42 also passes with one name
+> typo'd and one call missing. Compare `curl -sS localhost:9600/abi-calls | jq -r '.[].name'
+> | sort` against the library's exported symbols: `nm -D --defined-only libmxl.so.1.1 | grep
+> '^mxl'` on Linux, or `nm -gU libmxl.1.1.dylib | grep ' _mxl'` on macOS, where Mach-O
+> prefixes symbols with `_` and `nm -D` does not exist. Both spellings return 42.
+
+**The frontend renders its call palette and every argument form from that endpoint**, so the
+two cannot drift.
 
 ### `instance` — `mxl.h` (5)
 
@@ -200,10 +229,15 @@ note it takes a **timestamp**, not an index, because flows tick at different edi
 These return raw `uint64_t`, not `mxlStatus`. Log the value, and render
 `MXL_UNDEFINED_INDEX` by name.
 
-### Non-ABI pseudo-call
+### Non-ABI pseudo-calls
 
-`setCursor` — lane bookkeeping only. **Must be visually marked in the UI as not an ABI
-call** so a scenario is never mistaken for a pure ABI trace.
+`setCursor` — lane bookkeeping only. `repeat` — `{"call":"repeat","args":{"to":"a5",
+"times":54000}}`, a backward-only jump resolved to a step position at load time, so a
+30-minute flow is a few steps rather than 108,000.
+
+Both are **deliberately absent from `/abi-calls`**, which keeps that endpoint diffable
+against `nm`, and both **must be visually marked in the UI as not ABI calls** so a scenario
+is never mistaken for a pure ABI trace.
 
 ### Not queueable
 
@@ -217,7 +251,7 @@ are not steps.
 ### 1. `scan_domains`
 
 C++ port of `_scan_domains()` / `_read_buffer_depth()` in
-`gst-apps/mxl-info-gui/backend/main.py:86-112`. Walk `MXL_DOMAIN` with
+`gst-apps/mxl-info-gui/backend/main.py`. Walk `MXL_DOMAIN_ROOT` with
 `std::filesystem::recursive_directory_iterator` looking for `domain_def.json`:
 
 ```json
@@ -352,7 +386,7 @@ Two `std::thread` lane executors. Each walks its own step list: sleep
 `delay_before_ms × delay_scale`, resolve arguments, invoke, append the event, advance the
 cursor. Modes:
 
-- `run` — both lanes free-running
+- `run` — every lane free-running
 - `pause` — finish the current step, stop before the next
 - `step` — execute exactly one step in a named lane
 - `reset` — release every handle in reverse creation order, clear the log and both cursors
@@ -368,19 +402,25 @@ Load/save `.json` under `/app/scenarios`. Reject path separators in the name.
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/domains/scan` | Rescan `/mxl-domain`; return the updated domain list |
+| `GET` | `/health` | Liveness plus `sdk_version`, `domain`, `tmpfs` |
+| `POST` | `/domains/scan` | Rescan `MXL_DOMAIN_ROOT`; return the updated domain list |
 | `GET` | `/domains` | Cached domain list |
 | `GET` | `/abi-calls` | The call catalog — drives the UI palette and every argument form |
 | `GET` | `/flow-templates` | Bundled `flows/*.json` names + contents |
-| `GET` / `POST` | `/scenario` | Get / replace the in-memory scenario (both lanes) |
+| `POST` | `/call` | **Ad-hoc: run one ABI call now**, outside any lane. `{"call":…,"args":{…}}`. Logs against lane `"-"` |
+| `GET` / `POST` | `/scenario` | Get / replace the in-memory scenario (all lanes) |
 | `GET` | `/scenarios` | List saved scenario files |
 | `GET` / `POST` | `/scenarios/{name}` | Load / save a scenario `.json` |
-| `POST` | `/run` | Start both lanes |
+| `POST` | `/run` | Start every lane; optional `delay_scale` |
 | `POST` | `/pause` | Stop before the next step |
-| `POST` | `/step` | `{ "lane": "A" }` — execute one step |
+| `POST` | `/step` | `{ "lane": "A" }` — execute one step in one lane |
 | `POST` | `/reset` | Release all handles, clear the log |
 | `GET` | `/log?since=<seq>` | Events after `seq` |
-| `GET` | `/state` | Lane positions, running flags, live handle table |
+| `GET` | `/state` | Lane positions, running flags, `lane_pool`, live handle table |
+
+> ⚠️ `POST /call` and `POST /step` are **different endpoints with confusable names**. `/call`
+> runs one ABI call immediately; `/step` advances one lane by one queued step. `/step` meant
+> the former before the engine landed, so older recipes read backwards.
 
 Log delivery is **polling, not SSE** — the tool runs slower than real time, so a 250 ms
 poll is ample and avoids chunked-transfer complexity in httplib.
@@ -394,14 +434,21 @@ poll is ample and avoids chunked-transfer complexity in httplib.
    inline, with a "regenerate id" toggle so each run can create a fresh flow. Validate the
    required fields (`id`, `media_type`, non-empty `label`, grouphint tag, `grain_rate` or
    `sample_rate`) before allowing a run.
-3. **Two lane builders**, side by side (`gridTemplateColumns: "1fr 1fr"`). Each has an
-   "Add call" dropdown grouped by catalog category, a step list with up / down / delete,
-   a per-step argument form generated from the catalog, and a `delay before (ms)` field.
-   Index fields are labelled per flow kind — "grain index" for discrete, "end index (range
-   is index − count … index)" for continuous — so the backwards-looking sample addressing
-   is visible in the form rather than a trap.
-4. **Transport bar** — Run / Pause / Step A / Step B / Reset, a delay-scale multiplier, and
-   the live handle table from `/state`.
+3. **Lane builders.** Each has an "Add call" dropdown grouped by catalog category, a step
+   list with up / down / delete, a per-step argument form generated from the catalog, and a
+   `delay before (ms)` field. Index fields are labelled per flow kind — "grain index" for
+   discrete, "end index (range is index − count … index)" for continuous — so the
+   backwards-looking sample addressing is visible in the form rather than a trap.
+
+   > **Open decision for M14: how many builders are on screen at once.** The original
+   > `gridTemplateColumns: "1fr 1fr"` assumed exactly two lanes; the pool is now up to 1024,
+   > and drawing a builder per pool slot is not a design. The endpoint is already shaped for
+   > this — `/state` returns **only lanes that have steps**, plus a scalar `lane_pool` — so
+   > the UI can render the occupied lanes and offer the rest through a picker. Settle this
+   > before writing JSX, not during.
+4. **Transport bar** — Run / Pause / Reset, a per-lane Step control (not one button per pool
+   slot — see the open decision above), a delay-scale multiplier, and the live handle table
+   from `/state`.
 5. **Console** — monospace scrolling window, one line per event, colour-coded by status
    (green `MXL_STATUS_OK`, amber out-of-range and timeout, red everything else), click a
    line to expand the full JSON. Lane filter. Polls `/log?since=<seq>` every **250 ms**.
@@ -481,7 +528,7 @@ COPY test-tools/ABI-tester/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENV LD_LIBRARY_PATH=/opt/mxl/lib
-ENV MXL_DOMAIN=/mxl-domain
+ENV MXL_DOMAIN_ROOT=/mxl-domain
 ENV FRONTEND_DIST=/app/frontend/dist
 ENV SCENARIO_DIR=/app/scenarios
 ENV FLOW_DIR=/app/flows
@@ -520,7 +567,7 @@ services:
         source: ./ABI-tester/scenarios
         target: /app/scenarios
     environment:
-      - MXL_DOMAIN=/mxl-domain
+      - MXL_DOMAIN_ROOT=/mxl-domain
 ```
 
 > ⚠️ The external volume requires the `gst-apps` stack to have created it. Run
@@ -536,20 +583,31 @@ Layout under `test-tools/ABI-tester/backend/`:
 | `src/main.cpp` | httplib server, route registration, static mount **last** |
 | `src/domains.{hpp,cpp}` | `scan_domains` / buffer-depth reading |
 | `src/registry.{hpp,cpp}` | named handle table |
-| `src/catalog.{hpp,cpp}` | the 42-call catalog served to the UI |
-| `src/invoke.{hpp,cpp}` | one adapter per ABI call: resolve args → call → fill the event |
-| `src/engine.{hpp,cpp}` | two lane threads, transport, event log |
+| `src/calls.{hpp,cpp}` | the 42-call catalog **and** its adapters, one table |
+| `src/engine.{hpp,cpp}` | the lane pool, transport, event log |
 | `src/scenario.{hpp,cpp}` | scenario `.json` load/save |
+
+> **One table, not two.** The original layout split `catalog.{hpp,cpp}` from
+> `invoke.{hpp,cpp}` — two parallel lists of 42 that must stay in lockstep, with nothing to
+> catch a half-defined call. Instead a single `CallSpec` carries the name, header,
+> description, `std::vector<ParamSpec>` **and** the
+> `std::function<json(Registry&, json const&)>` adapter.
 
 Constants:
 ```cpp
-const char* MXL_DOMAIN_ROOT = getenv("MXL_DOMAIN")   ?: "/mxl-domain";
-const char* FRONTEND_DIST   = getenv("FRONTEND_DIST")?: "/app/frontend/dist";
-const char* SCENARIO_DIR    = getenv("SCENARIO_DIR") ?: "/app/scenarios";
-const char* FLOW_DIR        = getenv("FLOW_DIR")     ?: "/app/flows";
+const char* MXL_DOMAIN_ROOT = getenv("MXL_DOMAIN_ROOT") ?: "/Volumes/mxl";
+const char* FRONTEND_DIST   = getenv("FRONTEND_DIST")   ?: "/app/frontend/dist";
+const char* SCENARIO_DIR    = getenv("SCENARIO_DIR")    ?: "/app/scenarios";
+const char* FLOW_DIR        = getenv("FLOW_DIR")        ?: "/app/flows";
 constexpr double  DEFAULT_BUFFER_DEPTH_MS = 200.0;
 constexpr auto    HISTORY_DURATION_KEY = "urn:x-mxl:option:history_duration/v1.0";
 ```
+Plus `ABI_TESTER_LANES` (pool size, default 8) and `ABI_TESTER_LOG_FILE` (NDJSON event log;
+unset means no file). In the container `MXL_DOMAIN_ROOT` is set to `/mxl-domain`.
+
+**The server states its environment on startup**, in the terminal it was launched from:
+`Domain`, `Domain root`, `Scenario dir`, `Lanes`. A default that is only implied by silence
+is a default nobody checks — every env var above that changes behaviour gets a line.
 
 The static mount goes after every route, mirroring the `StaticFiles` ordering rule in
 `mxl-info-gui`:
@@ -609,11 +667,14 @@ Six bundled scenarios:
 | File | What it demonstrates |
 |---|---|
 | `01-video-write-read.json` | Baseline discrete round trip, one grain per second |
-| `02-audio-write-read.json` | Baseline continuous round trip, non-blocking accessor + poll |
+| `02-audio-write-read.json` | Baseline continuous round trip. Blocking accessor — wakeup works on the pinned SDK; use it to exercise repeated small commits inside one sync batch |
 | `03-late-reader.json` | `MXL_ERR_OUT_OF_RANGE_TOO_LATE` |
 | `04-writer-conflict.json` | Two writers on one flow → `MXL_ERR_CONFLICT` |
 | `05-slice-write.json` | One `OpenGrain`, several partial `CommitGrain` |
 | `06-flow-invalid.json` | Writer restart → `MXL_ERR_FLOW_INVALID` recovery |
+
+> As of 2026-08-24 only `01` exists. The Verification section below is written against all
+> six, so M16 is not complete until the other five are written.
 
 ### Step 6: Documentation
 
@@ -637,10 +698,11 @@ configuration, CC-BY-4.0 for documentation.
 4. Cross-check with `mxl-info-gui` (`http://localhost:9699`): the flow appears in the
    domain with `Active: true`, and its `Head index` matches the last index written.
 5. Load **`02-audio-write-read.json`**. Confirm `args_resolved` shows the range as
-   `[index − count, index)`, that `count` never exceeds
-   `mxlFlowWriterGetMaxWriteLengthSamples`, and that the blocking accessor's full-deadline
-   block (the known upstream bug) surfaces as `MXL_ERR_OUT_OF_RANGE_TOO_EARLY`, not
-   `MXL_ERR_TIMEOUT`.
+   `[index − count, index)`, and that `count` never exceeds
+   `mxlFlowWriterGetMaxWriteLengthSamples`. The blocking read must **wake on the commit**,
+   not run to its deadline — compare `waited_ms` against the writer's offset. When a read
+   does time out it surfaces as `MXL_ERR_OUT_OF_RANGE_TOO_EARLY`, never `MXL_ERR_TIMEOUT`,
+   so `waited_ms` is the only way to tell an expired deadline from an unreachable index.
 6. Load **`03-late-reader.json`** — the reader requests an index older than
    `head − grainCount`. Expect `MXL_ERR_OUT_OF_RANGE_TOO_LATE`, rendered by name in amber.
 7. Load **`04-writer-conflict.json`** — both lanes open a writer on the same flow. Expect
