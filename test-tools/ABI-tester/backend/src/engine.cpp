@@ -8,6 +8,7 @@
 #include <mxl/dataformat.h>
 #include <cstdlib>
 #include <chrono>
+#include <algorithm>
 
 #include "engine.hpp"
 #include "calls.hpp"
@@ -17,6 +18,39 @@ namespace
     // the tail kept in memory for the UI. The file (12d-2) holds everything. Eight lanes
     // at ~30 steps/s is ~500 event/s, so this is roughly the last ten seconds.
     constexpr std::size_t kMaxTail = 5000;
+
+    // The pressure valve. 2 s cannot bound a buffer that fills in 2 s, so a backlog this
+    // deep wakes the flusher early. ~17 MB resident at the measured 850 B/event, ant it
+    // caps the file overshoot at 20000 x 127 B = 2.5 MB.
+    constexpr uint64_t kFlushBacklog = 20000;
+
+    // Measured in 12d-3: 126.9 B/event serialized, ~850 B/event resident as ordered_json,
+    // and the flusher's own 2 s interval -- which is what makes the resident number a
+    // multiple of the disk one rather than a constant.
+    constexpr double kBytesPerEventFile = 127.0;
+    constexpr double kBytesPerEventRam  = 850.0;
+    constexpr double kFlushSeconds      = 2.0;
+
+    // strtoull, not strtol: a cap worth setting in measured GB.
+    uint64_t logMaxBytes()
+    {
+        char const* fromEnv = std::getenv("ABI_TESTER_LOG_MAX_BYTES");
+        if (fromEnv == nullptr)
+        {
+            return 0;
+        }
+
+        char*          end = nullptr;
+        uint64_t const n   = std::strtoull(fromEnv, &end, 10);
+
+        if ((end == fromEnv) || (*end != '\0'))
+        {
+            std::fprintf(stderr,
+                         "ABI_TESTER_LOG_MAX_BYTES=%s ignored (want bytes); no cap\n", fromEnv);
+            return 0;
+        }
+        return n;
+    }
 }
 EventLog::EventLog()
 {
@@ -27,7 +61,8 @@ EventLog::EventLog()
         return;
     }
 
-    _path = path;
+    _path     = path;
+    _maxBytes = logMaxBytes();
     if (!openRun())
     {
         return;     // warned already; the tail in memory still works
@@ -60,15 +95,29 @@ bool EventLog::openRun()
         return false;
     }
 
-    std::printf("Log file: %s\n", name.c_str());
+    // app mode appends, so the cap must count what is already on disk
+    std::error_code ec;
+    _bytes = (uint64_t)std::filesystem::file_size(name, ec);
+    if (ec)
+    {
+        _bytes = 0;
+    }
+
+    if (_maxBytes > 0)
+    {
+        std::printf("Log file: %s (cap %.1f MB)\n", name.c_str(), _maxBytes / 1e6);
+    }
+    else
+    {
+        std::printf("Log file: %s (no cap)\n", name.c_str());
+    }
+
     return true;
 }
 
-uint64_t EventLog::append(std::string const& lane, std::string const& stepId,
+uint64_t EventLog::appendLocked(std::string const& lane, std::string const& stepId,
                           uint64_t wallNs, nlohmann::json const& result)
 {
-    std::lock_guard<std::mutex> guard(_mutex);
-
     uint64_t const seq = ++_lastSeq;    // was _event.size() + 1, which trimming breaks
 
     nlohmann::ordered_json event;
@@ -80,7 +129,21 @@ uint64_t EventLog::append(std::string const& lane, std::string const& stepId,
 
     _events.push_back(std::move(event));
     trim();
+
+    // Notify on the crossing only. A notify per append pas the threshold would be the
+    // syscall-per-event 12d-3 removed.
+    if (_fileOpen && ((_lastSeq - _flushedSeq) == kFlushBacklog))
+    {
+        _flushWake.notify_all();
+    }
     return seq;
+}
+
+uint64_t EventLog::append(std::string const& lane, std::string const& stepId,
+                          uint64_t wallNs, nlohmann::json const& result)
+{
+    std::lock_guard<std::mutex> guard(_mutex);
+    return appendLocked(lane, stepId, wallNs, result);
 }
 
 bool EventLog::since(uint64_t sinceSeq, nlohmann::ordered_json& out, std::string& error) const
@@ -129,25 +192,104 @@ void EventLog::drainLocked(std::unique_lock<std::mutex>& lock)
         return;
     }
 
-    // Snapshot the high-water mark *before* unlocking: lanes keep appending while we
-    // write, and _flushedSeq must name what went out, not what exists now.
-    uint64_t const    upTo = _lastSeq;
     std::size_t const from = (std::size_t)(_flushedSeq + 1 - _baseSeq);
+
+    // Drain at most one backlog's worth per pass. The copy is O(batch) under the lock,
+    // so an unbounded batch is an unbounded stall for every lane -- 180k events in one
+    // copy measured ~11 s against 0.48 s for the same events in slices. flushLoop's
+    // predicate is still true afterwards, so it comes straight back for the next slice.
+    std::size_t const take = std::min(_events.size() - from, (std::size_t)kFlushBacklog);
+    uint64_t const    upTo = _flushedSeq + take;
 
     // One bulk copy under the lock, then N writes without it -- the same
     // claim-under-lock / work-without-it shape as stepOnce and Registry::take.
-    std::vector<nlohmann::ordered_json> batch(_events.begin() + from, _events.end());
+    std::vector<nlohmann::ordered_json> batch(_events.begin() + from,
+                                              _events.begin() + from + take);
 
     lock.unlock();
 
+    uint64_t written = 0;
+
     for (auto const& event : batch)
     {
-        _file << event.dump() << "\n";      // compact: no newline inside, NDJSON's one rule
+        std::string const line = event.dump();      // compact: no newline inside, NDJSON's one rule
+        _file << line << "\n";
+        written += line.size() + 1;
     }
     _file.flush();      // once per batch, not once per event -- the point of 12d-3
 
     lock.lock();
     _flushedSeq = upTo;
+    trim();             // the floor just moved, reclaim now rather than on some later append
+    _bytes     += written;
+
+    // Two triggers, one action: a write error is a cap you did not choose.
+    if (!_file.good())
+    {
+        stopFile("write failed");
+    }
+    else if ((_maxBytes > 0) && (_bytes >= _maxBytes))
+    {
+        stopFile("reached ABI_TESTER_LOG_MAX_BYTES");
+    }
+}
+
+// Called with _mutex held, from the flusher, which is the only thread allowed near _file.
+void EventLog::stopFile(std::string const& why)
+{
+    std::fprintf(stderr, "abi-tester: log file closed at seq %llu after %llu bytes: %s\n",
+                 (unsigned long long)_lastSeq, (unsigned long long)_bytes, why.c_str());
+    
+    // The marker goes in the file as well as the console. Whoever reads the NDJSON
+    // offline must be able to tell a file that stopped on purpose from one whose
+    // process was killed -- otherwise this is a silent truncation with extra steps.
+    uint64_t const seq = appendLocked("-", "-", mxlGetTime(),
+                                      nlohmann::json{{"ok", false},
+                                                     {"call", "logFileClosed"},
+                                                     {"error", why},
+                                                     {"bytes", _bytes}});
+    
+    if (_file.good())       // false when we got here *because* the writer failed
+    {
+        _file << _events.back().dump() << "\n";
+        _file.flush();
+    }
+
+    _file.close();
+    _fileOpen   = false;
+    _flushedSeq = seq;      // nothing is waiting on a file that no longer exists
+    trim();     // the floor just became _lastSeq; don't wait for an append that may never come
+}
+
+void EventLog::announce(int lanes) const
+{
+    if (!_fileOpen)
+    {
+        return;     // no file, so the deque is bounded at kMaxTail and there is nothing to project
+    }
+
+    // 2 events per grain at 29.97 -- (d)'s per-lane real rate, not the pathological one.
+    double const perSec = lanes * 2.0 * 30000.0 / 1001.0;
+
+    std::printf("Log projection at %d lanes, 2 events/grain at 29.97: "
+                "%.2f MB/s to disk, %.0f MB resident between flushes\n",
+                lanes,
+                perSec * kBytesPerEventFile / 1e6,
+                perSec * kFlushSeconds * kBytesPerEventRam / 1e6);
+}
+
+nlohmann::ordered_json EventLog::stats() const
+{
+    std::lock_guard<std::mutex> guard(_mutex);
+
+    nlohmann::ordered_json out;
+    out["file"]      = _fileOpen;
+    out["bytes"]     = _bytes;
+    out["max_bytes"] = _maxBytes;
+    out["seq"]       = _lastSeq;
+    out["flushed"]   = _flushedSeq;
+    out["tail"]      = _events.size();
+    return out;
 }
 
 void EventLog::flushLoop()
@@ -160,7 +302,8 @@ void EventLog::flushLoop()
         // lets shutdown and rotation cut the 2 s short. The return value says which
         // of the two happened, and neither branch needs to know.
         _flushWake.wait_for(lock, std::chrono::seconds(2),
-                            [this] {return _shutdown || _rotate; });
+                            [this] {return _shutdown || _rotate ||
+                                            (_fileOpen && ((_lastSeq - _flushedSeq) >= kFlushBacklog)); });
         
         bool const stopping = _shutdown;
 
@@ -281,6 +424,7 @@ Engine::Engine(Registry& registry, EventLog& log)
 
     std::printf("Lanes: %d (%s..%s)\n", count,
                 laneName(0).c_str(), laneName(count - 1).c_str());
+    _log.announce(count);
 }
 
 Engine::~Engine()
@@ -723,6 +867,7 @@ nlohmann::ordered_json Engine::state() const
     body["running"]     = _running.load();
     body["delay_scale"] = _delayScale.load();
     body["lane_pool"]   = _lanes.size();
+    body["log"]         = _log.stats();
     body["lanes"]       = lanes;
     body["handles"]     = handles;
     return body;

@@ -25,6 +25,9 @@
 class EventLog
 {
 public:
+    // What this lane will cost per second, printed at startup next to "Lanes:".
+    void announce(int lanes) const;
+
     // Opens ABI_TESTER_LOG_FILE if it is set. Uset means no file, so the existing
     // workflow is unchanged.
     EventLog();
@@ -40,11 +43,25 @@ public:
     // like "nothing new since you last asked".
     bool since(uint64_t sinceSeq, nlohmann::ordered_json& out, std::string& error) const;
 
+    // The log's own numbers for /state: how far behind the file is (seq vs flushed) and
+    // how big the in-memory tail really is. `tail` is what would have shown 12d-3's
+    // 835 MB without reaching for ps.
+    nlohmann::ordered_json stats() const;
+
     // Also rotates the file: /reset restarts seq at 1, and two runs sharing one file
     // would make the sequence ambiguous to every offline tool.
     void clear();
 
 private:
+    // append() minus the lock, so the flusher can log its own closing marker without
+    // taking _mutex a second time.
+    uint64_t appendLocked(std::string const& lane, std::string const& stepId,
+                          uint64_t wallNs, nlohmann::json const& result);
+    void stopFile(std::string const& why);      // _mutex held; closes the file, loudly
+
+    uint64_t _bytes    = 0;     // size of the current file, seeded from it at open
+    uint64_t _maxBytes = 0;     // ABI_TESTER_LOG_MAX_BYTES; 0 means no cap
+
     void trim();        // called with _mutex already held
     bool openRun();     // opens the file for run _run; false + stderr on failure
     void flushLoop();   // the flusher thread's body
