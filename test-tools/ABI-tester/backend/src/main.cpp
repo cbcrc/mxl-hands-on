@@ -215,7 +215,19 @@ int main(int argc, char** argv)
             {
                 sinceSeq = std::strtoull(req.get_param_value("since").c_str(), nullptr, 10);
             }
-            res.set_content(log.since(sinceSeq).dump(2) + "\n", "application/json");
+            
+            nlohmann::ordered_json events;
+            std::string            error;
+            if (!log.since(sinceSeq, events, error))
+            {
+                res.status = 410;   // Gone; these events existed and no longer do,
+                                    // which is not the same as 400 "you asked wrongly"
+                res.set_content(nlohmann::json{{"ok", false}, {"error", error}}.dump(2) + "\n",
+                                "application/json");
+                return;
+            }
+
+            res.set_content(events.dump(2) + "\n", "application/json");
         });
 
     server.Post("/scenario",

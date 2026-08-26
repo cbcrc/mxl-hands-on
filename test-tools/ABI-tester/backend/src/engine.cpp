@@ -11,12 +11,38 @@
 #include "engine.hpp"
 #include "calls.hpp"
 
+namespace
+{
+    // the tail kept in memory for the UI. The file (12d-2) holds everything. Eight lanes
+    // at ~30 steps/s is ~500 event/s, so this is roughly the last ten seconds.
+    constexpr std::size_t kMaxTail = 5000;
+}
+EventLog::EventLog()
+{
+    char const* const path = std::getenv("ABI_TESTER_LOG_FILE");
+    if (path == nullptr)
+    {
+        std::printf("log file: (none, set ABI_TESTER_LOG_FILE)\n");
+        return;
+    }
+
+    // std::ios::app, not the default truncate: two runs appending is recoverable,
+    // a run that silently erased the previous one is not.
+    _file.open(path, std::ios::out | std::ios::app);
+    if (!_file.is_open())
+    {
+        std::fprintf(stderr, "cannot open ABI_TESTER_LOG_FILE=%s; logging to memory only\n", path);
+        return;
+    }
+
+    std::printf("Log file: %s\n", path);
+}
 uint64_t EventLog::append(std::string const& lane, std::string const& stepId,
                           uint64_t wallNs, nlohmann::json const& result)
 {
     std::lock_guard<std::mutex> guard(_mutex);
 
-    uint64_t const seq = _events.size() + 1;
+    uint64_t const seq = ++_lastSeq;    // was _event.size() + 1, which trimming breaks
 
     nlohmann::ordered_json event;
     event["seq"]        = seq;
@@ -25,28 +51,57 @@ uint64_t EventLog::append(std::string const& lane, std::string const& stepId,
     event["t_wall_ns"] = std::to_string(wallNs);    // ns as a string: the M9 number contract
     event.update(result);                           // the adapter's own keys, flat
 
+    if (_file.is_open())
+    {
+        // dump() with no arguments is compact -- no newlines inside, which is the one
+        // properly NDJSON actually requires.
+        _file << event.dump() << "\n";
+        _file.flush();      // 12d-3 remove this: one write syscall per step, on the lane thread
+    }
+
     _events.push_back(std::move(event));
+    trim();
     return seq;
 }
 
-nlohmann::ordered_json EventLog::since(uint64_t sinceSeq) const
+bool EventLog::since(uint64_t sinceSeq, nlohmann::ordered_json& out, std::string& error) const
 {
     std::lock_guard<std::mutex> guard(_mutex);
 
-    nlohmann::ordered_json list = nlohmann::ordered_json::array();
-
-    for (std::size_t i = (std::size_t)sinceSeq; i < _events.size(); ++i)
+    // sinceSeq is exclusive, so the oldest answerable question is _baseSeq - 1.
+    if ((sinceSeq + 1) < _baseSeq)
     {
-        list.push_back(_events[i]);
+        error = "events up to seq " + std::to_string(_baseSeq - 1) +
+                " are no longer in memory; ask for since=" + std::to_string(_baseSeq - 1) +
+                " or later";
+        return false;
     }
 
-    return list;
+    out = nlohmann::ordered_json::array();
+
+    for (std::size_t i = (std::size_t)(sinceSeq + 1 - _baseSeq); i < _events.size(); ++i)
+    {
+        out.push_back(_events[i]);
+    }
+
+    return true;
+}
+
+void EventLog::trim()
+{
+    while (_events.size() > kMaxTail)
+    {
+        _events.pop_front();
+        ++_baseSeq;
+    }
 }
 
 void EventLog::clear()
 {
     std::lock_guard<std::mutex> guard(_mutex);
     _events.clear();
+    _baseSeq = 1;
+    _lastSeq = 0;
 }
 
 namespace

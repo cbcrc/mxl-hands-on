@@ -11,6 +11,8 @@
 #include <thread>
 #include <map>
 #include <condition_variable>
+#include <deque>
+#include <fstream>
 
 #include <nlohmann/json.hpp>
 #include "registry.hpp"
@@ -23,19 +25,36 @@
 class EventLog
 {
 public:
+    // Opens ABI_TESTER_LOG_FILE if it is set. Uset means no file, so the existing
+    // workflow is unchanged.
+    EventLog();
+
     // Append one executed step. `result` is the adapter's own object, merged in flat.
     // Returns the seq this event was given.
     uint64_t append(std::string const& lane, std::string const& stepId,
                     uint64_t wallNs, nlohmann::json const& result);
     
-    // Every event with seq > sinceSeq, oldest first, as a JSON array.
-    nlohmann::ordered_json since(uint64_t sinceSeq) const;
+    // Every event with seq > sinceSeq, oldest first, as a JSON array. false + `error`
+    // when those events have already been trimmed: returning [] would read exactly
+    // like "nothing new since you last asked".
+    bool since(uint64_t sinceSeq, nlohmann::ordered_json& out, std::string& error) const;
 
     void clear();
 
 private:
-    mutable std::mutex                  _mutex;
-    std::vector<nlohmann::ordered_json> _events;    // _events[i] carries seq i+1
+    void trim();    // called with _mutex already held
+
+    mutable std::mutex _mutex;
+
+    // A deque, not a vector: events arrive at the back and leave from the front, and
+    // vector has no O(1) pop_front -- it would copy the whole tail down by one on every
+    // append. Random access still works, which since() needs.
+    std::deque<nlohmann::ordered_json> _events;
+
+    uint64_t _baseSeq = 1;      // the seq of _events.front(), replacing "_events[i] is seq i+1"
+    uint64_t _lastSeq = 0;      // the seq most recently handed out
+    
+    std::ofstream _file;     // NDJSON, one event per line; closed means "not logging to disk"
 };
 
 // One queued ABI call, exactly as the scenario JSON spells it. `args` is passed to
