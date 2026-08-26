@@ -250,6 +250,31 @@ namespace
         return true;
     }
 
+    // Same number as calls.cpp's kMaxSleepNs, a different reason: there it is an HTTP
+    // connection that must not look hung, here it is a lane thread holding _busy across
+    // execute(), which /reset waits out. A pace ten minutes ahead would freeze the transport.
+    constexpr uint64_t kMaxPaceNs = 5'000'000'000ULL;
+
+    // The rate a paced step aims at: the cached grain rate of whichever handle the step
+    // names. Cached since chunk 11e precisely so pacing costs no ABI call inside the
+    // instrument's own timing path. Writer first -- a step naming both is writing.
+    bool paceRate(Registry const& registry, nlohmann::json const& args, mxlRational& out)
+    {
+        auto const writer = args.find("writer");
+        if ((writer != args.end()) && writer->is_string())
+        {
+            return registry.grainRate(writer->get<std::string>(), HandleKind::FlowWriter, out);
+        }
+
+        auto const reader = args.find("reader");
+        if ((reader !=args.end()) && reader->is_string())
+        {
+            return registry.grainRate(reader->get<std::string>(),HandleKind::FlowReader, out);
+        }
+
+        return false;
+    }
+
     // One lane's step array -> a vector<Step>. Fails on the first step that names a
     // call the catalog does not have -- validating at load time is the whole point.
     bool parseLane(nlohmann::json const& array, char const* laneName,
@@ -275,7 +300,8 @@ namespace
             // setCursor is lane bookkeeping, not an ABI call. It is deliberately absent
             // from the catalog so /abi-calls keeps listing exactly 42 and stays diffable
             // against nm on the shared object.
-            if ((step.call != "setCursor") && (findCall(step.call) == nullptr))
+            if ((step.call != "setCursor") && (step.call != "repeat") &&
+                (findCall(step.call) == nullptr))
             {
                 error = std::string("lane ") + laneName + ": unknown call: " + step.call;
                 return false;
@@ -284,6 +310,41 @@ namespace
             step.id             = item.value("id", std::string{});
             step.delayBeforeMs  = item.value("delay_before_ms", 0.0);
             step.advanceCursor  = item.value("advance_cursor", (int64_t)0);
+
+            // The id if the step has one, else the call name: an error that does not say
+            // *which* step is a grep through the scenario file.
+            std::string const where = std::string("lane ") + laneName + " step " +
+                                      (step.id.empty() ? step.call : step.id);
+            
+            if (item.contains("pace"))
+            {
+                if (!item["pace"].is_object())
+                {
+                    error = where + ": \"pace\" must be an object";
+                    return false;
+                }
+
+                if (item.contains("delay_before_ms"))
+                {
+                    error = where + ": \"pace\" and \"delay_before_ms\" are mutually exclusive";
+                    return false;
+                }
+
+                nlohmann::json const& pace = item["pace"];
+
+                // Checked before value(): unlike Python's dict.get, nlohmann's value()
+                // *throws* when the key is present with the wrong type, and nothing here
+                // catches it -- a typo in a scenario file would kill the request thread.
+                if (pace.contains("offset_ms") && !pace["offset_ms"].is_number())
+                {
+                    error = where + ": \"pace.offset_ms\" must be a number";
+                    return false;
+                }
+
+                step.paced        = true;
+                step.paceOffsetMs = pace.value("offset_ms", 0.0);
+            }
+
             if (item.contains("fill") && item["fill"].is_object())
             {
                 step.fill = item["fill"];
@@ -331,9 +392,55 @@ namespace
                 step.args = item["args"];
             }
 
+            if (step.call == "repeat")
+            {
+                std::string const target = step.args.value("to", std::string{});
+                if (target.empty())
+                {
+                    error = where + ": repeat needs \"to\" naming an earlier step's id";
+                    return false;
+                }
+
+                // Backwards over the steps parsed so far. std::size_t is unsigned, so
+                // `i >=0` would be forever true -- count down to 1 and index i - 1.
+                bool found = false;
+                for (std::size_t i = out.size(); i > 0; --i)
+                {
+                    if (out[i - 1].id == target)
+                    {
+                        step.repeatTo = i - 1;
+                        found         = true;
+                        break;
+                    }
+                }
+
+                if (!found)
+                {
+                    error = where + ": repeat target \"" + target +
+                            "\" is not an earlier step in this lane";
+                    return false;
+                }
+
+                if (!step.args.contains("times") || !step.args["times"].is_number_unsigned())
+                {
+                    error = where + ": repeat needs an unsigned \"times\"";
+                    return false;
+                }
+
+                step.repeatTimes = step.args["times"].get<uint64_t>();
+            }
             out.push_back(std::move(step));
         }
         return true;
+    }
+
+    void seedRepeats(Lane& lane)
+    {
+        lane.repeatsLeft.assign(lane.steps.size(), 0);
+        for (std::size_t i = 0; i < lane.steps.size(); ++i)
+        {
+            lane.repeatsLeft[i] = lane.steps[i].repeatTimes;
+        }
     }
 }
 
@@ -388,6 +495,7 @@ bool Engine::loadScenario(nlohmann::json const& doc, std::string& error)
                                                       : std::move(found->second);
         entry.second.next   = 0;
         entry.second.cursor = 0;
+        seedRepeats(entry.second);
     }
 
     _running  = false;
@@ -486,6 +594,26 @@ bool Engine::stepOnce(std::string const& laneName, std::string& error)
 
         step   = lane->steps[lane->next];
         cursor = lane->cursor;
+
+        // Lane bookkeeping, done here rather than in execute(): a repeat runs no adapter,
+        // so dropping the lock to "execute" it would only open a window in which next and
+        // repeatsLeft disagree.
+        if (step.call == "repeat")
+        {
+            uint64_t& left = lane->repeatsLeft[lane->next];
+            if (left > 0)
+            {
+                --left;
+                lane->next = step.repeatTo;     // backward by construction: parseLane refused forward
+            }
+            else
+            {
+                ++lane->next;                   // exhausted: fall through to whatever follows
+            }
+
+            return true;    // _busy untouched -- nothing is in flight for /reset to wait out
+        }
+        
         ++lane->next;   // claimed before it runs: a step is never executed twice
         ++_busy;        // inside the lock: the gap between claiming and marking busy
     }                   // is exactly the window reset would slip through
@@ -521,6 +649,53 @@ uint64_t Engine::execute(std::string const& laneName, Step const& step, uint64_t
         _log.append(laneName, step.id, mxlGetTime(),
                     nlohmann::json{{"ok", false}, {"call", step.call}, {"error", error}});
         return cursor;
+    }
+
+    // Absolute pacing: aim at the grain's own OTS, so a late step catches up instead of
+    // pushing everything after it. delay_before_ms restarts its clock each step and
+    // compounds -- chunk 5 measured 115-367 us of overshoot per step.
+    nlohmann::json pace;    // plain json not ordered_json: result is plain json below
+    if (step.paced)
+    {
+        mxlRational rate{};
+        if (!paceRate(_registry, args, rate))
+        {
+            _log.append(laneName, step.id, mxlGetTime(),
+                        nlohmann::json{{"ok", false}, {"call", step.call},
+                                        {"error", "pace needs a \"writer\" or \"reader\" handle "
+                                                   "with a known grain rate"}});
+            return cursor;
+        }
+
+        if (!args.contains("index") || !args["index"].is_number_unsigned())
+        {
+            _log.append(laneName, step.id, mxlGetTime(),
+                        nlohmann::json{{"ok", false}, {"call", step.call},
+                                       {"error", "pace needs a resolved unsigned \"index\""}});
+            return cursor;
+        }
+
+        uint64_t const ots     = mxlIndexToTimestamp(&rate, args["index"].get<uint64_t>());
+        int64_t const offsetNs = (int64_t)(step.paceOffsetMs * 1000000.0);
+
+        // Through int64_t deliberately: a negative offset on unsigned arithmetic wraps to
+        // 1.8e19 and arrives at the ABI as a perfectly plausible timestamp -- the M9 lesson.
+        uint64_t const deadline = (uint64_t)((int64_t)ots + offsetNs);
+
+        // The cap protects the transport, not the sleep: this thread holds _busy across
+        // execute(), and /reset spins until _busy is zero.
+        uint64_t const now    = mxlGetTime();
+        bool const     capped = (deadline > now) && ((deadline - now) > kMaxPaceNs);
+
+        mxlSleepUntil(capped ? (now + kMaxPaceNs) : deadline);
+
+        uint64_t const woke = mxlGetTime();
+        pace["deadline_ns"] = std::to_string(deadline);     // ns as a string: the M9 contract
+        pace["late_ms"]     = ((int64_t)woke -(int64_t)deadline) / 1000000.0;
+        if (capped)
+        {
+            pace["capped"] = true;      // late_ms comes back negative: woke early, not lying
+        }
     }
 
     // Merged AFTER resolution, never before: fill is an object carrying a "mode" key,
@@ -586,6 +761,11 @@ uint64_t Engine::execute(std::string const& laneName, Step const& step, uint64_t
 
     result["call"]        = step.call;
     result["duration_us"] = (endNs - startNs) / 1000.0;
+
+    if (!pace.is_null())
+    {
+        result["pace"] = pace;
+    }
 
     if (!resolved.empty())
     {
@@ -661,6 +841,7 @@ nlohmann::ordered_json Engine::reset()
                 {
                     entry.second.next   = 0;
                     entry.second.cursor = 0;
+                    seedRepeats(entry.second);
                 }
                 break;
             }

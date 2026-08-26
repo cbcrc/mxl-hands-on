@@ -49,6 +49,16 @@ struct Step
     int64_t        advanceCursor = 0; // added to the lane cursor after the step runs
     nlohmann::json fill;    // step-level; merged into args after index resolution
     std::string    out;     // step-level registry name; merge into args as "store_as"
+
+    // Absolute pacing: sleep until this index's own OTS instead of a relative delay.
+    // Mutually exclusive with delayBeforeMs, refused in parseLane.
+    bool           paced = false;
+    double         paceOffsetMs = 0.0; // negative is legal: a reader lane trailing the writer
+
+    // "repeat" pseudo-step only. The target is a step *position*, resolved at load time
+    // so the jump costs no id lookup. The live counter is in Lane, not here
+    std::size_t    repeatTo    = 0;
+    uint64_t       repeatTimes = 0; 
 };
 
 // One lane: a name, its step list, and where it is in that list.
@@ -58,6 +68,10 @@ struct Lane
     std::vector<Step> steps;
     std::size_t       next = 0;     // index of the step that runs next
     uint64_t          cursor = 0; // the index the scenario advances by hand, not the wall clock
+    
+    // One slot per step; only a repeat step uses its own. Lane state, not step state:
+    // /reset re-seeds it from the Steps so the scenario runs identically the second time.
+    std::vector<uint64_t> repeatsLeft;
 };
 
 // Owns the two lanes and the transport. Borrows the registry and the log; both
