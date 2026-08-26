@@ -7,6 +7,7 @@
 #include <mxl/mxl.h>
 #include <mxl/dataformat.h>
 #include <cstdlib>
+#include <chrono>
 
 #include "engine.hpp"
 #include "calls.hpp"
@@ -26,17 +27,43 @@ EventLog::EventLog()
         return;
     }
 
-    // std::ios::app, not the default truncate: two runs appending is recoverable,
-    // a run that silently erased the previous one is not.
-    _file.open(path, std::ios::out | std::ios::app);
-    if (!_file.is_open())
+    _path = path;
+    if (!openRun())
     {
-        std::fprintf(stderr, "cannot open ABI_TESTER_LOG_FILE=%s; logging to memory only\n", path);
-        return;
+        return;     // warned already; the tail in memory still works
     }
 
-    std::printf("Log file: %s\n", path);
+    // Only started when there is a file; with none, nothing about the old workflow moves.
+    _flusher = std::thread([this] { flushLoop(); });
 }
+
+// Run 1 is the path as given; run 2 is "log.2.ndjson", not "log.ndjson.2". The counter
+// goes *before* the extension so read_json_auto('*.ndjson') still finds every run --
+// which is the reason (d) chose NDJSON in the first place.
+bool EventLog::openRun()
+{
+    std::filesystem::path name(_path);
+    if (_run > 1)
+    {
+        name.replace_filename(name.stem().string() + "." + std::to_string(_run) +
+                              name.extension().string());
+    }
+
+    // app, not the default truncate: two runs appending is recoverable, a run that
+    // silently erased the previous one is not.
+    _file.open(name, std::ios::out | std::ios::app);
+    _fileOpen = _file.is_open();
+
+    if (!_fileOpen)
+    {
+        std::fprintf(stderr, "cannot open %s; logging to memory only\n", name.c_str());
+        return false;
+    }
+
+    std::printf("Log file: %s\n", name.c_str());
+    return true;
+}
+
 uint64_t EventLog::append(std::string const& lane, std::string const& stepId,
                           uint64_t wallNs, nlohmann::json const& result)
 {
@@ -50,14 +77,6 @@ uint64_t EventLog::append(std::string const& lane, std::string const& stepId,
     event["step_id"]    = stepId;
     event["t_wall_ns"] = std::to_string(wallNs);    // ns as a string: the M9 number contract
     event.update(result);                           // the adapter's own keys, flat
-
-    if (_file.is_open())
-    {
-        // dump() with no arguments is compact -- no newlines inside, which is the one
-        // properly NDJSON actually requires.
-        _file << event.dump() << "\n";
-        _file.flush();      // 12d-3 remove this: one write syscall per step, on the lane thread
-    }
 
     _events.push_back(std::move(event));
     trim();
@@ -89,19 +108,117 @@ bool EventLog::since(uint64_t sinceSeq, nlohmann::ordered_json& out, std::string
 
 void EventLog::trim()
 {
-    while (_events.size() > kMaxTail)
+    // The tail bound yields to the file. An event the flusher has not written yet must
+    // stay reachable, or the next drain skips it and the NDJSON has a hole no reader
+    // can see. If the flusher falls behind, the deque grows pas kMaxTail -- memory is
+    // what we are willing to spend to not loose a measurement.
+    // With no file, nothing is waiting, so the bound is unconditional.
+    uint64_t const floor = _fileOpen ? _flushedSeq : _lastSeq;
+
+    while (_events.size() > kMaxTail && _baseSeq <= floor)
     {
         _events.pop_front();
         ++_baseSeq;
     }
 }
 
+void EventLog::drainLocked(std::unique_lock<std::mutex>& lock)
+{
+    if (!_fileOpen || _flushedSeq >= _lastSeq)
+    {
+        return;
+    }
+
+    // Snapshot the high-water mark *before* unlocking: lanes keep appending while we
+    // write, and _flushedSeq must name what went out, not what exists now.
+    uint64_t const    upTo = _lastSeq;
+    std::size_t const from = (std::size_t)(_flushedSeq + 1 - _baseSeq);
+
+    // One bulk copy under the lock, then N writes without it -- the same
+    // claim-under-lock / work-without-it shape as stepOnce and Registry::take.
+    std::vector<nlohmann::ordered_json> batch(_events.begin() + from, _events.end());
+
+    lock.unlock();
+
+    for (auto const& event : batch)
+    {
+        _file << event.dump() << "\n";      // compact: no newline inside, NDJSON's one rule
+    }
+    _file.flush();      // once per batch, not once per event -- the point of 12d-3
+
+    lock.lock();
+    _flushedSeq = upTo;
+}
+
+void EventLog::flushLoop()
+{
+    for (;;)
+    {
+        std::unique_lock<std::mutex> lock(_mutex);
+
+        // wait_for, not wait: the timeout *is* the schedule, and the predicate only
+        // lets shutdown and rotation cut the 2 s short. The return value says which
+        // of the two happened, and neither branch needs to know.
+        _flushWake.wait_for(lock, std::chrono::seconds(2),
+                            [this] {return _shutdown || _rotate; });
+        
+        bool const stopping = _shutdown;
+
+        drainLocked(lock);      // returns holding the lock
+
+        if (_rotate)
+        {
+            // Ordering matters: the old run's tail is on disk before its file close.
+            _file.close();
+            ++_run;
+            openRun();
+            _rotate = false;
+            _flushWake.notify_all();    // wakes clear(), waiting on !_rotate
+        }
+
+        if (stopping)
+        {
+            return;         // the last act was drain, so the file is complete
+        }
+    }
+}
+
 void EventLog::clear()
 {
-    std::lock_guard<std::mutex> guard(_mutex);
+    std::unique_lock<std::mutex> lock(_mutex);
+
+    // reset() has already waited _busy down to zero, so no lane is appending here --
+    // which is what makes "drain, then rotate, then zero the counters" a coherent order.
+    if (_flusher.joinable())
+    {
+        // Only the flusher ever touches the file, so ask it to rotate and wait rather
+        // than closing the stream under it.
+        _rotate = true;
+        _flushWake.notify_all();
+        _flushWake.wait(lock, [this] { return !_rotate; });
+    }
+
     _events.clear();
-    _baseSeq = 1;
-    _lastSeq = 0;
+    _baseSeq    = 1;
+    _lastSeq    = 0;
+    _flushedSeq = 0;
+    
+}
+
+EventLog::~EventLog()
+{
+    if (!_flusher.joinable())
+    {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        _shutdown = true;
+    }
+    _flushWake.notify_all();
+    _flusher.join();
+    
 }
 
 namespace

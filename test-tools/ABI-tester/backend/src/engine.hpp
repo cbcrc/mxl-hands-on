@@ -28,6 +28,7 @@ public:
     // Opens ABI_TESTER_LOG_FILE if it is set. Uset means no file, so the existing
     // workflow is unchanged.
     EventLog();
+    ~EventLog();
 
     // Append one executed step. `result` is the adapter's own object, merged in flat.
     // Returns the seq this event was given.
@@ -39,10 +40,17 @@ public:
     // like "nothing new since you last asked".
     bool since(uint64_t sinceSeq, nlohmann::ordered_json& out, std::string& error) const;
 
+    // Also rotates the file: /reset restarts seq at 1, and two runs sharing one file
+    // would make the sequence ambiguous to every offline tool.
     void clear();
 
 private:
-    void trim();    // called with _mutex already held
+    void trim();        // called with _mutex already held
+    bool openRun();     // opens the file for run _run; false + stderr on failure
+    void flushLoop();   // the flusher thread's body
+    // Copies out what the file has not seen, writes it with the lock released.
+    // Called with `lock` held; returns holding it.
+    void drainLocked(std::unique_lock<std::mutex>& lock);
 
     mutable std::mutex _mutex;
 
@@ -53,8 +61,18 @@ private:
 
     uint64_t _baseSeq = 1;      // the seq of _events.front(), replacing "_events[i] is seq i+1"
     uint64_t _lastSeq = 0;      // the seq most recently handed out
-    
-    std::ofstream _file;     // NDJSON, one event per line; closed means "not logging to disk"
+    uint64_t _flushedSeq = 0;   // the seq of the last event written to disk; trim() stops here
+
+    std::string _path;          // ABI_TESTER_LOG_FILE as given; empty when unset
+    unsigned    _run = 1;       // rotation counter; /reset opens run 2, 3, ...
+
+    std::ofstream _file;        
+    bool _fileOpen = false;     // _file.is_open(), but safe to read under _mutex -- see trim()
+
+    bool _rotate   = false;     // set by clear(), cleared by the flusher once it has rotated
+    bool _shutdown = false;
+    std::condition_variable _flushWake;
+    std::thread _flusher;       // last member: constructed after everything it touches
 };
 
 // One queued ABI call, exactly as the scenario JSON spells it. `args` is passed to
