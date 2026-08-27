@@ -7,7 +7,7 @@
 # and then throw them away.
 
 ABI_DIR="$HOME/mxl-hands-on/test-tools/ABI-tester"
-ABI_DOMAIN="/Volumes/mxl/domain_1"
+ABI_DOMAIN="${MXL_DOMAIN:-/Volumes/mxl/domain_1}"
 ABI_FLOW="a1b2c3d4-0001-4000-8000-000000000001"
 B="http://localhost:9600"
 
@@ -42,12 +42,18 @@ idx() { curl -sS -X POST $B/call -H 'Content-Type: application/json' \
 # The whole log, one line per event.
 logs() { curl -sS "$B/log?since=${1:-0}" | jq -c '.[]'; }
 
-# Average CPU of the server over N seconds, from /proc. Fields 14+15 of
-# /proc/<pid>/stat are utime+stime in clock ticks.
+# Average CPU of the server over N seconds. Linux differences utime+stime from
+# /proc (fields 14+15, in clock ticks). macOS has no /proc, so top takes two
+# samples T seconds apart and reports the second — the same quantity, measured
+# by the kernel instead of by us.
 cpu() {
   local P=$(pgrep abi-tester) T=${1:-10}
-  local A=$(awk '{print $14+$15}' /proc/$P/stat)
-  sleep "$T"
-  local B=$(awk '{print $14+$15}' /proc/$P/stat)
-  echo "cpu% = $(echo "($B-$A)*100/($T*$(getconf CLK_TCK))" | bc -l)"
+  if [ -r /proc/$P/stat ]; then
+    local A=$(awk '{print $14+$15}' /proc/$P/stat)
+    sleep "$T"
+    local B=$(awk '{print $14+$15}' /proc/$P/stat)
+    echo "cpu% = $(echo "($B-$A)*100/($T*$(getconf CLK_TCK))" | bc -l)"
+  else
+    echo "cpu% = $(top -l 2 -s "$T" -pid "$P" -stats cpu | tail -1)"
+  fi
 }
