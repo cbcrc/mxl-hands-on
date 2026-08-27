@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
 // SPDX-License-Identifier: Apache-2.0
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useLayoutEffect, useRef } from "react";
 
 const API = "";
 
@@ -92,6 +92,16 @@ const headRowStyle = {
   marginBottom: "0.25rem",
 };
 
+const detailStyle = {
+  color: "#bbb",
+  background: "#181818",
+  borderLeft: "2px solid #333",
+  margin: "0.15rem 0 0.35rem 1rem",
+  padding: "0.35rem 0.6rem",
+  whiteSpace: "pre-wrap",    // not "pre": a flow_def is one very long line
+  overflowWrap: "anywhere",
+};
+
 // The one place the column widths exist. The header and every event line are both
 // built from it, so they cannot drift apart.
 function row(seq, lane, step, call, status, dur) {
@@ -112,10 +122,17 @@ function eventColor(e) {
 }
 
 function EventLine({ e }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div style={{ color: eventColor(e), whiteSpace: "pre" }}>
-      {row(e.seq, e.lane ?? "-", e.step_id ?? "", e.call ?? "", e.status ?? "",
-            (e.duration_us ?? 0).toFixed(1) + " us")}
+    <div>
+      <div
+        onClick={() => setOpen((v) => !v)}
+        style={{ color: eventColor(e), whiteSpace: "pre", cursor: "pointer" }}
+      >
+        {row(e.seq, e.lane ?? "-", e.step_id ?? "", e.call ?? "", e.status ?? "",
+              (e.duration_us ?? 0).toFixed(1) + " us")}
+      </div>
+      {open && <div style={detailStyle}>{JSON.stringify(e, null, 2)}</div>}
     </div>
   );
 }
@@ -125,6 +142,18 @@ export default function App() {
   const { events, logError } = useLog();
   const [domains, setDomains] = useState([]);
   const [error, setError] = useState(null);
+  const consoleRef = useRef(null);
+  const stuckRef = useRef(null);      // start at the tail
+
+  function onConsoleScroll() {
+    const el = consoleRef.current;
+    stuckRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  }
+
+  useLayoutEffect(() => {
+    const el = consoleRef.current;
+    if (el && stuckRef.current) el.scrollTop = el.scrollHeight;
+  }, [events]);
 
   useEffect(() => {
     async function load() {
@@ -180,7 +209,7 @@ export default function App() {
         <h2 style={{ marginBottom: "1rem" }}>Console</h2>
         {logError && <div style={{ color: kBad, marginBottom: "0.5rem" }}>{logError}</div>}
         <div style={headRowStyle}>{row("seq", "ln", "step", "call", "status", "duration")}</div>
-        <div style={consoleStyle}>
+        <div style={consoleStyle} ref={consoleRef} onScroll={onConsoleScroll}>
           {events.length === 0 && <div style={{ color: "#888" }}>Waiting for events...</div>}
           {events.map((e) => <EventLine key={e.seq} e={e} />)}
         </div>
