@@ -58,3 +58,5 @@ Thumbs.db
 /gst-apps/.env
 /ea-ema-upp-mxl-sdk
 /test-tools/ABI-tester/backend/build
+
+.vscode
