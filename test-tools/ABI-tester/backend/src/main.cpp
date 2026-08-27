@@ -10,6 +10,11 @@
 #include <cstring>
 #include <cstdint>
 #include <cstdlib>
+#include <map>
+#include <cerrno>
+#include <csignal>
+#include <execinfo.h>
+#include <unistd.h>
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
@@ -22,9 +27,43 @@
 #include "engine.hpp"
 #include "scenario.hpp"
 
+// Signal handlers run on the faulting thread, so this backtrace is the one that matters.
+// Installed for the whole life of the process: the tool provokes undefined behaviour in a 
+// C ABI by design, and on a machine with no debugger and no crash reports this is the only
+// account we would ever get.
+extern "C" void crashHandler(int sig)
+{
+    char const* name = "\n*** fatal signal\n";
+    switch (sig)
+    {
+        case SIGSEGV: name = "\n*** SIGSEGV\n"; break;
+        case SIGBUS:  name = "\n*** SIGBUS\n";  break;
+        case SIGFPE:  name = "\n*** SIGFPE\n";  break;
+        case SIGABRT: name = "\n*** SIGABRT\n"; break;
+        case SIGILL:  name = "\n*** SIGILL\n";  break;
+        default:                                break;
+    }
+    write(STDERR_FILENO, name, std::strlen(name));
+
+    void*     frames[64];
+    int const count = backtrace(frames, 64);
+    backtrace_symbols_fd(frames, count, STDERR_FILENO);
+
+    // Restore the default and re-raise, so the process still dies of what killed it and
+    // the shell still reports the right signal. A handler that returns would resume at
+    // the faulting instruction and fault again, forever.
+    std::signal(sig, SIG_DFL);
+    raise(sig);
+}
+
 // Main loop
 int main(int argc, char** argv)
 {
+    for (int const sig : {SIGSEGV, SIGBUS, SIGFPE, SIGABRT, SIGILL})
+    {
+        std::signal(sig, crashHandler);
+    }
+    
     // get MXL version
     mxlVersionType version{};
 
@@ -38,20 +77,46 @@ int main(int argc, char** argv)
     std::printf("MXL SDK version: %u.%u.%u (%s)\n",
                 version.major, version.minor, version.bugfix, version.full);
     
-    // check if mxl domain is tmpfs
-    char const* domain = (argc > 1) ? argv[1] : "/Volumes/mxl/domain_1";
-    std::printf("Domain: %s\n", domain);
+    // alias -> path. A bare argument binds "default", so `abi-tester /some/domain`
+    // still works; `abi-tester a=/p1 b=/p2` binds two.
+    std::map<std::string, std::string> domains;
+    for (int i = 1; i < argc; ++i)
+    {
+        std::string const arg = argv[i];
+        auto const        eq  = arg.find('=');
 
-    bool isTmpFs = false;
-    status = mxlIsTmpFs(domain, &isTmpFs);
-    if (status != MXL_STATUS_OK)
-    {
-        std::fprintf(stderr, "warning: could not determine filesystem type for %s (status %d)\n",
-                    domain, status);
+        std::string const alias = (eq == std::string::npos) ? "default" : arg.substr(0, eq);
+        std::string const path  = (eq == std::string::npos) ? arg       : arg.substr(eq + 1);
+
+        if (alias.empty() || path.empty())
+        {
+            std::fprintf(stderr, "bad domain argument '%s': expected [alias=]<path>\n", arg.c_str());
+            return 1;
+        }
+        domains[alias] = path;
     }
-    else
+
+    if (domains.empty())
     {
-        std::printf("Domain on RAM disk: %s\n", isTmpFs ? "yes" : "no");
+        std::fprintf(stderr, "usage: %s [alias=]<domain-path> [alias=<domain-path> ...]\n", argv[0]);
+        return 1;
+    }
+
+    for (auto const& [alias, path] : domains)
+    {
+        bool            isTmpFs = false;
+        mxlStatus const ts      = mxlIsTmpFs(path.c_str(), &isTmpFs);
+
+        // A warning, never fatal: a ready-only domain is legitimate for a reader-only
+        // scenario. mxlCreateInstance accepts any existing directory, so without this
+        // line an unwritable domain stays silent until mxlCreateFlowWriter.
+        char const* writeState = "writable";
+        if (access(path.c_str(), W_OK) != 0)
+        {
+            writeState = (errno == ENOENT) ? "MISSING" : "NOT WRITABLE";
+        }
+        std::printf("Domain %-10s %s  (RAM disk: %s, %s)\n", alias.c_str(), path.c_str(),
+                    (ts == MXL_STATUS_OK) ? (isTmpFs ? "yes" : "no") : "unknown", writeState);
     }
 
     // The root /domains scans, distinct from the instance domain above. Named
@@ -69,7 +134,7 @@ int main(int argc, char** argv)
 
     EventLog log;
 
-    Engine engine(registry, log);
+    Engine engine(registry, log, domains);
     
     server.Get("/health",
         [&](httplib::Request const&, httplib::Response& res)
@@ -77,8 +142,6 @@ int main(int argc, char** argv)
             nlohmann::json body;
             body["status"]      = "ok";
             body["sdk_version"] = version.full;
-            body["domain"]      = domain;
-            body["tmpfs"]       = isTmpFs;
 
             res.set_content(body.dump(2) + "\n", "application/json");
         });

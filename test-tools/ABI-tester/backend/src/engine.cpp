@@ -402,9 +402,11 @@ namespace
     }
 }
 
-Engine::Engine(Registry& registry, EventLog& log)
+Engine::Engine(Registry& registry, EventLog& log,
+               std::map<std::string, std::string> domains)
     : _registry(registry)
     , _log(log)
+    , _domains(std::move(domains))
 {
     int const count = laneCount();
 
@@ -798,7 +800,45 @@ bool Engine::loadScenario(nlohmann::json const& doc, std::string& error)
             return false;
         }
     }
+    // Bind every mxlCreateInstance to a domain this server actually has. After the
+    // parse and before the lock, so an unknown alias leaves the loaded scenario
+    // exactly as it was -- the same reason `parsed` exist at all.
+    for (auto& [lane, steps] : parsed)
+    {
+        for (Step& step : steps)
+        {
+            if (step.call != "mxlCreateInstance")
+            {
+                continue;       // the only one of the 42 that takes a domain
+            }
 
+            auto const given = step.args.find("domain");
+            if ((given != step.args.end()) && !given->is_string())
+            {
+                error = lane + "/" + step.id + ": \"domain\" must be a string alias";
+                return false;
+            }
+
+            // Absent means "default": a single-domain scenario names no domain at all.
+            std::string const alias =
+                (given == step.args.end()) ? "default" : given->get<std::string>();
+            
+            auto const found = _domains.find(alias);
+            if (found == _domains.end())
+            {
+                std::string names;
+                for (auto const& entry : _domains)
+                {
+                    names += (names.empty() ? "" : ", ") + entry.first;
+                }
+                error = lane + "/" + step.id + ": unknown domain alias \"" + alias +
+                        "\"; this server has: " + names;
+                return false;
+            }
+
+            step.args["domain"] = found->second;    // the adapter sees a path, as it always has
+        }
+    }
     std::lock_guard<std::mutex> guard(_mutex);
 
     for (auto& entry : _lanes)
@@ -864,6 +904,7 @@ nlohmann::ordered_json Engine::state() const
     }
 
     nlohmann::ordered_json body;
+    body["domains"]     = _domains;
     body["running"]     = _running.load();
     body["delay_scale"] = _delayScale.load();
     body["lane_pool"]   = _lanes.size();

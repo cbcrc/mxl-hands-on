@@ -3,9 +3,7 @@
   "lanes": {
     "A": [
       {
-        "args": {
-          "domain": "/Volumes/mxl/domain_1"
-        },
+        "args": {},
         "call": "mxlCreateInstance",
         "id": "a0",
         "note": "also absorbs the ~10 ms first-call-in-a-process cost",
@@ -152,9 +150,7 @@
     ],
     "B": [
       {
-        "args": {
-          "domain": "/Volumes/mxl/domain_1"
-        },
+        "args": {},
         "call": "mxlCreateInstance",
         "delay_before_ms": 1500,
         "id": "b0",

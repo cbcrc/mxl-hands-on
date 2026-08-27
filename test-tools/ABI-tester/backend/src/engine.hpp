@@ -144,7 +144,10 @@ class Engine
         //  or the lane is finished.
         bool stepOnce(std::string const& laneName, std::string& error);
 
-        Engine(Registry& registry, EventLog& log);
+        // `domain` is alias -> path, fixed at startup. Taken by value and moved:
+        // main has no further use for its copy.
+        Engine(Registry& registry, EventLog& log,
+               std::map<std::string, std::string> domains);
         ~Engine();
 
         // Non-copyable: the threads capture `this`, so a copy would alias them.
@@ -167,6 +170,10 @@ class Engine
     private:
         Registry& _registry;
         EventLog& _log;
+
+        // Written once in the ctor, read-only thereafter, so no lock -- the same
+        // reasoning as the _lanes pool below.
+        std::map<std::string, std::string> _domains;
         
         // &_laneA / &_laneB / nullptr. No lock: the members' address never move.
         Lane* laneFor(std::string const& name);
