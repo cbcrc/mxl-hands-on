@@ -143,7 +143,7 @@ export default function App() {
   const [domains, setDomains] = useState([]);
   const [error, setError] = useState(null);
   const consoleRef = useRef(null);
-  const stuckRef = useRef(null);      // start at the tail
+  const stuckRef = useRef(true);      // start at the tail
 
   function onConsoleScroll() {
     const el = consoleRef.current;
