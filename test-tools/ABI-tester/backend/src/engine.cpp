@@ -159,6 +159,16 @@ bool EventLog::since(uint64_t sinceSeq, nlohmann::ordered_json& out, std::string
         return false;
     }
 
+    // The mirror case: a cursor ahead of the log. /reset restarts seq at 1 while a
+    // browser keeps its old cursor, and the copy loop below would then start past the
+    // end and return [] - indistinguishable from "nothing new since you last asked".
+    if (sinceSeq > _lastSeq)
+    {
+        error = "seq " + std::to_string(sinceSeq) + " is ahead of the log (last seq is " +
+                std::to_string(_lastSeq) + "); ask for since=" + std::to_string(_baseSeq - 1);
+        return false;
+    }
+
     out = nlohmann::ordered_json::array();
 
     for (std::size_t i = (std::size_t)(sinceSeq + 1 - _baseSeq); i < _events.size(); ++i)
@@ -1123,6 +1133,11 @@ uint64_t Engine::execute(std::string const& laneName, Step const& step, uint64_t
     if (!pace.is_null())
     {
         result["pace"] = pace;
+    }
+
+    if (delayMs > 0.0)
+    {
+        result["delay_ms"] = delayMs;
     }
 
     if (!resolved.empty())
