@@ -120,7 +120,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
 
 1. When you are down, do not forget to shutdown your containers.
     ```sh
-    stop.sh # For linux based system
+    ./stop.sh # For linux based system
     ```
     ```sh
     ./stop-mac.sh # For mac based system
