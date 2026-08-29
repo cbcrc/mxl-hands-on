@@ -26,6 +26,9 @@ postf() { curl -sS -X POST $B$1 -H 'Content-Type: application/json' -d @"$2" -w 
 # Content-Length, cpp-httplib reads until EOF, and the call costs exactly 5 s.
 postn() { curl -sS -X POST $B$1 -d '' -w ' [%{http_code}]\n'; }
 
+# The frontend's name-checker. Vite never runs it, so it only exists when invoked.
+lint() { (cd "$ABI_DIR/frontend" && npm run lint); }
+
 # The registry lives in the server process, so every restart starts from zero.
 setup() {
   call "{\"call\":\"mxlCreateInstance\",\"args\":{\"domain\":\"$ABI_DOMAIN\",\"store_as\":\"I\"}}" > /dev/null
