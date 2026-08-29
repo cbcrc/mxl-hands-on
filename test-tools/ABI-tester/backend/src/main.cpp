@@ -128,6 +128,17 @@ int main(int argc, char** argv)
     std::printf("Scenario dir: %s\n", scenarioDir().c_str());
     
     httplib::Server server;
+
+    // Every response, every route. This API is polled, so nothing it returns is
+    // reusable a second time -- and 410 is cacheable by default (RFC 9110 15.5.11).
+    // The 410 is also the one response that pins a client to a single URL, so a
+    // cached copy replays forever: the client never receives the newer body that
+    // would tell it where to move its cursor.
+    server.set_post_routing_handler(
+        [](httplib::Request const&, httplib::Response& res)
+        {
+            res.set_header("Cache-Control", "no-store");
+        });
     
     // The handle table every step will name its operands through.
     Registry registry;
@@ -285,7 +296,9 @@ int main(int argc, char** argv)
             {
                 res.status = 410;   // Gone; these events existed and no longer do,
                                     // which is not the same as 400 "you asked wrongly"
-                res.set_content(nlohmann::json{{"ok", false}, {"error", error}}.dump(2) + "\n",
+                res.set_content(nlohmann::json{{"ok", false},
+                                               {"error", error},
+                                               {"since", log.resyncSeq()}}.dump(2) + "\n",
                                 "application/json");
                 return;
             }

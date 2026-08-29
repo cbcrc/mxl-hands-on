@@ -179,6 +179,12 @@ bool EventLog::since(uint64_t sinceSeq, nlohmann::ordered_json& out, std::string
     return true;
 }
 
+uint64_t EventLog::resyncSeq() const
+{
+    std::lock_guard<std::mutex> guard(_mutex);
+    return _baseSeq - 1;
+}
+
 void EventLog::trim()
 {
     // The tail bound yields to the file. An event the flusher has not written yet must

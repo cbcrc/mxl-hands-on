@@ -43,6 +43,12 @@ public:
     // like "nothing new since you last asked".
     bool since(uint64_t sinceSeq, nlohmann::ordered_json& out, std::string& error) const;
 
+    // The cursor a client should resync to after a 410, in either direction: the last
+    // seq that is no longer answerable. 0 after clear(), the last trimmed seq after a
+    // trim. The client cannot compute this -- a trimmed cursor and a cursor ahead of
+    // the log resync to the same number but for opposite reasons.
+    uint64_t resyncSeq() const;
+
     // The log's own numbers for /state: how far behind the file is (seq vs flushed) and
     // how big the in-memory tail really is. `tail` is what would have shown 12d-3's
     // 835 MB without reaching for ps.

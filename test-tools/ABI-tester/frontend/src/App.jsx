@@ -28,6 +28,19 @@ const tableStyle = { width: "100%", borderCollapse: "collapse", fontSize: "0.9re
 
 const cellStyle = { textAlign: "left", padding: "0.5rem", borderBottom: "1px solid #333" };
 
+// A function, not a constant: the selected chip differs only by color, and two
+// near-identical style objects would drift the moment one padding changes.
+const chipStyle = (on) => ({
+  ...monoStyle,
+  background: on ? "#333" : "transparent",
+  color: on ? "#eee" : "#888",
+  border: "1px solid #333",
+  borderRadius: "4px",
+  padding: "0.15rem 0.5rem",
+  marginRight: "0.35rem",
+  cursor: "pointer",
+});
+
 
 // -- The log poll ---------------------------------------------------
 
@@ -48,6 +61,13 @@ function useLog(pollMs = 250) {
         if (!alive) return;             // unmounted while the fetch was in flight
         if (!Array.isArray(body)) {
           setLogError(body?.error ?? "HTTP " + res.status);
+          // A 410 carries the cursor to resync to -- 0 after /reset, the last trimmed
+          // seq after a trim. Not computable here: both directions resync to the same
+          // number for opposite reasons. typeof, not ||, because that number is usually 0.
+          if (typeof body?.since === "number") {
+            sinceRef.current = body.since;
+            setEvents([]);    // the new reuses seq 1.., and key={e.seq} must stay unique
+          }
           return;
         }
         setLogError(null);
@@ -144,6 +164,12 @@ export default function App() {
   const [error, setError] = useState(null);
   const consoleRef = useRef(null);
   const stuckRef = useRef(true);      // start at the tail
+  const [lane, setLane] = useState(null);   // null = all lanes
+
+  // Recomputed every render, deliberately: 2000 events is nothing, and a useMemo
+  // here would be a cache to keep correct in exchange for no measurable gain.
+  const lanes = [...new Set(events.map((e) => e.lane ?? "-"))].sort();
+  const shown = lane === null ? events : events.filter((e) => (e.lane ?? "-") === lane);
 
   function onConsoleScroll() {
     const el = consoleRef.current;
@@ -153,7 +179,7 @@ export default function App() {
   useLayoutEffect(() => {
     const el = consoleRef.current;
     if (el && stuckRef.current) el.scrollTop = el.scrollHeight;
-  }, [events]);
+  }, [events, lane]);
 
   useEffect(() => {
     async function load() {
@@ -208,10 +234,18 @@ export default function App() {
       <section style={sectionStyle}>
         <h2 style={{ marginBottom: "1rem" }}>Console</h2>
         {logError && <div style={{ color: kBad, marginBottom: "0.5rem" }}>{logError}</div>}
+        <div style={{ marginBottom: "0.5rem" }}>
+          <button type="button" style={chipStyle(lane === null)}
+                  onClick={() => setLane(null)}>all</button>
+          {lanes.map((ln) => (
+            <button type="button" key={ln} style={chipStyle(lane === ln)}
+                    onClick={() => setLane(ln)}>{ln}</button>
+          ))}
+        </div>
         <div style={headRowStyle}>{row("seq", "ln", "step", "call", "status", "duration")}</div>
         <div style={consoleStyle} ref={consoleRef} onScroll={onConsoleScroll}>
-          {events.length === 0 && <div style={{ color: "#888" }}>Waiting for events...</div>}
-          {events.map((e) => <EventLine key={e.seq} e={e} />)}
+          {shown.length === 0 && <div style={{ color: "#888" }}>Waiting for events...</div>}
+          {shown.map((e) => <EventLine key={e.seq} e={e} />)}
         </div>
       </section>
     </div>
