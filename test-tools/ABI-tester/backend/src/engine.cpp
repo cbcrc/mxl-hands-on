@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <algorithm>
+#include <random>
 
 #include "engine.hpp"
 #include "calls.hpp"
@@ -609,6 +610,24 @@ namespace
         return false;
     }
 
+    // One generator per lane thread. execute() runs on every lane at once, and a shared
+    // mt19937 is a data race that never crashes -- it just stops being uniform, which
+    // nothing in the output can falsify. Seeded from the lane name, not a constant:
+    // eight lanes sharing a seed would jitter in lockstep, the opposite of the load this
+    // milestone exists to generate. Sound only because (a) fixed the pool -- one thread
+    // per lane for the life of the process, so a thread's lane name never changes.
+    int64_t drawJitterNs(std::string const& laneName, double jitterMs)
+    {
+        if (jitterMs <= 0.0)
+        {
+            return 0;   // the unjittered path never even constructs the generator
+        }
+
+        thread_local std::mt19937_64 rng{std::hash<std::string>{}(laneName)};
+        std::uniform_real_distribution<double> dist(-jitterMs, jitterMs);
+        return (int64_t)(dist(rng) * 1000000.0);
+    }
+
     // One lane's step array -> a vector<Step>. Fails on the first step that names a
     // call the catalog does not have -- validating at load time is the whole point.
     bool parseLane(nlohmann::json const& array, char const* laneName,
@@ -649,7 +668,7 @@ namespace
             // *which* step is a grep through the scenario file.
             std::string const where = std::string("lane ") + laneName + " step " +
                                       (step.id.empty() ? step.call : step.id);
-            
+
             if (item.contains("pace"))
             {
                 if (!item["pace"].is_object())
@@ -675,8 +694,16 @@ namespace
                     return false;
                 }
 
+                if (pace.contains("jitter_ms") &&
+                    (!pace["jitter_ms"].is_number() || pace["jitter_ms"].get<double>() < 0.0))
+                {
+                    error = where + ": \"pace.jitter_ms\" must be a number >= 0";
+                    return false;
+                }
+
                 step.paced        = true;
                 step.paceOffsetMs = pace.value("offset_ms", 0.0);
+                step.paceJitterMs = pace.value("jitter_ms", 0.0);
             }
 
             if (item.contains("fill") && item["fill"].is_object())
@@ -1056,16 +1083,28 @@ uint64_t Engine::execute(std::string const& laneName, Step const& step, uint64_t
         // 1.8e19 and arrives at the ABI as a perfectly plausible timestamp -- the M9 lesson.
         uint64_t const deadline = (uint64_t)((int64_t)ots + offsetNs);
 
+        int64_t const jitterNs = drawJitterNs(laneName, step.paceJitterMs);
+
+        // deadline stays the media truth -- its consecutive deltas are exactly one grain,
+        // which is what makes an offline drift check possible. target is what this step
+        // actually aims at. Both are reported so the injected error and the scheduler's
+        // own error never collapse into one number.
+        uint64_t const target = (u_int64_t)((int64_t)deadline + jitterNs);
+
         // The cap protects the transport, not the sleep: this thread holds _busy across
         // execute(), and /reset spins until _busy is zero.
         uint64_t const now    = mxlGetTime();
-        bool const     capped = (deadline > now) && ((deadline - now) > kMaxPaceNs);
+        bool const     capped = (target > now) && ((target - now) > kMaxPaceNs);
 
-        mxlSleepUntil(capped ? (now + kMaxPaceNs) : deadline);
+        mxlSleepUntil(capped ? (now + kMaxPaceNs) : target);
 
         uint64_t const woke = mxlGetTime();
         pace["deadline_ns"] = std::to_string(deadline);     // ns as a string: the M9 contract
-        pace["late_ms"]     = ((int64_t)woke -(int64_t)deadline) / 1000000.0;
+        pace["late_ms"]     = ((int64_t)woke -(int64_t)target) / 1000000.0;
+        if (jitterNs != 0)
+        {
+            pace["jitter_ms"] = jitterNs / 1000000.0;
+        }
         if (capped)
         {
             pace["capped"] = true;      // late_ms comes back negative: woke early, not lying

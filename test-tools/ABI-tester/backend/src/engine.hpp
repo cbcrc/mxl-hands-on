@@ -114,6 +114,7 @@ struct Step
     // Mutually exclusive with delayBeforeMs, refused in parseLane.
     bool           paced = false;
     double         paceOffsetMs = 0.0; // negative is legal: a reader lane trailing the writer
+    double         paceJitterMs = 0.0; // uniform in [-jitter, +jitter], centered on the deadline
 
     // "repeat" pseudo-step only. The target is a step *position*, resolved at load time
     // so the jump costs no id lookup. The live counter is in Lane, not here
