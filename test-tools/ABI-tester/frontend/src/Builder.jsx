@@ -26,7 +26,7 @@ function useCatalog() {
     useEffect(() => {
       async function load() {
         try {
-            const res = await fetch(API + "abi-calls");
+            const res = await fetch(API + "/abi-calls");
             if (!res.ok) throw new Error("HTTP " + res.status);
             setCalls([...pseudoCalls, ...(await res.json())]);
         } catch (e) {
