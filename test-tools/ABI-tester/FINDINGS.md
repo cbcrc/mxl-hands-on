@@ -268,9 +268,42 @@ real purchase, not an oversight. Removing it needs either an MXL API addition (h
 slot) or a deeper ring plus a policy bet about downstream latency.
 
 > **Cheap improvement that keeps the safety:** the copy is forced, the *allocation* is not.
-> `gst::Buffer::from_slice(…to_vec())` mallocs and frees 5.27 MiB per frame — 158 MB/s of
-> allocator churn at 1080p29.97. A `GstBufferPool` of reusable buffers keeps the copy and
-> removes the churn.
+> `gst::Buffer::from_slice(…to_vec())` mallocs and frees 5.27 MiB per frame. A `GstBufferPool`
+> of reusable buffers keeps the copy and removes the allocation.
+
+### Testable hypothesis: the allocation costs more than the copy it serves
+
+**Claim.** glibc's `malloc` services allocations above `M_MMAP_THRESHOLD` (~128 KB by default)
+with `mmap` rather than the heap, and returns them with `munmap`. A 5.27 MiB grain is 40× that
+threshold, so **every frame** plausibly costs one `mmap`, **~1,350 first-touch page faults**
+(5,529,600 / 4096), and one `munmap` — on top of the copy itself.
+
+That is the same first-touch mechanism §5 documents costing ~1.9 ms on a fresh ring, except
+recurring *per frame* instead of once per ring wrap. If it holds, pooling is worth substantially
+more than "removing allocator churn" suggests, and the read-side copy — which §7 argues is
+forced — becomes the *cheaper* half of what `mxlsrc` currently pays per frame.
+
+**How to falsify.** `mxlsrc` is a live source, so wall time is pinned at real rate and shows
+nothing. The signal is **minor page faults per frame**, with CPU time as corroboration:
+
+```bash
+/usr/bin/time -v gst-launch-1.0 mxlsrc domain=<domain> video-flow-id=<id> num-buffers=300 \
+  ! video/x-raw,framerate=30000/1001 ! fakesink sync=false
+```
+
+Read *Minor (reclaiming a frame) page faults*, *User time*, *System time*.
+
+| | prediction if the claim holds |
+|---|---|
+| minor faults, 300 frames | **~405,000** (300 × 1350), i.e. ~1350/frame above baseline |
+| after pooling | falls to near-constant — the pool faults its buffers in once |
+| user+system time | drops by the fault-handling cost, several tens of ms over 300 frames |
+
+If baseline minor faults are already flat (a few thousand total), the claim is **wrong** —
+either the allocator is reusing the mapping or `M_MMAP_THRESHOLD` has been raised dynamically,
+and pooling is then worth only the memcpy-free `malloc` bookkeeping, which is negligible.
+
+Worth running as a two-arm A/B on a fork of the SDK before proposing anything upstream.
 
 **`mxlsink` can avoid its copy with a standard GStreamer mechanism.** Implement
 `propose_allocation()` offering a `GstBufferPool` whose memory is backed by grain payloads;
