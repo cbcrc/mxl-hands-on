@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
 // SPDX-License-Identifier: Apache-2.0
 import { useState, useEffect } from "react";
-import { sectionStyle, tableStyle, cellStyle, chipStyle, monoStyle, kBad } from "./styles";
+import { sectionStyle, tableStyle, cellStyle, chipStyle, monoStyle, kOk, kBad } from "./styles";
 
 const API = "";
 
@@ -308,6 +308,41 @@ export default function Builder() {
       return doc;
     }
 
+    const [msg, setMsg] = useState(null);     // {text, ok}
+
+    // Every transport button goes through here. Post /scenario answers 200 with the
+    // engine state and 400 with {ok, error}, so res.ok is the verdict and doc.error is
+    // the message -- there is no "ok" field on the success path to test.
+    async function post(path, body, done) {
+      try {
+        const res = await fetch(API + path, {
+          method: "POST",
+          headers: { "Content-Type": "application/json"},
+          body: (body === undefined) ? undefined : JSON.stringify(body),
+        });
+        const doc = await res.json();
+        setMsg({ text: res.ok ? done : (doc.error ?? ("HTTP " + res.status)), ok: res.ok});
+        return res.ok;
+      } catch (e) {
+          setMsg({ text: String(e), ok: false });
+          return false;
+      }
+      
+    }
+
+    async function loadIntoEngine() {
+      const ok = await post("/scenario", buildScenario(), "loaded");
+      if (!ok) return;
+      // POST /scenario clears _running but NOT the registry. M13.5: running a second
+      // time with handles still in place refuses the create steps as "name already in
+      // use" and runs the rest on the old ones -- 87 % green and not a measurement.
+      const held = Object.keys(handles).length;
+      if (held > 0) setMsg({ text: `loaded -- ${held} handle(s) still in the registry; `
+                                 + `reset before running`, ok: false});
+    }
+
+    const resetEngine = () => post("/reset", undefined, "reset");
+
     const shown = calls.filter((c) => c.name.toLowerCase().includes(filter.toLowerCase()));
     const call = calls.find((c) => c.name === selected) ?? null;
 
@@ -448,6 +483,10 @@ export default function Builder() {
             description{" "}
             <input value={description} onChange={(e) => setDescription(e.target.value)}
                    style={{ ...inputStyle, width: "40rem" }} /></label>
+            <button type="button" style={chipStyle(true)} onClick={loadIntoEngine}>load</button>
+            <button type="button" style={chipStyle(false)} onClick={resetEngine}>reset</button>
+            {msg && <span style={{ ...monoStyle, marginLeft: "0.5rem",
+                                   color: msg.ok ? kOk : kBad }}>{msg.text}</span>}
           <pre style={{ ...monoStyle, background: "#111", padding: "0.75rem",
                         borderRadius: "4px", overflowX: "auto", maxHeight: "24rem" }}>
             {JSON.stringify(buildScenario(), null, 2)}
