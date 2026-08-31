@@ -5,6 +5,14 @@ import { sectionStyle, tableStyle, cellStyle, chipStyle, monoStyle, kBad } from 
 
 const API = "";
 
+const inputStyle = { ...monoStyle, padding: "0.2rem" };
+
+// Which registry kind each handle-typed param wants. store_as is deliberately absent:
+// it names a handle that must NOT exist yet, so a list of existing ones is the wrong
+// input for it. The catalog's type says "handle" for both; only the name separates them.
+const handleKinds = { instance: "instance", writer: "flow_writer",
+                      reader: "flow_reader", group: "sync_group", grain: "grain" };
+
 // setCursor and repeat are lane pseudo-steps, deliberately absent from /abi-calls so the
 // catalog stays exactly 42 and diffable against `nm -D`. The builder still has to offer
 // them, so their params are spelled here in the catalog's own shape -- which keeps the
@@ -13,7 +21,7 @@ const pseudoCalls = [
     { name: "setCursor", header: "(lane)",
       description: "Seed this lane's cursor. Never enters the library.",
       params: [{ name: "index", type: "object", required: true,
-                 description: "{mode, edit_rate} -- or {mode: \"literal\", index: N}"}] },
+                 description: "{mode, edit_rate} -- or {mode: \"literal\", value: N}"}] },
     { name: "repeat", header: "(lane)",
       description: "Jump back to an earlier step, N more times. Backward only. Logs nothing.",
       params: [{ name: "to", type: "string", required: true, description: "id of an earlier step" },
@@ -28,6 +36,8 @@ function useCatalog() {
         try {
             const res = await fetch(API + "/abi-calls");
             if (!res.ok) throw new Error("HTTP " + res.status);
+            const type = res.headers.get("content-type") ?? "";
+            if (!type.includes("application/json")) throw new Error("not JSON: " + type);
             setCalls([...pseudoCalls, ...(await res.json())]);
         } catch (e) {
             setCatalogError(String(e));
@@ -38,10 +48,140 @@ function useCatalog() {
     return { calls, catalogError };
 }
 
+function useHandles(pollMs = 1000) {
+  const [handles, setHandles] = useState({});
+  useEffect(() => {
+    let alive = true;
+    async function poll() {
+      try {
+        const res = await fetch(API + "/state");
+        const body = await res.json();
+        if (alive && body?.handles) setHandles(body.handles);
+      } catch { /* nothing to say: the console's own poll already reports a dead backend */ }
+    }
+    poll();
+    const id = setInterval(poll, pollMs);
+    return () => { alive = false; clearInterval(id); };
+  }, [pollMs]);
+  return handles;
+}
+
 export default function Builder() {
     const { calls, catalogError } = useCatalog();
+    const handles = useHandles();
     const [filter, setFilter] = useState("");
     const [selected, setSelected] = useState(null);
+    const [args, setArgs] = useState({});
+
+    // Every call has its own arguments. Without this, selecting mxlCreateFlowReader
+    // after mxlCreateFlowWriter silently carries the old flow_def along.
+    useEffect(() => { setArgs({}); }, [selected]);
+
+    // Immutable update. React compares state by identity, so mutating `args` and
+    // calling setArgs(args) would re-render nothing. Python: {**prev, name: value}.
+    const setArg = (name, value) => setArgs((prev) => ({ ...prev, [name]: value}));
+
+    // One switch, six types. Defined inside Builder so it closes over args and
+    // setArg -- a nested def that sees the enclosing scope, same as Python.
+    function field(p) {
+      const v = args[p.name];
+      if (p.type === "bool")
+        return <input type="checkbox" checked={v ?? false}
+                      onChange={(e) => setArg(p.name, e.target.checked)} />;
+      if (p.type === "rational")
+        return ["num", "den"].map((k) => (
+          <input key={k} value={v?.[k] ?? ""} placeholder={k}
+                 onChange={(e) => setArg(p.name, { ...v, [k]: e.target.value})}
+                 style={{ ...inputStyle, width: "5rem" }} />
+        ));
+      if (p.name === "index") return indexField(p);
+      if (p.type === "object" || p.name === "flow_def")
+        return <textarea value={v ?? ""} rows={6}
+                         onChange={(e) => setArg(p.name, e.target.value)}
+                         style={{ ...inputStyle, width: "28rem" }} />;
+      const kind = handleKinds[p.name];
+      if (p.type === "handle" && kind) {
+        const names = Object.keys(handles).filter((n) => handles[n].kind === kind);
+        return (
+          <select value={v ?? ""} onChange={(e) => setArg(p.name, e.target.value)}
+                  style={{ ...inputStyle, width: "14rem" }}>
+            <option value="">-- {kind} --</option>
+            {names.map((n) => <option key={n} value={n}>{n}</option>)}
+            {v && !names.includes(v) && <option value={v}>{v} (gone)</option>}
+          </select>
+        )
+      }
+      return <input value={v ?? ""} onChange={(e) => setArg(p.name, e.target.value)}
+                    style={{ ...inputStyle, width: "14rem"}} />;
+    }
+
+    // An index expression is an object, not a scalar. edit_rate and reader appear only
+    // for the modes that needs them -- and both are optional even then: resolveIndex
+    // falls back to the step's own edit_rate / reader argument when the expression
+    // omits them, which is why a read step never spells its reader twice.
+    function indexField(p) {
+      const v = args[p.name] ?? {};
+      const mode = v.mode ?? "literal";
+      const set = (patch) => setArg(p.name, { ...v, ...patch });
+      return (
+        <span>
+          <select value={mode} onChange={(e) => set({ mode: e.target.value })}
+                  style={{ ...inputStyle, marginRight: "0.3rem" }}>
+            {["literal", "cursor", "current", "head"].map((m) =>
+              <option key={m} value={m}>{m}</option>)}
+          </select>
+          {mode === "literal" &&
+            <input value={v.value ?? ""} placeholder="value"
+                   onChange={(e) => set({ value: e.target.value })}
+                   style={{ ...inputStyle, width: "10rem" }} />}
+          {mode === "current" && ["num", "den"].map((k) =>
+            <input key={k} value={v.edit_rate?.[k] ?? ""} placeholder={k}
+                   onChange={(e) => set({ edit_rate: { ...v.edit_rate, [k]: e.target.value } })}
+                   style={{ ...inputStyle, width: "5rem" }} />)}
+          {mode === "head" &&
+            <input value={v.reader ?? ""} placeholder="reader"
+                   onChange={(e) => set({ reader: e.target.value })}
+                   style={{ ...inputStyle, width: "7rem" }} />}
+          <input value={v.offset ?? ""} placeholder="offset"
+                 onChange={(e) => set({ offset: e.target.value })}
+                 style={{ ...inputStyle, width: "5rem", marginLeft: "0.3rem"}} />
+        </span>);
+    }
+
+    // The form holds strings; the wire does not, and the two disagree per type.
+    // uint64 goes out as a *string* on purpose -- the M9 number contract, because a
+    // ns timestamp passes 2^53 and JS has only doubles; argUint64 takes either.
+    // rational must be real numbers: argRational test is_number_integer().
+    function buildArgs() {
+      const out = {};
+      for (const p of call.params) {
+        const v = args[p.name];
+        if (p.type === "bool") { if (v) out[p.name] = true; continue; }
+        if (p.type === "rational") {
+          if (v?.num && v?.den) out[p.name] = { num: Number(v.num), den: Number(v.den) };
+          continue;
+        }
+        if (p.name === "index") {
+          const m = v?.mode ?? "literal";
+          const expr = { mode: m };
+          if (m === "literal") { if (!v?.value) continue; expr.value = Number(v.value); }
+          if ((m === "current") && v?.edit_rate?.num && v?.edit_rate?.den)
+            expr.edit_rate = { num: Number(v.edit_rate.num), den: Number(v.edit_rate.den) };
+          if ((m === "head") && v?.reader) expr.reader = v.reader;
+          if (v?.offset) expr.offset = Number(v.offset);
+          out[p.name] = expr;
+          continue;
+        }
+        if (v === undefined || v === "") continue;    // empty means absent, not ""
+        if (p.type === "object") {
+          try { out[p.name] = JSON.parse(v); }
+          catch (e) { out[p.name] = "!! " + e.message; }
+          continue;
+        }
+        out[p.name] = v;
+      }
+      return out;
+    }
 
     const shown = calls.filter((c) => c.name.toLowerCase().includes(filter.toLowerCase()));
     const call = calls.find((c) => c.name === selected) ?? null;
@@ -67,7 +207,8 @@ export default function Builder() {
             <table style={tableStyle}>
               <thead>
                 <tr><th style={cellStyle}>param</th><th style={cellStyle}>type</th>
-                    <th style={cellStyle}>req</th><th style={cellStyle}>description</th></tr>
+                    <th style={cellStyle}>req</th><th style={cellStyle}>description</th>
+                    <th style={cellStyle}>value</th></tr>
               </thead>
               <tbody>
                 {call.params.map((p) => (
@@ -76,13 +217,18 @@ export default function Builder() {
                     <td style={{ ...cellStyle, ...monoStyle }}>{p.type}</td>
                     <td style={cellStyle}>{p.required ? "yes" : ""}</td>
                     <td style={cellStyle}>{p.description}</td>
+                    <td style={cellStyle}>{field(p)}</td>
                   </tr>
                 ))}
                 {call.params.length === 0 && (
-                  <tr><td style={cellStyle} colSpan={4}>no arguments</td></tr>
+                  <tr><td style={cellStyle} colSpan={5}>no arguments</td></tr>
                 )}
               </tbody>
             </table>
+            <pre style={{ ...monoStyle, background: "#111", padding: "0.75rem",
+                          borderRadius: "4px", overflowX: "auto" }}>
+              {JSON.stringify({ call: call.name, args: buildArgs() }, null, 2)}
+            </pre>    
           </>
         )}
       </section>
