@@ -26,6 +26,34 @@ const outKinds = {
   mxlFlowReaderGetGrainSliceNonBlocking: "grain",
 };
 
+// The args table gets its description from /abi-calls. Step-level fields appear in no
+// catalog, so their documentation lives here -- keyed by the wire name, so the tooltip
+// and the JSON key can never disagree.
+const stepHelp = {
+  id: "Step name. Used in the engine's error messages and as the target of `repeat1. " +
+      "Defaults to the lane letter plus the next free ordinal.",
+  out: "Registry name for the handle this step creates. The engine passes it to the " +
+       "adapter as store_as; the key is documentation only.",
+  note: "A comment for whoever reads the scenario. The engine never reads it.",
+  fill: "How the payload is written before commit. `none` leaves whatever the previous " +
+        "occupant of that ring slot left behind.",
+  byte: "0-255, memset over the whole grain. ~180 us for a 5.5 MB v210 grain @1920x1080p29.97",
+  stamp: "Write the 24-byte magic/index/write-time stamp at offset 0, after the fill -- " +
+         "a memset would erase it. It is what makes true propagation delay measurable.",
+  timing: "When this step runs. `delay` waits N ms from the previous step; `pace` aims at " +
+          "the grain's own OTS, so a late step catches up instead of pushing the rest.",
+  delay_before_ms: "Relative wait before the step. Its clock restarts each step, so slop " +
+                   "compounds down the lane -- 115-367 us per step, measured.",
+  offset_ms: "Shift the pace target. Staggering it across lanes is what took 96 lanes " +
+             "from 1582 us to 182 us: phase sets p99, not average load.",
+  jitter_ms: "Random +/- added to the pace target, drawn per lane.",
+  advance_cursor: "Grains (or samples) added to the lane cursor after this step. " +
+                  "Usually 1, on the commit: a grain costs two steps -- open then commit --" +
+                  "and advances the cursor once, so putting it on both double-advances.",
+  lane: "Which lane thread queues this step. Lanes share one registry but have no barrier " +
+        "between them; cross-lane ordering is a delay_before_ms today.",
+};
+
 // setCursor and repeat are lane pseudo-steps, deliberately absent from /abi-calls so the
 // catalog stays exactly 42 and diffable against `nm -D`. The builder still has to offer
 // them, so their params are spelled here in the catalog's own shape -- which keeps the
@@ -40,6 +68,9 @@ const pseudoCalls = [
       params: [{ name: "to", type: "string", required: true, description: "id of an earlier step" },
                { name: "times", type: "uint64", required: true, description: "additional passes" }] },
 ];
+
+const laneName = (n) => { let s = ""; for (let i = n; i >= 0; i = Math.floor(i / 26) - 1)
+                            s = String.fromCharCode(65 + (i % 26)) + s; return s; };
 
 function useCatalog() {
     const [calls, setCalls] = useState([]);
@@ -61,32 +92,39 @@ function useCatalog() {
     return { calls, catalogError };
 }
 
-function useHandles(pollMs = 1000) {
-  const [handles, setHandles] = useState({});
+function useServerState(pollMs = 1000) {
+  const [state, setState] = useState({});
   useEffect(() => {
     let alive = true;
     async function poll() {
       try {
         const res = await fetch(API + "/state");
         const body = await res.json();
-        if (alive && body?.handles) setHandles(body.handles);
+        if (alive && body?.handles) setState(body);    // the whole body, not just handles
       } catch { /* nothing to say: the console's own poll already reports a dead backend */ }
     }
     poll();
     const id = setInterval(poll, pollMs);
     return () => { alive = false; clearInterval(id); };
   }, [pollMs]);
-  return handles;
+  return state;
 }
 
 export default function Builder() {
     const { calls, catalogError } = useCatalog();
-    const handles = useHandles();
+    const state = useServerState();
+    const handles = state.handles ?? {};
     const [filter, setFilter] = useState("");
     const [selected, setSelected] = useState(null);
     const [args, setArgs] = useState({});
     const [step, setStep] = useState({});
+    const [lane, setLane] = useState("A");
+    const [lanes, setLanes] = useState({}); // {A: [step, ...]}, the scenario being built
     const setField = (k, v) => setStep((prev) => ({ ...prev, [k]: v }));
+    const addStep = () =>
+      setLanes((prev) => ({ ...prev, [lane]: [ ...(prev[lane] ?? []), buildStep()] }));
+    const removeStep = (L, i) =>
+      setLanes((prev) => ({ ...prev, [L]: prev[L].filter((_, n) => n !== i) }));
 
     // Every call has its own arguments. Without this, selecting mxlCreateFlowReader
     // after mxlCreateFlowWriter silently carries the old flow_def along.
@@ -200,7 +238,7 @@ export default function Builder() {
 
     function buildStep() {
       const body = { call: call.name, args: buildArgs() };
-      if (step.id) body.id = step.id;
+      body.id = step.id || nextId(lane);
       if (stores && step.out) body.out = { [outKinds[call.name] ?? "handle"]: step.out};
       if (step.note) body.note = step.note;
       if (fills) {
@@ -218,6 +256,17 @@ export default function Builder() {
       return body;
     }
 
+    // a0, a1, ... -- the bundled scenarios' own convention. The next *free* ordinal,
+    // not the count: deleting a middle step would otherwise reissue an id still in use,
+    // and `repeat` resolves its target by id with no duplicate check in loadScenario.
+    function nextId(L) {
+      const used = new Set((lanes[L] ?? []).map((s) => s.id));
+      for (let n = 0; ; n++) {
+        const id = L.toLowerCase() + n;
+        if (!used.has(id)) return id;
+      }
+    }
+
     const shown = calls.filter((c) => c.name.toLowerCase().includes(filter.toLowerCase()));
     const call = calls.find((c) => c.name === selected) ?? null;
 
@@ -226,6 +275,12 @@ export default function Builder() {
     const params = (call?.params ?? []).filter((p) => (p.name !== "store_as") && (p.name !== "fill"));
     const stores = (call?.params ?? []).some((p) => p.name === "store_as");
     const fills  = (call?.params ?? []).some((p) => p.name === "fill");
+    // pace needs a flow handle to read a grain rate from *and* a resolved index to aim
+    // at (engine.cpp:1062-1077). On any other call it loads fine and fails mid-run, so
+    // it is not offered. delay_before_ms and advance_cursor apply to every step
+    const names  = (call?.params ?? []).map((p) => p.name);
+    const pacable = names.includes("index") &&
+                    (names.includes("writer") || names.includes("reader"));
     const timing = step.timing ?? "none"; 
 
     return (
@@ -268,48 +323,58 @@ export default function Builder() {
               </tbody>
             </table>
             <div style={{ marginTop: "0.75rem" }}>
-              <label style={labelStyle}>id{" "}
+              <label style={labelStyle} title={stepHelp.id}>id{" "}
                 <input value={step.id ?? ""} onChange={(e) => setField("id", e.target.value)}
+                       placeholder={nextId(lane)}
                        style={{ ...inputStyle, width: "6rem" }} /></label>
               {stores && (
-                <label style={labelStyle}>out ({outKinds[call.name] ?? "handle"}){" "}
+                <label style={labelStyle} title={stepHelp.out}>out ({outKinds[call.name] ?? "handle"}){" "}
                 <input value={step.out ?? ""} onChange={(e) => setField("out", e.target.value)}
                        style={{ ...inputStyle, width: "6rem" }} /></label>)}
-              <label style={labelStyle}>note{" "}
+              <label style={labelStyle} title={stepHelp.note}>note{" "}
                 <input value={step.note ?? ""} onChange={(e) => setField("note", e.target.value)}
                        style={{ ...inputStyle, width: "24rem" }} /></label>
               {fills && (<>
-                <label style={labelStyle}>fill{" "}
+                <label style={labelStyle} title={stepHelp.fill}>fill{" "}
                   <select value={step.fillMode ?? "none"} style={inputStyle}
                           onChange={(e) => setField("fillMode", e.target.value)}>
                     {["none", "const", "ramp"].map((m) => <option key={m} value={m}>{m}</option>)}
                   </select></label>
                   {step.fillMode === "const" &&
-                    <label style={labelStyle}>byte{" "}
+                    <label style={labelStyle} title={stepHelp.byte}>byte{" "}
                       <input value={step.fillByte ?? ""} style={{ ...inputStyle, width: "4rem" }}
                              onChange={(e) => setField("fillByte", e.target.value)} /></label>}
-                  <label style={labelStyle}>stamp{" "}
+                  <label style={labelStyle} title={stepHelp.stamp}>stamp{" "}
                     <input type="checkbox" checked={step.stamp ?? false}
                            onChange={(e) => setField("stamp", e.target.checked)} /></label>
               </>)}
             </div>
             <div style={{ marginTop: "0.5rem" }}>
-              <label style={labelStyle}>timing{" "}
+              <label style={labelStyle} title={stepHelp.timing}>timing{" "}
                 <select value={timing} style={inputStyle}
                         onChange={(e) => setField("timing", e.target.value)}>
-                  {["none", "delay", "pace"].map((t) => <option key={t} value={t}>{t}</option>)}
+                  {(pacable ? ["none", "delay", "pace"] : ["none", "delay"])
+                    .map((t) => <option key={t} value={t}>{t}</option>)}
                 </select></label>
               {timing === "delay" &&
-                <label style={labelStyle}>delay_before_ms{" "}
+                <label style={labelStyle} title={stepHelp.delay_before_ms}>delay_before_ms{" "}
                   <input value={step.delay ?? ""} style={{ ...inputStyle, width: "6rem" }}
                          onChange={(e) => setField("delay", e.target.value)} /></label>}
               {timing === "pace" && ["offset_ms", "jitter_ms"].map((k) =>
-                <label key={k} style={labelStyle}>{k}{" "}
+                <label key={k} style={labelStyle} title={stepHelp[k]}>{k}{" "}
                   <input value={step[k] ?? ""} style={{ ...inputStyle, width: "5rem" }}
                          onChange={(e) => setField(k, e.target.value)} /></label>)}
-              <label style={labelStyle}>advance_cursor{" "}
+              <label style={labelStyle} title={stepHelp.advance_cursor}>advance_cursor{" "}
                 <input value={step.advance ?? ""} style={{ ...inputStyle, width: "5rem" }}
                        onChange={(e) => setField("advance", e.target.value)} /></label>
+            </div>
+            <div style={{ marginTop: "0.5rem" }}>
+              <label style={labelStyle} title={stepHelp.lane}>lane{" "}
+                <select value={lane} onChange={(e) => setLane(e.target.value)} style={inputStyle}>
+                  {Array.from({ length: state.lane_pool ?? 1 }, (_, i) => laneName(i))
+                        .map((L) => <option key={L} value={L}>{L}</option>)}
+                </select></label>
+              <button type="button" onClick={addStep} style={chipStyle(true)}>add step</button>
             </div>
             <pre style={{ ...monoStyle, background: "#111", padding: "0.75rem",
                           borderRadius: "4px", overflowX: "auto" }}>
@@ -317,6 +382,20 @@ export default function Builder() {
             </pre>    
           </>
         )}
+        <div style={{ marginTop: "1rem"}}>
+          {Object.keys(lanes).map((L) => (
+            <div key={L} style={{ marginBottom: "0.5rem" }}>
+              <div style={{ ...monoStyle, color: "#888" }}>lane {L} - {lanes[L].length} steps</div>
+              {lanes[L].map((s, i) => (
+                <div key={i} style={{ ...monoStyle, padding: "0.15rem 0" }}>
+                  <button type="button" style={chipStyle(false)}
+                          onClick={() => removeStep(L, i)}>x</button>
+                  {" "}{s.id || i}{" "}{s.call}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
       </section>
     );
 }
