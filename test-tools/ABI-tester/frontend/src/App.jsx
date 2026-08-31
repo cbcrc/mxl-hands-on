@@ -9,7 +9,7 @@ const API = "";
 
 // -- Shared styles -------------------------------------------------
 
-const pageStyle = { width: "100%", maxWidth: "1400px" };
+const pageStyle = { width: "100%", maxWidth: "1400px", minWidth: 0 };
 
 const headerStyle = {
   display: "flex",

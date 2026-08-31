@@ -125,6 +125,14 @@ export default function Builder() {
       setLanes((prev) => ({ ...prev, [lane]: [ ...(prev[lane] ?? []), buildStep()] }));
     const removeStep = (L, i) =>
       setLanes((prev) => ({ ...prev, [L]: prev[L].filter((_, n) => n !== i) }));
+    const moveStep = (L, i, d) => setLanes((prev) => {
+      const j = i + d;
+      if ((j < 0) || (j >= prev[L].length)) return prev;    // same object: React bails out
+      const list = [...prev[L]];
+      [list[i], list[j]] = [list[j], list[i]];
+      return { ...prev, [L]: list };
+    });
+    const [description, setDescription] = useState("");
 
     // Every call has its own arguments. Without this, selecting mxlCreateFlowReader
     // after mxlCreateFlowWriter silently carries the old flow_def along.
@@ -154,15 +162,35 @@ export default function Builder() {
                          style={{ ...inputStyle, width: "28rem" }} />;
       const kind = handleKinds[p.name];
       if (p.type === "handle" && kind) {
-        const names = Object.keys(handles).filter((n) => handles[n].kind === kind);
+        const live = Object.keys(handles).filter((n) => handles[n].kind === kind);
+        // Handles an earlier step in this lane promises but has not created yet. The
+        // registry is runtime state; a scenario is authored against the future.
+        // outKinds speaks the same vocabulary as the input param names, which is what
+        // makes this one comparison rather than a second map.
+        const promised = (lanes[lane] ?? [])
+          .filter((s) => (outKinds[s.call] === p.name) && s.out)
+          .map((s) => Object.values(s.out)[0])
+          .filter((n) => !live.includes(n));
+        const names = [...live, ...promised];
         return (
           <select value={v ?? ""} onChange={(e) => setArg(p.name, e.target.value)}
                   style={{ ...inputStyle, width: "14rem" }}>
             <option value="">-- {kind} --</option>
-            {names.map((n) => <option key={n} value={n}>{n}</option>)}
+            {live.map((n) => <option key={n} value={n}>{n}</option>)}
+            {promised.map((n) => <option key={n} value={n}>{n} (pending)</option>)}
             {v && !names.includes(v) && <option value={v}>{v} (gone)</option>}
           </select>
         )
+      }
+      if (p.name === "domain") {
+        const aliases = Object.keys(state.domains ?? {});
+        return (
+          <select value={v ?? ""} onChange={(e) => setArg(p.name, e.target.value)}
+                  style={{ ...inputStyle, width: "14rem"}}>
+            <option value="">-- default --</option>
+            {aliases.map((a) =>
+              <option key={a} value={a} title={state.domains[a]}>{a}</option>)}
+          </select>)
       }
       return <input value={v ?? ""} onChange={(e) => setArg(p.name, e.target.value)}
                     style={{ ...inputStyle, width: "14rem"}} />;
@@ -267,6 +295,19 @@ export default function Builder() {
       }
     }
 
+    // Empty lanes are dropped: loadScenario empties every pool lane the document does
+    // not name (engine.cpp:889), so an explicit "C": [] and an absent C mean the same
+    // thing to the engine -- but the file reads better without it.
+    function buildScenario() {
+      const doc = {};
+      if (description) doc.description = description;
+      doc.lanes = {};
+      for (const [L, steps] of Object.entries(lanes)) {
+        if (steps.length > 0) doc.lanes[L] = steps;
+      }
+      return doc;
+    }
+
     const shown = calls.filter((c) => c.name.toLowerCase().includes(filter.toLowerCase()));
     const call = calls.find((c) => c.name === selected) ?? null;
 
@@ -301,6 +342,7 @@ export default function Builder() {
             <div style={{ ...monoStyle, color: "#888", marginBottom: "0.5rem" }}>
               {call.header} - {call.description}
             </div>
+            <div style={{ overflowX: "auto" }}>
             <table style={tableStyle}>
               <thead>
                 <tr><th style={cellStyle}>param</th><th style={cellStyle}>type</th>
@@ -322,6 +364,7 @@ export default function Builder() {
                 )}
               </tbody>
             </table>
+            </div>
             <div style={{ marginTop: "0.75rem" }}>
               <label style={labelStyle} title={stepHelp.id}>id{" "}
                 <input value={step.id ?? ""} onChange={(e) => setField("id", e.target.value)}
@@ -390,11 +433,25 @@ export default function Builder() {
                 <div key={i} style={{ ...monoStyle, padding: "0.15rem 0" }}>
                   <button type="button" style={chipStyle(false)}
                           onClick={() => removeStep(L, i)}>x</button>
+                  <button type="button" style={chipStyle(false)}
+                          onClick={() => moveStep(L, i, -1)}>{"\u25b2"}</button>
+                  <button type="button" style={chipStyle(false)}
+                          onClick={() => moveStep(L, i, +1)}>{"\u25bc"}</button>
                   {" "}{s.id || i}{" "}{s.call}
                 </div>
               ))}
             </div>
           ))}
+        </div>
+        <div style={{ marginTop: "1rem" }}>
+          <label style={labelStyle} title="Free text. The engine stores it and hands it back, but never reads it.">
+            description{" "}
+            <input value={description} onChange={(e) => setDescription(e.target.value)}
+                   style={{ ...inputStyle, width: "40rem" }} /></label>
+          <pre style={{ ...monoStyle, background: "#111", padding: "0.75rem",
+                        borderRadius: "4px", overflowX: "auto", maxHeight: "24rem" }}>
+            {JSON.stringify(buildScenario(), null, 2)}
+          </pre>
         </div>
       </section>
     );
