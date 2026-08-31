@@ -13,6 +13,19 @@ const inputStyle = { ...monoStyle, padding: "0.2rem" };
 const handleKinds = { instance: "instance", writer: "flow_writer",
                       reader: "flow_reader", group: "sync_group", grain: "grain" };
 
+const labelStyle = { ...monoStyle, color: "#888", marginRight: "1rem" };
+
+// "out": {"grain": "g"} -- the key names the kind and is documentation only
+// (engine.cpp:716); the value is the registry name every creating adapter reads as
+// "store_as". A wrong key here is harmless; a wrong *value* is a handle nobody finds.
+const outKinds = {
+  mxlCreateInstance: "instance", mxlCreateFlowWriter: "writer",
+  mxlCreateFlowReader: "reader", mxlCreateFlowSynchronizationGroup: "group",
+  mxlFlowWriterOpenGrain: "grain", mxlFlowReaderGetGrain: "grain",
+  mxlFlowReaderGetGrainSlice: "grain", mxlFlowReaderGetGrainNonBlocking: "grain",
+  mxlFlowReaderGetGrainSliceNonBlocking: "grain",
+};
+
 // setCursor and repeat are lane pseudo-steps, deliberately absent from /abi-calls so the
 // catalog stays exactly 42 and diffable against `nm -D`. The builder still has to offer
 // them, so their params are spelled here in the catalog's own shape -- which keeps the
@@ -72,10 +85,12 @@ export default function Builder() {
     const [filter, setFilter] = useState("");
     const [selected, setSelected] = useState(null);
     const [args, setArgs] = useState({});
+    const [step, setStep] = useState({});
+    const setField = (k, v) => setStep((prev) => ({ ...prev, [k]: v }));
 
     // Every call has its own arguments. Without this, selecting mxlCreateFlowReader
     // after mxlCreateFlowWriter silently carries the old flow_def along.
-    useEffect(() => { setArgs({}); }, [selected]);
+    useEffect(() => { setArgs({}); setStep({}); }, [selected]);
 
     // Immutable update. React compares state by identity, so mutating `args` and
     // calling setArgs(args) would re-render nothing. Python: {**prev, name: value}.
@@ -154,7 +169,7 @@ export default function Builder() {
     // rational must be real numbers: argRational test is_number_integer().
     function buildArgs() {
       const out = {};
-      for (const p of call.params) {
+      for (const p of params) {
         const v = args[p.name];
         if (p.type === "bool") { if (v) out[p.name] = true; continue; }
         if (p.type === "rational") {
@@ -183,8 +198,35 @@ export default function Builder() {
       return out;
     }
 
+    function buildStep() {
+      const body = { call: call.name, args: buildArgs() };
+      if (step.id) body.id = step.id;
+      if (stores && step.out) body.out = { [outKinds[call.name] ?? "handle"]: step.out};
+      if (step.note) body.note = step.note;
+      if (fills) {
+        body.fill = { mode: step.fillMode ?? "none"};
+        if (body.fill.mode === "const") body.fill.byte = Number(step.fillByte ?? 0);
+        if (step.stamp) body.fill.stamp = true;
+      }
+      if ((timing === "delay") && step.delay) body.delay_before_ms = Number(step.delay);
+      if (timing === "pace") {
+        body.pace = {};
+        if (step.offset_ms) body.pace.offset_ms = Number(step.offset_ms);
+        if (step.jitter_ms) body.pace.jitter_ms = Number(step.jitter_ms);
+        }
+      if (step.advance) body.advance_cursor = Number(step.advance);
+      return body;
+    }
+
     const shown = calls.filter((c) => c.name.toLowerCase().includes(filter.toLowerCase()));
     const call = calls.find((c) => c.name === selected) ?? null;
+
+    // store_as and fill are catalog params but not step args: fill inside args is read
+    // as an index expression by resolveArgs, and store_as is spelled "out" in a step.
+    const params = (call?.params ?? []).filter((p) => (p.name !== "store_as") && (p.name !== "fill"));
+    const stores = (call?.params ?? []).some((p) => p.name === "store_as");
+    const fills  = (call?.params ?? []).some((p) => p.name === "fill");
+    const timing = step.timing ?? "none"; 
 
     return (
       <section style={sectionStyle}>
@@ -211,7 +253,7 @@ export default function Builder() {
                     <th style={cellStyle}>value</th></tr>
               </thead>
               <tbody>
-                {call.params.map((p) => (
+                {params.map((p) => (
                   <tr key={p.name}>
                     <td style={{ ...cellStyle, ...monoStyle }}>{p.name}</td>
                     <td style={{ ...cellStyle, ...monoStyle }}>{p.type}</td>
@@ -220,14 +262,58 @@ export default function Builder() {
                     <td style={cellStyle}>{field(p)}</td>
                   </tr>
                 ))}
-                {call.params.length === 0 && (
+                {params.length === 0 && (
                   <tr><td style={cellStyle} colSpan={5}>no arguments</td></tr>
                 )}
               </tbody>
             </table>
+            <div style={{ marginTop: "0.75rem" }}>
+              <label style={labelStyle}>id{" "}
+                <input value={step.id ?? ""} onChange={(e) => setField("id", e.target.value)}
+                       style={{ ...inputStyle, width: "6rem" }} /></label>
+              {stores && (
+                <label style={labelStyle}>out ({outKinds[call.name] ?? "handle"}){" "}
+                <input value={step.out ?? ""} onChange={(e) => setField("out", e.target.value)}
+                       style={{ ...inputStyle, width: "6rem" }} /></label>)}
+              <label style={labelStyle}>note{" "}
+                <input value={step.note ?? ""} onChange={(e) => setField("note", e.target.value)}
+                       style={{ ...inputStyle, width: "24rem" }} /></label>
+              {fills && (<>
+                <label style={labelStyle}>fill{" "}
+                  <select value={step.fillMode ?? "none"} style={inputStyle}
+                          onChange={(e) => setField("fillMode", e.target.value)}>
+                    {["none", "const", "ramp"].map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select></label>
+                  {step.fillMode === "const" &&
+                    <label style={labelStyle}>byte{" "}
+                      <input value={step.fillByte ?? ""} style={{ ...inputStyle, width: "4rem" }}
+                             onChange={(e) => setField("fillByte", e.target.value)} /></label>}
+                  <label style={labelStyle}>stamp{" "}
+                    <input type="checkbox" checked={step.stamp ?? false}
+                           onChange={(e) => setField("stamp", e.target.checked)} /></label>
+              </>)}
+            </div>
+            <div style={{ marginTop: "0.5rem" }}>
+              <label style={labelStyle}>timing{" "}
+                <select value={timing} style={inputStyle}
+                        onChange={(e) => setField("timing", e.target.value)}>
+                  {["none", "delay", "pace"].map((t) => <option key={t} value={t}>{t}</option>)}
+                </select></label>
+              {timing === "delay" &&
+                <label style={labelStyle}>delay_before_ms{" "}
+                  <input value={step.delay ?? ""} style={{ ...inputStyle, width: "6rem" }}
+                         onChange={(e) => setField("delay", e.target.value)} /></label>}
+              {timing === "pace" && ["offset_ms", "jitter_ms"].map((k) =>
+                <label key={k} style={labelStyle}>{k}{" "}
+                  <input value={step[k] ?? ""} style={{ ...inputStyle, width: "5rem" }}
+                         onChange={(e) => setField(k, e.target.value)} /></label>)}
+              <label style={labelStyle}>advance_cursor{" "}
+                <input value={step.advance ?? ""} style={{ ...inputStyle, width: "5rem" }}
+                       onChange={(e) => setField("advance", e.target.value)} /></label>
+            </div>
             <pre style={{ ...monoStyle, background: "#111", padding: "0.75rem",
                           borderRadius: "4px", overflowX: "auto" }}>
-              {JSON.stringify({ call: call.name, args: buildArgs() }, null, 2)}
+              {JSON.stringify(buildStep(), null, 2)}
             </pre>    
           </>
         )}
