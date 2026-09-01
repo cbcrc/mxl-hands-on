@@ -49,6 +49,7 @@ bool validScenarioName(std::string const&name, std::string& error)
     if (name.empty() || (name.size() > 64))
     {
         error = "scenario name must be 1 to 64 characters";
+        return false;
     }
 
     for (char const c : name)

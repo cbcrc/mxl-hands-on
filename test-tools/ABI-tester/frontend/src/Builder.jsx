@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
 // SPDX-License-Identifier: Apache-2.0
-import { useState, useEffect } from "react";
+import { useState, useEffect, } from "react";
 import { sectionStyle, tableStyle, cellStyle, chipStyle, monoStyle, kOk, kBad } from "./styles";
 
 const API = "";
@@ -110,6 +110,38 @@ function useServerState(pollMs = 1000) {
   return state;
 }
 
+// One fetch, two callers: the mount effect and (in 14-4d-ii) the save button.
+// State-free and at module scope, so each caller owns its own setState -- the
+// effect needs an `alive` guard against a component unmounted mid-flight, the
+// button does not.
+async function fetchScenarioNames() {
+  const res = await fetch(API + "/scenarios");
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return await res.json();  
+}
+
+// The list changes only when we save, so it is fetched once and re-fetched by
+// hand -- no poll.
+function useScenarioList() {
+  const [names, setNames] = useState([]);
+  const reload = async () => {
+    try { setNames(await fetchScenarioNames()); }
+    catch { /* the console's own poll already reports a dead backend */ }
+  };
+  useEffect(() => {
+    let alive = true;
+    async function load() {
+      try {
+        const list = await fetchScenarioNames();
+        if (alive) setNames(list);
+      } catch { /* same */ }
+    }
+    load();
+    return () => { alive = false; };
+  }, []);
+  return { names, reload };
+}
+
 export default function Builder() {
     const { calls, catalogError } = useCatalog();
     const state = useServerState();
@@ -133,10 +165,8 @@ export default function Builder() {
       return { ...prev, [L]: list };
     });
     const [description, setDescription] = useState("");
-
-    // Every call has its own arguments. Without this, selecting mxlCreateFlowReader
-    // after mxlCreateFlowWriter silently carries the old flow_def along.
-    useEffect(() => { setArgs({}); setStep({}); }, [selected]);
+    const { names: scenarioNames, reload: reloadScenarios } = useScenarioList();
+    const [scenarioName, setScenarioName] = useState("");
 
     // Immutable update. React compares state by identity, so mutating `args` and
     // calling setArgs(args) would re-render nothing. Python: {**prev, name: value}.
@@ -300,6 +330,7 @@ export default function Builder() {
     // thing to the engine -- but the file reads better without it.
     function buildScenario() {
       const doc = {};
+      if (scenarioName) doc.name = scenarioName;
       if (description) doc.description = description;
       doc.lanes = {};
       for (const [L, steps] of Object.entries(lanes)) {
@@ -328,6 +359,36 @@ export default function Builder() {
           return false;
       }
       
+    }
+
+    async function openScenario(name) {
+      if (!name) return;
+      try {
+        const res = await fetch(API + "/scenarios/" + encodeURIComponent(name));
+        const doc = await res.json();
+        if (!res.ok) {
+          setMsg({ text: doc.error ?? ("HTTP " + res.status), ok: false});
+          return;
+        }
+        setLanes(doc.lanes ?? {});
+        setDescription(doc.description ?? "");
+        setScenarioName(doc.name ?? name);
+        setMsg({ text: `opened ${name} -- not loaded into the engine`, ok: true});
+      } catch (e) {
+        setMsg({ text: String(e), ok: false});
+      }
+    }
+
+    // Overwriting is a real loss -- the scenarios dir is the only copy of anything
+    // built here that has not been committed -- so an existing name is confirmed
+    // and the button says so before you press it.
+    async function saveScenario() {
+      if (!scenarioName) { setMsg({ text: "name the scenario first", ok: false }); return; }
+      if (scenarioNames.includes(scenarioName) &&
+          !window.confirm(`Overwrite ${scenarioName}.json?`)) return;
+      const ok = await post("/scenarios/" + encodeURIComponent(scenarioName),
+                            buildScenario(), `saved as ${scenarioName}.json`);
+      if (ok) reloadScenarios();
     }
 
     async function loadIntoEngine() {
@@ -367,9 +428,14 @@ export default function Builder() {
                placeholder={`filter ${calls.length} calls`}
                style={{ ...monoStyle, marginBottom: "0.5rem", padding: "0.3rem", width: "16rem" }} />
         <div style={{ marginBottom: "0.75rem" }}>
+          {/* Every call has its own arguments. Without the reset, selecting
+              mxlCreateFlowReader after mxlCreateFlowWriter silently carries the
+              old flow_def along. Done here rather than in an effect on [selected]:
+              an effect renders once with the previous call's from state first. */}
           {shown.map((c) => (
             <button type="button" key={c.name} style={chipStyle(c.name === selected)}
-                    onClick={() => setSelected(c.name)}>{c.name}</button>
+                    onClick={() => { setSelected(c.name); setArgs({}); setStep({}); }}>
+              {c.name}</button>
           ))}    
         </div>
         {call && (
@@ -477,6 +543,23 @@ export default function Builder() {
               ))}
             </div>
           ))}
+        </div>
+        <div style={{ marginTop: "1rem" }}>
+          <label style={labelStyle}
+                 title="Read a file from the scenarios directory into the builder. It does not load it into the engine.">
+            open{" "}
+            <select value="" style={inputStyle}
+                    onChange={(e) => openScenario(e.target.value)}>
+              <option value="">-- {scenarioNames.length} on disk --</option>
+              {scenarioNames.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select></label>
+            <label style={labelStyle}
+                   title="Saved as <name>.json in the scenarios directory. Letters, digits, '-' and '_' only; the extension is added for you.">
+              name{" "}
+              <input value={scenarioName} onChange={(e) => setScenarioName(e.target.value)}
+                     style={{ ...inputStyle, width: "14rem" }} /></label>
+              <button type="button" style={chipStyle(true)} onClick={saveScenario}>
+                {scenarioNames.includes(scenarioName) ? "overwrite" : "save"}</button>
         </div>
         <div style={{ marginTop: "1rem" }}>
           <label style={labelStyle} title="Free text. The engine stores it and hands it back, but never reads it.">
