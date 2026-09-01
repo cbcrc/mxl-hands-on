@@ -21,10 +21,19 @@ const labelStyle = { ...monoStyle, color: "#888", marginRight: "1rem" };
 const outKinds = {
   mxlCreateInstance: "instance", mxlCreateFlowWriter: "writer",
   mxlCreateFlowReader: "reader", mxlCreateFlowSynchronizationGroup: "group",
-  mxlFlowWriterOpenGrain: "grain", mxlFlowReaderGetGrain: "grain",
-  mxlFlowReaderGetGrainSlice: "grain", mxlFlowReaderGetGrainNonBlocking: "grain",
-  mxlFlowReaderGetGrainSliceNonBlocking: "grain",
+  mxlFlowWriterOpenGrain: "grain",
 };
+
+// Only mxlFlowWriterCommitGrain and mxlFlowWriterCancelGrain take a `grain`
+// (calls.cpp:974, 1056), and both are writer-side -- so a grain stored by a reader
+// step can never be consumed by a later step, and offering it puts a handle in the
+// commit dropdown that fails at the ABI. The catalog keeps store_as, because the ABI
+// accepts it and /call can still use it: the builder is narrower than the engine,
+// exactly as it already is on `index`.
+const storesNothingUsable = new Set([
+  "mxlFlowReaderGetGrain", "mxlFlowReaderGetGrainSlice",
+  "mxlFlowReaderGetGrainNonBlocking", "mxlFlowReaderGetGrainSliceNonBlocking",
+]);
 
 // The args table gets its description from /abi-calls. Step-level fields appear in no
 // catalog, so their documentation lives here -- keyed by the wire name, so the tooltip
@@ -71,6 +80,17 @@ const pseudoCalls = [
 
 const laneName = (n) => { let s = ""; for (let i = n; i >= 0; i = Math.floor(i / 26) - 1)
                             s = String.fromCharCode(65 + (i % 26)) + s; return s; };
+
+// The file on disk is always alphabetical -- nlohmann's json is std::map-backed and
+// sorts on dump(2) -- while JSON.stringify preserves insertion order, so the preview
+// and the saved file disagreed on ordering and on nothing else. Display only: the
+// document we POST is untouched.
+// Objects only. An array here is a lane, and its order *is* the scenario.
+function sortKeys(v) {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if ((v === null) || (typeof v !== "object")) return v;
+  return Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys(v[k])]));
+}
 
 function useCatalog() {
     const [calls, setCalls] = useState([]);
@@ -197,10 +217,10 @@ export default function Builder() {
         // registry is runtime state; a scenario is authored against the future.
         // outKinds speaks the same vocabulary as the input param names, which is what
         // makes this one comparison rather than a second map.
-        const promised = (lanes[lane] ?? [])
+        const promised = [...new Set((lanes[lane] ?? [])
           .filter((s) => (outKinds[s.call] === p.name) && s.out)
           .map((s) => Object.values(s.out)[0])
-          .filter((n) => !live.includes(n));
+          .filter((n) => !live.includes(n)))];
         const names = [...live, ...promised];
         return (
           <select value={v ?? ""} onChange={(e) => setArg(p.name, e.target.value)}
@@ -410,7 +430,8 @@ export default function Builder() {
     // store_as and fill are catalog params but not step args: fill inside args is read
     // as an index expression by resolveArgs, and store_as is spelled "out" in a step.
     const params = (call?.params ?? []).filter((p) => (p.name !== "store_as") && (p.name !== "fill"));
-    const stores = (call?.params ?? []).some((p) => p.name === "store_as");
+    const stores = (call?.params ?? []).some((p) => p.name === "store_as") &&
+                    !storesNothingUsable.has(call.name);
     const fills  = (call?.params ?? []).some((p) => p.name === "fill");
     // pace needs a flow handle to read a grain rate from *and* a resolved index to aim
     // at (engine.cpp:1062-1077). On any other call it loads fine and fails mid-run, so
@@ -522,7 +543,7 @@ export default function Builder() {
             </div>
             <pre style={{ ...monoStyle, background: "#111", padding: "0.75rem",
                           borderRadius: "4px", overflowX: "auto" }}>
-              {JSON.stringify(buildStep(), null, 2)}
+              {JSON.stringify(sortKeys(buildStep()), null, 2)}
             </pre>    
           </>
         )}
@@ -572,7 +593,7 @@ export default function Builder() {
                                    color: msg.ok ? kOk : kBad }}>{msg.text}</span>}
           <pre style={{ ...monoStyle, background: "#111", padding: "0.75rem",
                         borderRadius: "4px", overflowX: "auto", maxHeight: "24rem" }}>
-            {JSON.stringify(buildScenario(), null, 2)}
+            {JSON.stringify(sortKeys(buildScenario()), null, 2)}
           </pre>
         </div>
       </section>
