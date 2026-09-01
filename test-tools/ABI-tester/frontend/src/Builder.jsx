@@ -112,24 +112,6 @@ function useCatalog() {
     return { calls, catalogError };
 }
 
-function useServerState(pollMs = 1000) {
-  const [state, setState] = useState({});
-  useEffect(() => {
-    let alive = true;
-    async function poll() {
-      try {
-        const res = await fetch(API + "/state");
-        const body = await res.json();
-        if (alive && body?.handles) setState(body);    // the whole body, not just handles
-      } catch { /* nothing to say: the console's own poll already reports a dead backend */ }
-    }
-    poll();
-    const id = setInterval(poll, pollMs);
-    return () => { alive = false; clearInterval(id); };
-  }, [pollMs]);
-  return state;
-}
-
 // One fetch, two callers: the mount effect and (in 14-4d-ii) the save button.
 // State-free and at module scope, so each caller owns its own setState -- the
 // effect needs an `alive` guard against a component unmounted mid-flight, the
@@ -162,9 +144,8 @@ function useScenarioList() {
   return { names, reload };
 }
 
-export default function Builder() {
+export default function Builder({ state }) {
     const { calls, catalogError } = useCatalog();
-    const state = useServerState();
     const handles = state.handles ?? {};
     const [filter, setFilter] = useState("");
     const [selected, setSelected] = useState(null);
@@ -422,8 +403,6 @@ export default function Builder() {
                                  + `reset before running`, ok: false});
     }
 
-    const resetEngine = () => post("/reset", undefined, "reset");
-
     const shown = calls.filter((c) => c.name.toLowerCase().includes(filter.toLowerCase()));
     const call = calls.find((c) => c.name === selected) ?? null;
 
@@ -588,7 +567,6 @@ export default function Builder() {
             <input value={description} onChange={(e) => setDescription(e.target.value)}
                    style={{ ...inputStyle, width: "40rem" }} /></label>
             <button type="button" style={chipStyle(true)} onClick={loadIntoEngine}>load</button>
-            <button type="button" style={chipStyle(false)} onClick={resetEngine}>reset</button>
             {msg && <span style={{ ...monoStyle, marginLeft: "0.5rem",
                                    color: msg.ok ? kOk : kBad }}>{msg.text}</span>}
           <pre style={{ ...monoStyle, background: "#111", padding: "0.75rem",

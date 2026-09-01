@@ -4,6 +4,8 @@ import { useState, useEffect, useLayoutEffect, useRef } from "react";
 import { sectionStyle, tableStyle, cellStyle, chipStyle, monoStyle,
   kOk, kBad, kWarn } from "./styles";
 import Builder from "./Builder";
+import { useServerState } from "./serverState";
+import Transport from "./Transport";
 
 const API = "";
 
@@ -135,6 +137,7 @@ function EventLine({ e }) {
 
 export default function App() {
   const { events, logError } = useLog();
+  const { state, apply } = useServerState();
   const [domains, setDomains] = useState([]);
   const [error, setError] = useState(null);
   const consoleRef = useRef(null);
@@ -206,7 +209,8 @@ export default function App() {
           </table>
         )}
       </section>
-      <Builder />
+      <Builder state={state} />
+      <Transport state={state} apply={apply} />
       <section style={sectionStyle}>
         <h2 style={{ marginBottom: "1rem" }}>Console</h2>
         {logError && <div style={{ color: kBad, marginBottom: "0.5rem" }}>{logError}</div>}
