@@ -6,6 +6,7 @@ import { sectionStyle, tableStyle, cellStyle, chipStyle, monoStyle,
 import Builder from "./Builder";
 import { useServerState } from "./serverState";
 import Transport from "./Transport";
+import Timing from "./Timing";
 
 const API = "";
 
@@ -211,6 +212,7 @@ export default function App() {
       </section>
       <Builder state={state} />
       <Transport state={state} apply={apply} />
+      <Timing events={events} />
       <section style={sectionStyle}>
         <h2 style={{ marginBottom: "1rem" }}>Console</h2>
         {logError && <div style={{ color: kBad, marginBottom: "0.5rem" }}>{logError}</div>}

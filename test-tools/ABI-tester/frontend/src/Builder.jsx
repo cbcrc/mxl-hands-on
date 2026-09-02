@@ -393,14 +393,25 @@ export default function Builder({ state }) {
     }
 
     async function loadIntoEngine() {
-      const ok = await post("/scenario", buildScenario(), "loaded");
+      const doc = buildScenario();
+
+      // An empty draft is a legal scenario, not an error: loadScenario empties every
+      // pool lane the document does not name (engine.cpp:891), so this IS the unload
+      // path. But the draft also starts empty on every page reload, so pressing load
+      // after F5 would wipe the engine and report "loaded". Only you know which.
+      const empty = Object.keys(doc.lanes).length === 0;
+      if (empty && !window.confirm("The draft is empty. Unload the engine's scenario?")) return;
+
+      const verb = empty ? "unloaded" : "loaded";
+      const ok = await post("/scenario", doc, verb);
       if (!ok) return;
+
       // POST /scenario clears _running but NOT the registry. M13.5: running a second
       // time with handles still in place refuses the create steps as "name already in
       // use" and runs the rest on the old ones -- 87 % green and not a measurement.
       const held = Object.keys(handles).length;
-      if (held > 0) setMsg({ text: `loaded -- ${held} handle(s) still in the registry; `
-                                 + `reset before running`, ok: false});
+      if (held > 0) setMsg({ text: `${verb} -- ${held} handle(s) still in the registry; `
+                                  + `reset to release them`, ok: false });
     }
 
     const shown = calls.filter((c) => c.name.toLowerCase().includes(filter.toLowerCase()));
