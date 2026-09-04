@@ -452,5 +452,20 @@
 
   <p style="margin-top:2rem"><a class="back" href="/">← back to the tester</a></p>
 </main>
+
+<script>
+  // "back to the tester" closes this tab when the app opened it (target="engine-model"
+  // leaves window.opener set), so a round trip does not leave a second copy of the app
+  // behind. Opened directly -- bookmark, refresh, someone pasting the URL -- there is no
+  // opener, close() would be refused, and the href navigates instead. Deliberately never
+  // preventDefault: if closing is blocked for any reason the link must still work.
+  for (const a of document.querySelectorAll("a.back")) {
+    a.addEventListener("click", function () {
+      if (window.opener && !window.opener.closed) {
+        try { window.close(); } catch (e) { /* falls through to the href */ }
+      }
+    });
+  }
+</script>
 </body>
 </html>

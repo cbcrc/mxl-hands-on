@@ -193,7 +193,7 @@ export default function App() {
           <h1>MXL ABI Tester</h1>
           <div style={subtitleStyle}>ALL 42 MXL C ABI calls, queued across two lanes.</div>
         </div>
-        <a href="/engine-model.html" target="_blank" rel="noreferrer" style={docLinkStyle}>
+        <a href="/engine-model.html" target="engine-model" style={docLinkStyle}>
           How the engine works ↗
         </a>
       </header>
