@@ -162,9 +162,10 @@
     <!-- arrows -->
     <line x1="314" y1="282" x2="350" y2="282" stroke="#777" stroke-width="1.5" marker-end="url(#ar)"/>
     <line x1="670" y1="366" x2="740" y2="366" stroke="#64b5f6" stroke-width="1.5" marker-end="url(#arb)"/>
-    <path d="M 740 392 L 700 392 L 700 418 L 670 418" fill="none" stroke="#555"
+    <path d="M 740 424 L 700 424 L 700 440 L 670 440" fill="none" stroke="#555"
           stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#ar)"/>
-    <text x="694" y="410" fill="#777" font-size="10" text-anchor="end">status + out-params</text>
+    <text x="686" y="376" fill="#777" font-size="9">status +</text>
+    <text x="686" y="388" fill="#777" font-size="9">out-params</text>
   </svg>
   </div>
 
@@ -215,7 +216,8 @@
       <!-- lane C -->
       <rect x="12" y="216" width="700" height="60" rx="6" fill="#151515" stroke="#333"/>
       <text x="26" y="240" fill="#e0e0e0" font-size="13" font-weight="600">lane C</text>
-      <text x="26" y="260" fill="#777" font-size="11">no setCursor → cursor unused</text>
+      <text x="26" y="256" fill="#777" font-size="11">no setCursor,</text>
+      <text x="26" y="270" fill="#777" font-size="11">so cursor unused</text>
       <g>
         <rect x="190" y="228" width="66" height="36" rx="3" fill="#232f23" stroke="#81c784"/><text x="202" y="251" fill="#81c784">c0</text>
         <rect x="264" y="228" width="66" height="36" rx="3" fill="#1c1c1c" stroke="#333"/><text x="276" y="251" fill="#666">c1</text>
@@ -262,13 +264,13 @@
   <svg viewBox="0 0 1040 330" role="img" aria-label="Relative delay drifting against absolute pacing">
     <!-- grid -->
     <g stroke="#333">
-      <line x1="80" y1="40" x2="80" y2="300"/><line x1="240" y1="40" x2="240" y2="300"/>
-      <line x1="400" y1="40" x2="400" y2="300"/><line x1="560" y1="40" x2="560" y2="300"/>
-      <line x1="720" y1="40" x2="720" y2="300"/><line x1="880" y1="40" x2="880" y2="300"/>
+      <line x1="200" y1="40" x2="200" y2="300"/><line x1="360" y1="40" x2="360" y2="300"/>
+      <line x1="520" y1="40" x2="520" y2="300"/><line x1="680" y1="40" x2="680" y2="300"/>
+      <line x1="840" y1="40" x2="840" y2="300"/><line x1="1000" y1="40" x2="1000" y2="300"/>
     </g>
     <g fill="#777" font-size="11" font-family="ui-monospace,Menlo,monospace" text-anchor="middle">
-      <text x="80" y="32">OTS(n)</text><text x="240" y="32">OTS(n+1)</text><text x="400" y="32">OTS(n+2)</text>
-      <text x="560" y="32">OTS(n+3)</text><text x="720" y="32">OTS(n+4)</text><text x="880" y="32">OTS(n+5)</text>
+      <text x="200" y="32">OTS(n)</text><text x="360" y="32">OTS(n+1)</text><text x="520" y="32">OTS(n+2)</text>
+      <text x="680" y="32">OTS(n+3)</text><text x="840" y="32">OTS(n+4)</text><text x="1000" y="32">OTS(n+5)</text>
     </g>
     <text x="12" y="16" fill="#888" font-size="11">grain grid, 33.367 ms</text>
 
@@ -277,44 +279,44 @@
     <text x="12" y="104" fill="#888" font-size="11">relative to the</text>
     <text x="12" y="118" fill="#888" font-size="11">previous step</text>
     <g fill="#e57373">
-      <rect x="80" y="70" width="14" height="26" rx="2"/>
-      <rect x="248" y="70" width="14" height="26" rx="2"/>
-      <rect x="424" y="70" width="14" height="26" rx="2"/>
-      <rect x="608" y="70" width="14" height="26" rx="2"/>
-      <rect x="800" y="70" width="14" height="26" rx="2"/>
+      <rect x="200" y="70" width="14" height="26" rx="2"/>
+      <rect x="368" y="70" width="14" height="26" rx="2"/>
+      <rect x="544" y="70" width="14" height="26" rx="2"/>
+      <rect x="728" y="70" width="14" height="26" rx="2"/>
+      <rect x="920" y="70" width="14" height="26" rx="2"/>
     </g>
     <g stroke="#e57373" stroke-width="1" stroke-dasharray="3 3">
-      <line x1="248" y1="96" x2="240" y2="118"/><line x1="424" y1="96" x2="400" y2="118"/>
-      <line x1="608" y1="96" x2="560" y2="118"/><line x1="800" y1="96" x2="720" y2="118"/>
+      <line x1="368" y1="96" x2="360" y2="118"/><line x1="544" y1="96" x2="520" y2="118"/>
+      <line x1="728" y1="96" x2="680" y2="118"/><line x1="920" y1="96" x2="840" y2="118"/>
     </g>
-    <text x="470" y="140" fill="#e57373" font-size="11.5">each step's own overhead is added to the next — the error compounds</text>
+    <text x="520" y="140" fill="#e57373" font-size="11.5">each step's own overhead is added to the next — the error compounds</text>
 
     <!-- absolute -->
     <text x="12" y="200" fill="#81c784" font-size="13" font-weight="600">pace: { }</text>
     <text x="12" y="218" fill="#888" font-size="11">sleeps until this</text>
     <text x="12" y="232" fill="#888" font-size="11">grain's own OTS</text>
     <g fill="#81c784">
-      <rect x="80" y="184" width="14" height="26" rx="2"/>
-      <rect x="240" y="184" width="14" height="26" rx="2"/>
-      <rect x="400" y="184" width="14" height="26" rx="2"/>
-      <rect x="560" y="184" width="14" height="26" rx="2"/>
-      <rect x="720" y="184" width="14" height="26" rx="2"/>
+      <rect x="200" y="184" width="14" height="26" rx="2"/>
+      <rect x="360" y="184" width="14" height="26" rx="2"/>
+      <rect x="520" y="184" width="14" height="26" rx="2"/>
+      <rect x="680" y="184" width="14" height="26" rx="2"/>
+      <rect x="840" y="184" width="14" height="26" rx="2"/>
     </g>
-    <text x="470" y="230" fill="#81c784" font-size="11.5">a late step catches up instead of pushing everything after it</text>
+    <text x="520" y="230" fill="#81c784" font-size="11.5">a late step catches up instead of pushing everything after it</text>
 
     <!-- offset -->
     <text x="12" y="286" fill="#ffb74d" font-size="13" font-weight="600">pace.offset_ms</text>
     <g fill="#ffb74d">
-      <rect x="147" y="270" width="14" height="24" rx="2"/>
-      <rect x="307" y="270" width="14" height="24" rx="2"/>
-      <rect x="467" y="270" width="14" height="24" rx="2"/>
-      <rect x="627" y="270" width="14" height="24" rx="2"/>
-      <rect x="787" y="270" width="14" height="24" rx="2"/>
+      <rect x="267" y="270" width="14" height="24" rx="2"/>
+      <rect x="427" y="270" width="14" height="24" rx="2"/>
+      <rect x="587" y="270" width="14" height="24" rx="2"/>
+      <rect x="747" y="270" width="14" height="24" rx="2"/>
+      <rect x="907" y="270" width="14" height="24" rx="2"/>
     </g>
     <g stroke="#ffb74d" stroke-width="1">
-      <line x1="80" y1="282" x2="145" y2="282" stroke-dasharray="3 2"/>
+      <line x1="200" y1="282" x2="265" y2="282" stroke-dasharray="3 2"/>
     </g>
-    <text x="360" y="316" fill="#ffb74d" font-size="11.5">a constant shift off the grid — this is how a "2 frames late" source is simulated</text>
+    <text x="430" y="316" fill="#ffb74d" font-size="11.5">a constant shift off the grid — this is how a "2 frames late" source is simulated</text>
   </svg>
   </div>
 
@@ -322,7 +324,9 @@
     <code>delay_scale</code> multiplies <code>delay_before_ms</code> <em>only</em> — a paced step
     ignores it entirely. <code>pace</code> and <code>delay_before_ms</code> are mutually exclusive
     on one step. And <code>pace</code> needs a resolved unsigned <code>index</code> plus a handle
-    whose grain rate is known, because it aims at that index's OTS.</div>
+    whose grain rate is known, because it aims at that index's OTS. A step may carry both
+    <code>offset_ms</code> and <code>jitter_ms</code>: the first biases every grain the same way,
+    the second scatters them.</div>
 
   <h2>4 · The four index modes</h2>
   <p>One expression shape, four sources for the number. <code>offset</code> is plain signed
@@ -384,6 +388,8 @@
     <tr><td class="eng">mode / offset</td><td>engine</td><td>An index <em>expression</em>. Flattened to one <code>uint64</code> before the adapter runs; <code>offset</code> is signed and applied last.</td></tr>
     <tr><td class="eng">delay_before_ms</td><td>engine</td><td>Sleep before the step, measured from the previous one. Compounds. Multiplied by the transport's <code>delay_scale</code>.</td></tr>
     <tr><td class="eng">pace</td><td>engine</td><td>Sleep until this grain's own OTS (plus <code>offset_ms</code>, plus optional <code>jitter_ms</code>). Absolute, self-correcting, ignores <code>delay_scale</code>.</td></tr>
+    <tr><td class="eng">pace.offset_ms</td><td>engine</td><td>A constant shift of the pace target off the grid. Positive means this writer publishes late by that much on every grain — how a late source is simulated. The indices, and therefore the OTS, do not move.</td></tr>
+    <tr><td class="eng">pace.jitter_ms</td><td>engine</td><td>A <em>random</em> shift, redrawn per step from a uniform distribution over <code>±jitter_ms</code>. Where <code>offset_ms</code> is a bias, this is spread — it exists to stop many lanes hitting the ring in lockstep. The RNG is one per lane thread, seeded from the lane name, so lanes do not jitter together and a run is reproducible per lane. Must be ≥ 0.<br><strong>The event reports both:</strong> <code>pace.deadline_ns</code> is the unjittered media truth, whose consecutive deltas are exactly one grain, while <code>late_ms</code> measures the wake against the jittered target. Injected error and scheduler error therefore never collapse into one number.</td></tr>
     <tr><td class="eng">advance_cursor</td><td>engine</td><td>Move the lane cursor after the step. Ignored on <code>setCursor</code>.</td></tr>
     <tr><td class="eng">repeat</td><td>engine</td><td>A backward jump within the lane — <code>{to, times}</code>. Runs no ABI call.</td></tr>
     <tr><td class="eng">out / store_as</td><td>engine</td><td>Name the handle a creating call produced. The registry is names; the ABI only ever sees pointers.</td></tr>
