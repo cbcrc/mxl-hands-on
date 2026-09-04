@@ -41,7 +41,7 @@ docker compose -f gst-apps/docker-compose.yml up -d
 
 ```sh
 cd ~/mxl-hands-on
-docker compose -f test-tools/ABI-tester/docker-compose.yml up --build -d
+docker compose -f test-tools/docker-compose.yml up --build -d
 ```
 
 Then open **http://localhost:9607**. Build context is the repository root; the build reads about
@@ -81,8 +81,8 @@ rebuild.
 | `SCENARIO_DIR` | `/app/scenarios` | Where scenarios are listed from and saved to |
 | `FRONTEND_DIST` | `/app/frontend/dist` | Built React app; if absent the server runs API-only |
 | `ABI_TESTER_LANES` | `8` | Lane pool size (`A`..`H`) |
-| `ABI_TESTER_LOG_FILE` | — | Mirror the event log to a file |
-| `ABI_TESTER_LOG_MAX_BYTES` | unlimited | Cap the in-memory log; older events are evicted and `/log` answers `410` with a cursor to re-sync |
+| `ABI_TESTER_LOG_FILE` | — | Mirror every event to an NDJSON file. Unset by default, so nothing is written to disk at all. Compose bind-mounts `ABI-tester/logs` to `/app/logs` and carries a commented-out `ABI_TESTER_LOG_FILE=/app/logs/events.ndjson` — uncomment to keep a run. Appends rather than truncates; a second run of one process writes `events.2.ndjson`, the counter before the extension so `read_json_auto('*.ndjson')` still finds every run |
+| `ABI_TESTER_LOG_MAX_BYTES` | unlimited | Cap the log; older events are evicted and `/log` answers `410` with a cursor to re-sync |
 | `MXL_LOG_LEVEL` | — | The SDK's own spdlog level, e.g. `debug`. Invaluable when the library, not the tool, is the suspect |
 
 The domain the *instances* open is a command argument, not an environment variable:
@@ -128,3 +128,6 @@ cd ../frontend && npm run dev          # Vite on 9707, proxying the API to 9600
 The container runs as **root**, so flows it creates are root-owned in the domain. A container
 killed with `docker stop` leaves its flows behind as *stale* — the state
 `mxlGarbageCollectFlows` exists to clean up, and the tool can call it on itself.
+The same applies to anything it writes into `ABI-tester/logs`: the files are root-owned.
+That directory is committed (with a `.gitignore`) precisely so Docker does not create it
+as root — you own the directory, so you can still delete what the container leaves in it.
