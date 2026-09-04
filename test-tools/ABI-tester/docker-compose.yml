@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
+name: test-tools
+
+volumes:
+  mxl-domain:
+    external: true
+    name: gst-apps_mxl-domain
+
+services:
+  abi-tester:
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: test-tools/ABI-tester/Dockerfile
+    image: abi-tester:latest
+    container_name: abi-tester
+    hostname: abi-tester
+    domainname: local
+    ports:
+      - "9607:9600"   # the C++ backend serves both the API and the React frontend
+    volumes:
+      - type: volume
+        source: mxl-domain
+        target: /mxl-domain
+      # Scenarios saved from the UI land in the working tree, and new ones are
+      # picked up without a rebuild.
+      - type: bind
+        source: ./scenarios
+        target: /app/scenarios
+    environment:
+      - MXL_DOMAIN_ROOT=/mxl-domain
+      - SCENARIO_DIR=/app/scenarios

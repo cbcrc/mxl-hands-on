@@ -23,6 +23,19 @@ const headerStyle = {
 
 const subtitleStyle = { color: "#888", fontSize: "0.9rem" };
 
+// marginLeft auto rather than a spacer div: the header is already a flex row, so the
+// link parks itself on the right without anything else knowing it is there.
+const docLinkStyle = {
+  ...monoStyle,
+  marginLeft: "auto",
+  color: "#81c784",
+  border: "1px solid #333",
+  borderRadius: "4px",
+  padding: "0.4rem 0.7rem",
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+};
+
 
 // -- The log poll ---------------------------------------------------
 
@@ -180,6 +193,9 @@ export default function App() {
           <h1>MXL ABI Tester</h1>
           <div style={subtitleStyle}>ALL 42 MXL C ABI calls, queued across two lanes.</div>
         </div>
+        <a href="/engine-model.html" target="_blank" rel="noreferrer" style={docLinkStyle}>
+          How the engine works ↗
+        </a>
       </header>
       <section style={sectionStyle}>
         <h2 style={{ marginBottom: "1rem" }}>Domains</h2>

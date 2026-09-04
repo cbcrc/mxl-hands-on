@@ -1,10 +1,15 @@
 # MXL under load — what the ABI-tester measured
 
-Findings from the M11.5 load sweep, 2026-08-30. Everything here is measured on this
-machine with the tooling in this directory; the reproduction recipe is at the end.
+Findings from the M11.5 load sweep, 2026-08-30, plus §8 and §9 — a correctness bug in the
+synchronization group and the cost model of a group wait, both found 2026-09-04 while building the
+bundled scenarios. Everything here is measured on this machine with the tooling in this
+directory; the reproduction recipe is at the end.
 
 These are notes for **someone building a real media function on MXL**, not a description
-of the tester. The single most useful item is §1.
+of the tester. The single most useful item is §1 — but read **§8 first if you use
+`mxlFlowSynchronizationGroup`**: a group with more than one member silently stops
+synchronizing after its first successful wait, and §9 for why a wait's `waited_ms` is not
+a latency.
 
 ---
 
@@ -313,6 +318,171 @@ better return of the two — it removes a full-frame pass with no safety trade.
 
 *Not benchmarked here* — this section is a source reading (`gst-mxl-rs` at
 `dmf-mxl/rust/gst-mxl-rs`), not a measurement.
+
+---
+
+## 8. A synchronization group with more than one member stops synchronizing after its first successful wait
+
+**Found 2026-09-04. This is a correctness bug, not a load finding, and it fails in the worst
+possible shape: by returning `MXL_STATUS_OK` immediately.** Nothing in the API surface reports a
+problem, so a consumer built on a multi-member group runs unsynchronized and looks healthy.
+
+### What was measured
+
+Two flows written in real time — 1080p29.97 video and 48 kHz float32 audio, both paced to their
+own OTS. One group holds the video reader only; another holds both. Each group is asked the same
+question four times in a row, `mxlFlowSynchronizationGroupWaitForDataAt(group, now + 300 ms, 2 s)`:
+
+| group | members | wait 1 | wait 2 | wait 3 | wait 4 |
+|---|---|---:|---:|---:|---:|
+| `G1` | video | 283.9 ms | 300.3 ms | 300.3 ms | 300.3 ms |
+| `G2` | video + audio | 310.1 ms | **0.000 ms** | **0.000 ms** | **0.000 ms** |
+
+Every `G2` answer after the first is `MXL_STATUS_OK` in ~0.0003 ms — less time than it takes to
+read one flow's runtime info, so no member was consulted. The single-member group is correct
+indefinitely. (The healthy numbers in that table are dominated by the media grid, not by the
+group; §9 decomposes them, and the group's own cost is ~28 µs.)
+
+Reproduced independently inside a larger scenario: with a group that had completed one successful
+wait, a request for data 300 ms in the future returned in **0.0001 ms**, while the very next step —
+an ordinary head read on one of that group's own readers — reported the newest grain was **68 ms
+old**. Two adjacent log rows that cannot both be true is what exposed it.
+
+### Cause
+
+`lib/internal/src/FlowSynchronizationGroup.cpp:112`, inside the optimisation that promotes the
+slowest source to the front of the list so future waits check it first:
+
+```cpp
+_readers.splice_after(_readers.before_begin(), _readers, current);
+```
+
+`std::forward_list::splice_after(pos, other, it)` moves **the element following `it`** — not
+`*it`. A forward list cannot unlink the element an iterator points at, which is why the API is
+defined that way, so promoting `current` requires the iterator *before* it. As written the call
+moves the wrong member; and when `current` is the **last** member, `std::next(current) == end()`
+and the call is undefined behaviour. Observed effect: the reader list is destroyed and the group
+thereafter behaves as though it were empty.
+
+A one-member group never reaches the statement. The guard above it is
+
+```cpp
+if (sourceDelay > current->maxObservedSourceDelay) {
+    current->maxObservedSourceDelay = sourceDelay;
+    if (current->maxObservedSourceDelay > _readers.begin()->maxObservedSourceDelay) { ...splice... }
+}
+```
+
+and with one member `current == _readers.begin()`, so the inner comparison is a value against
+itself and is always false. With two members it fires as soon as the second member's observed
+delay exceeds the first's — in these runs, on the very first successful wait.
+
+### Impact
+
+- **A multi-member synchronization group is effectively unusable on this SDK version.** The only
+  workaround is to rebuild the group before every wait, which means creating a group and re-adding
+  every reader per frame, and which throws away the `maxObservedSourceDelay` state the feature
+  exists to accumulate. That is a rendezvous rebuilt 30 times a second, not a synchronization group.
+- **Existing consumers are silently affected.** Anything holding one group with several readers
+  across many waits has been unsynchronized since its first wait and has had no way to notice.
+  `gst-apps/flow-aligner` realigns via a sync group and should be checked first.
+- Single-member groups are safe, but a single-member group is just a blocking read with extra steps.
+
+### Workaround, verified
+
+Use a **fresh group per wait**, or one member per group. Measured in the same second, on the same
+two readers: the already-used group returned in 0.0001 ms while a pristine group built from the
+same two readers waited 366.4 ms — correctly, for a video source that had been given a deliberate
+2-frame lag.
+
+### Suggested fix
+
+Track the predecessor iterator while walking the list and splice with that (`splice_after` wants
+the element *before* the one being moved), or hold the readers in a `std::list` and use
+`splice`/`erase` on the iterator directly. Either way the last-element case needs an explicit guard.
+
+### Reproducing
+
+`scenarios/07-sync-group.json` in this directory demonstrates the bug and the workaround side by
+side (steps `c15` and `c19`), against video and audio flows written in real time. The minimum
+repro is smaller: create two flows, one reader each, add both to one group, and call
+`mxlFlowSynchronizationGroupWaitForDataAt` twice with a lead of a few hundred milliseconds. The
+first call waits; the second returns `MXL_STATUS_OK` in microseconds.
+
+The 2-frame lag `07` uses to prove the workaround is injected with `pace: {"offset_ms": 66.7334}`
+on the writer's `OpenGrain` step, and read back exactly as **write lateness = `age_ms` −
+`stamp.transit_ms`** (write wall clock − OTS, both terms from the same grain, so no frame
+quantisation): **0.238 ms → 66.972 ms** against 66.7334 injected.
+
+**SDK version:** `libmxl` 1.1.0 (`1.1.0-rc1+0 g`), `Linux-Clang-Release`, Ubuntu 24.04.
+
+---
+
+## 9. `waited_ms` on a synchronization group is not a latency
+
+The group's own cost is **~28 µs**. Everything else in a wait belongs to the media grid and to the
+writers, and reading `waited_ms` as "how long the group took" is wrong by four orders of magnitude.
+This matters for §8 too: the table there shows *hundreds of milliseconds* for a healthy wait and
+*zero* for a broken one, and neither number is about the group's speed.
+
+### The decomposition, measured
+
+One run, four waits, each asking for data 300 ms ahead. `quantisation δ` is where the grain the
+group actually waits for sits relative to the requested timestamp; `commit → return` is the gap
+between that grain's commit event being logged and the wait returning:
+
+| wait | members | `waited_ms` | quantisation δ | commit → return | residual |
+|---|---|---:|---:|---:|---:|
+| `c8`  | video | 300.287 | −0.289 | 300.259 | **0.028** |
+| `c11` | video | 301.908 | +1.335 | 301.880 | **0.029** |
+| `c19` | video | 362.382 | −4.643 | 362.358 | **0.024** |
+| `c13` | video + audio | 307.916 | +1.131 | 301.665 | **6.251** |
+
+### The four terms
+
+1. **The lead you asked for.** Here 300 ms. Fixed and known.
+
+2. **Grid phase: ±16.68 ms at 29.97, and it is re-rolled every run.** `timestampToIndex` rounds to
+   the **nearest** grain, so the grain the group waits for can sit up to half a frame either side of
+   the timestamp you named. Nothing about the software varies — the phase between your lead and the
+   frame grid does, because the writer's cursor is seeded from wall-clock time. Across five runs the
+   same video-only wait returned 293.5 / 294.0 / 300.3 / 305.8 / 306.4 ms. That 13 ms spread is a
+   uniform draw from a 33.4 ms window, not jitter.
+
+3. **Publication delay: a floor of ~0.31 ms.** A punctual paced writer commits a grain a median
+   **0.309 ms after that grain's own OTS** (p10 0.265, p90 0.555, n = 205 grains): the pace wake,
+   then `OpenGrain` plus a 5.5 MB fill at a median 192 µs, then the commit. **Data is never
+   available at its OTS**, and no consumer can do better than this floor.
+
+4. **The coarsest member's commit unit.** `c13` above returned **6.25 ms after** the video grain it
+   was waiting for had already been committed — that residual is the *audio* member, which publishes
+   in 480-sample batches, so data for an arbitrary timestamp only appears at the next 10 ms boundary.
+   **A group is never finer-grained than its coarsest member.** The single-member rows show the true
+   group cost, 24–29 µs, because nothing else is in the way.
+
+### Consequences for a consumer
+
+- **Size the lead against term 4, not against term 1.** A lead shorter than the coarsest member's
+  commit unit plus half its own grid quantum will time out intermittently, and the timeout arrives
+  as `MXL_ERR_OUT_OF_RANGE_TOO_EARLY` with nothing naming the member responsible (§8's table shows
+  what that looks like). Writing audio in the SDK's own default batch — `grainRate.numerator /
+  (100 × denominator)`, i.e. **480 samples = 10 ms at 48 kHz**, from `Instance.cpp:275` — keeps that
+  term small; a 1024-sample batch more than doubles it.
+- **Never quote `waited_ms` as a latency or a source delay.** Use **write lateness =
+  `age_ms` − `stamp.transit_ms`** (write wall clock − OTS). Both terms come from the same grain, so
+  every quantisation term above cancels. Injecting a deliberate 2-frame lag with
+  `pace: {"offset_ms": 66.7334}` and reading it back this way over three runs gave **66.740,
+  66.739 and 66.734 ms** — the last within six tenths of a microsecond. `waited_ms` over the same
+  runs could only place the lag between 31 and 63 ms.
+
+### Reproducing the decomposition
+
+From a `07-sync-group` run, for each successful wait: take `resolved.timestamp_ns` as `T` and
+`t_wall_ns − waited_ms` as the start; compute `idx = (T·num + 5e8·den) / (1e9·den)` and
+`ots = (idx·den·1e9 + num/2) / num` (the SDK's own integer forms, `IndexConversion.hpp:12` and
+`:25`); `ots − T` is the quantisation δ, and the `mxlFlowWriterCommitGrain` event whose `index`
+equals `idx` gives the commit moment. The residual is the group's cost, plus — for a multi-member
+group — whatever the other members were still waiting on.
 
 ---
 

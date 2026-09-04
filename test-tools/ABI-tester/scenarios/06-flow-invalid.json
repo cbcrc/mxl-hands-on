@@ -1,0 +1,275 @@
+{
+  "name": "06-flow-invalid",
+  "description": "Stale readers. Lane A writes a grain, releases its writer (which deletes the flow, since a reader holds no lock) and recreates it -- a new inode. Lane B shows that a stale reader returns OK with STALE DATA for an index it still holds, reports MXL_ERR_FLOW_INVALID only on a read that would be TOO_EARLY, and that recovery needs every reader reference on the instance dropped, not a new instance: mxlCreateFlowReader hands back a cached reader while any reference remains.",
+  "lanes": {
+    "A": [
+      {
+        "id": "a0",
+        "call": "mxlCreateInstance",
+        "args": {},
+        "out": {
+          "instance": "I"
+        }
+      },
+      {
+        "id": "a1",
+        "call": "mxlCreateFlowWriter",
+        "out": {
+          "writer": "W"
+        },
+        "args": {
+          "instance": "I",
+          "flow_def": "{\n    \"id\": \"a1b2c3d4-0001-4000-8000-000000000001\",\n    \"label\": \"ABI Tester Video\",\n    \"description\": \"1080p29.97 v210 test flow written by the ABI tester\",\n    \"format\": \"urn:x-nmos:format:video\",\n    \"media_type\": \"video/v210\",\n    \"tags\": {\n      \"urn:x-nmos:tag:grouphint/v1.0\": [\n        \"ABI-Tester:Video\"\n      ]\n    },\n    \"parents\": [],\n    \"grain_rate\": {\n      \"numerator\": 30000,\n      \"denominator\": 1001\n    },\n    \"frame_width\": 1920,\n    \"frame_height\": 1080,\n    \"interlace_mode\": \"progressive\",\n    \"colorspace\": \"BT709\",\n    \"components\": [\n      { \"name\": \"Y\",  \"width\": 1920, \"height\": 1080, \"bit_depth\": 10 },\n      { \"name\": \"Cb\", \"width\": 960,  \"height\": 1080, \"bit_depth\": 10 },\n      { \"name\": \"Cr\", \"width\": 960,  \"height\": 1080, \"bit_depth\": 10 }\n    ]\n}"
+        }
+      },
+      {
+        "id": "a2",
+        "call": "setCursor",
+        "args": {
+          "index": {
+            "mode": "current",
+            "edit_rate": {
+              "num": 30000,
+              "den": 1001
+            }
+          }
+        }
+      },
+      {
+        "id": "a3",
+        "call": "mxlFlowWriterOpenGrain",
+        "out": {
+          "grain": "g"
+        },
+        "args": {
+          "writer": "W",
+          "index": {
+            "mode": "cursor"
+          }
+        },
+        "fill": {
+          "mode": "const",
+          "byte": 170,
+          "stamp": true
+        }
+      },
+      {
+        "id": "a4",
+        "call": "mxlFlowWriterCommitGrain",
+        "advance_cursor": 1,
+        "args": {
+          "writer": "W",
+          "grain": "g"
+        }
+      },
+      {
+        "id": "a5",
+        "call": "mxlReleaseFlowWriter",
+        "delay_before_ms": 2000,
+        "args": {
+          "instance": "I",
+          "writer": "W"
+        },
+        "note": "last writer: makeExclusive succeeds and the flow directory is deleted"
+      },
+      {
+        "id": "a6",
+        "call": "mxlCreateFlowWriter",
+        "delay_before_ms": 500,
+        "out": {
+          "writer": "W2"
+        },
+        "args": {
+          "instance": "I",
+          "flow_def": "{\n    \"id\": \"a1b2c3d4-0001-4000-8000-000000000001\",\n    \"label\": \"ABI Tester Video\",\n    \"description\": \"1080p29.97 v210 test flow written by the ABI tester\",\n    \"format\": \"urn:x-nmos:format:video\",\n    \"media_type\": \"video/v210\",\n    \"tags\": {\n      \"urn:x-nmos:tag:grouphint/v1.0\": [\n        \"ABI-Tester:Video\"\n      ]\n    },\n    \"parents\": [],\n    \"grain_rate\": {\n      \"numerator\": 30000,\n      \"denominator\": 1001\n    },\n    \"frame_width\": 1920,\n    \"frame_height\": 1080,\n    \"interlace_mode\": \"progressive\",\n    \"colorspace\": \"BT709\",\n    \"components\": [\n      { \"name\": \"Y\",  \"width\": 1920, \"height\": 1080, \"bit_depth\": 10 },\n      { \"name\": \"Cb\", \"width\": 960,  \"height\": 1080, \"bit_depth\": 10 },\n      { \"name\": \"Cr\", \"width\": 960,  \"height\": 1080, \"bit_depth\": 10 }\n    ]\n}"
+        },
+        "note": "same flow id, new file: a new inode is what makes lane B's reader stale"
+      },
+      {
+        "id": "a7",
+        "call": "setCursor",
+        "args": {
+          "index": {
+            "mode": "current",
+            "edit_rate": {
+              "num": 30000,
+              "den": 1001
+            }
+          }
+        }
+      },
+      {
+        "id": "a8",
+        "call": "mxlFlowWriterOpenGrain",
+        "out": {
+          "grain": "g2"
+        },
+        "args": {
+          "writer": "W2",
+          "index": {
+            "mode": "cursor"
+          }
+        },
+        "fill": {
+          "mode": "const",
+          "byte": 187,
+          "stamp": true
+        }
+      },
+      {
+        "id": "a9",
+        "call": "mxlFlowWriterCommitGrain",
+        "advance_cursor": 1,
+        "args": {
+          "writer": "W2",
+          "grain": "g2"
+        }
+      }
+    ],
+    "B": [
+      {
+        "id": "b0",
+        "call": "mxlCreateInstance",
+        "delay_before_ms": 500,
+        "args": {},
+        "out": {
+          "instance": "I2"
+        }
+      },
+      {
+        "id": "b1",
+        "call": "mxlCreateFlowReader",
+        "out": {
+          "reader": "R"
+        },
+        "args": {
+          "instance": "I2",
+          "flow_id": "a1b2c3d4-0001-4000-8000-000000000001"
+        }
+      },
+      {
+        "id": "b2",
+        "call": "mxlCreateFlowReader",
+        "out": {
+          "reader": "Rdup"
+        },
+        "args": {
+          "instance": "I2",
+          "flow_id": "a1b2c3d4-0001-4000-8000-000000000001"
+        },
+        "note": "the SAME pointer as R: getFlowReader caches by flow id and adds a reference"
+      },
+      {
+        "id": "b3",
+        "call": "mxlFlowReaderGetGrainNonBlocking",
+        "args": {
+          "reader": "R",
+          "index": {
+            "mode": "head"
+          },
+          "verify_stamp": true
+        },
+        "note": "baseline: the 0xAA grain, before anything is deleted"
+      },
+      {
+        "id": "b4",
+        "call": "mxlFlowReaderGetGrainNonBlocking",
+        "delay_before_ms": 3000,
+        "args": {
+          "reader": "R",
+          "index": {
+            "mode": "head"
+          },
+          "verify_stamp": true
+        },
+        "note": "the flow has been deleted and recreated -- and this still returns OK. Compare stamp.write_ns with b3: identical means STALE DATA, silently"
+      },
+      {
+        "id": "b5",
+        "call": "mxlFlowReaderGetGrainNonBlocking",
+        "args": {
+          "reader": "R",
+          "index": {
+            "mode": "head",
+            "offset": 1
+          }
+        },
+        "note": "one past the stale head: TOO_EARLY triggers the inode check, so this is where MXL_ERR_FLOW_INVALID finally appears"
+      },
+      {
+        "id": "b6",
+        "call": "mxlReleaseFlowReader",
+        "args": {
+          "instance": "I2",
+          "reader": "R"
+        },
+        "note": "refcount 2 -> 1"
+      },
+      {
+        "id": "b7",
+        "call": "mxlCreateFlowReader",
+        "out": {
+          "reader": "R2"
+        },
+        "args": {
+          "instance": "I2",
+          "flow_id": "a1b2c3d4-0001-4000-8000-000000000001"
+        },
+        "note": "Rdup still holds a reference, so this is the CACHED stale reader, not a new one"
+      },
+      {
+        "id": "b8",
+        "call": "mxlFlowReaderGetGrainNonBlocking",
+        "args": {
+          "reader": "R2",
+          "index": {
+            "mode": "head",
+            "offset": 1
+          }
+        },
+        "note": "the trap: a brand new handle, still MXL_ERR_FLOW_INVALID"
+      },
+      {
+        "id": "b9",
+        "call": "mxlReleaseFlowReader",
+        "args": {
+          "instance": "I2",
+          "reader": "Rdup"
+        }
+      },
+      {
+        "id": "b10",
+        "call": "mxlReleaseFlowReader",
+        "args": {
+          "instance": "I2",
+          "reader": "R2"
+        },
+        "note": "refcount 0: NOW the instance forgets the flow"
+      },
+      {
+        "id": "b11",
+        "call": "mxlCreateFlowReader",
+        "out": {
+          "reader": "R3"
+        },
+        "args": {
+          "instance": "I2",
+          "flow_id": "a1b2c3d4-0001-4000-8000-000000000001"
+        },
+        "note": "same instance I2, never recreated -- this one really opens the new file"
+      },
+      {
+        "id": "b12",
+        "call": "mxlFlowReaderGetGrainNonBlocking",
+        "args": {
+          "reader": "R3",
+          "index": {
+            "mode": "head"
+          },
+          "verify_stamp": true
+        },
+        "note": "the 0xBB grain: a NEW stamp.write_ns is the proof of recovery"
+      }
+    ]
+  }
+}

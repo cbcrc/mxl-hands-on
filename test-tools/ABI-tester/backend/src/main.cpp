@@ -59,6 +59,11 @@ extern "C" void crashHandler(int sig)
 // Main loop
 int main(int argc, char** argv)
 {
+    // stdout is fully buffered when it is a pipe, so under `docker logs` the
+    // startup lines and every printf below would sit unflushed until the buffer
+    // filled -- or be lost entirely if crashHandler fired. Line buffering costs
+    // nothing here: this program prints a handful of lines, not a stream.
+    std::setvbuf(stdout, nullptr, _IOLBF, 0);
     for (int const sig : {SIGSEGV, SIGBUS, SIGFPE, SIGABRT, SIGILL})
     {
         std::signal(sig, crashHandler);
@@ -451,6 +456,26 @@ int main(int argc, char** argv)
         {
             res.set_content(engine.reset().dump(2) + "\n", "application/json");
         });
+    
+    // The container has no nginx: this binary serves the built React app and the
+    // API on one port, which is why the frontend's API base is "". Unset in the
+    // native dev loop -- Vite serves 9707 and proxies here -- so a missing
+    // directory is a printed note, not an error.
+    //
+    // Registered after the routes for reading order only: cpp-httplib tries the
+    // mount point BEFORE the routing table on every GET, so a file in dist/ named
+    // like an endpoint would shadow it silently.
+    char const* const  distEnv = std::getenv("FRONTEND_DIST");
+    std::string const  dist    = (distEnv != nullptr) ? distEnv : "/app/frontend/dist";
+
+    if (server.set_mount_point("/", dist))
+    {
+        std::printf("Frontend: %s\n", dist.c_str());
+    }
+    else
+    {
+        std::printf("Frontend: none (%s not found) - API only\n", dist.c_str());
+    }
     
     std::printf("Listening on http://0.0.0.0:9600 (Ctrl-C to stop)\n");
     server.listen("0.0.0.0", 9600);

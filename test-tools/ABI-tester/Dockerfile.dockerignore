@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
+# Scoped to this Dockerfile (BuildKit prefers <dockerfile>.dockerignore over the
+# context's .dockerignore), so no sibling app's build is affected.
+
+# Deny everything, then name the ~12 MB this build reads out of a 4 GB context.
+*
+!test-tools/ABI-tester
+!dmf-mxl/lib/include
+!dmf-mxl/build/Linux-Clang-Release/lib
+!dmf-mxl/build/Linux-Clang-Release/tools/mxl-info
+
+# Host build products, re-excluded after the allow above. The image builds its own,
+# and backend/build/CMakeCache.txt holds absolute /home/$USER paths that would
+# make the in-image cmake refuse to run.
+test-tools/ABI-tester/frontend/node_modules
+test-tools/ABI-tester/frontend/dist
+test-tools/ABI-tester/backend/build
