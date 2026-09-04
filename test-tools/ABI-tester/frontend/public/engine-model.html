@@ -402,6 +402,54 @@
     <tr><td class="abi">mxlStatus</td><td>ABI</td><td>The return code, rendered by name. A non-OK status is often the point of a step, not a failure of it.</td></tr>
   </table>
 
+
+  <h2>Reading the log</h2>
+  <p>Every step appends one JSON object to <code>/log</code>. Some of its fields are the engine's
+     account of what it did, some are the ABI's answer, and a few of the most useful numbers are
+     neither — they are derived. Fields appear only when they apply, so a short event is normal.</p>
+
+  <h3 style="font-size:1rem;margin:1.5rem 0 .25rem;color:#b8b8b8">On every event</h3>
+  <table>
+    <tr><th style="width:12rem">field</th><th>meaning</th></tr>
+    <tr><td class="abi">seq</td><td>Monotonic across all lanes. <code>/log?since=&lt;seq&gt;</code> resumes from it; a <code>410</code> means the tail was evicted and carries the cursor to re-sync from.</td></tr>
+    <tr><td class="abi">lane / step_id</td><td>Which lane ran it and the step's <code>id</code> from the scenario.</td></tr>
+    <tr><td class="abi">t_wall_ns</td><td>TAI nanoseconds, <strong>stamped after the call returns</strong> — so a blocking step's row appears in the log at its <em>end</em>, not its start. A string, because the value exceeds JavaScript's safe integer range.</td></tr>
+    <tr><td class="abi">duration_us</td><td>Brackets the <strong>adapter</strong>, not just the ABI call: argument marshalling, the payload fill, and the call itself. Subtract <code>fill.fill_us</code> for the call alone. Excludes any <code>delay_before_ms</code> or <code>pace</code> sleep.</td></tr>
+    <tr><td class="abi">ok / status</td><td><code>status</code> is the <code>mxlStatus</code> by name. <code>ok:false</code> accompanies any non-OK status — including the ones a scenario is <em>trying</em> to produce, so a red row is often the point of the step rather than a failure of it.</td></tr>
+    <tr><td class="abi">error</td><td>Present when the step failed <em>before</em> the ABI — an unknown handle name, a bad argument type, an index expression that would not resolve. No <code>status</code>, because nothing was called.</td></tr>
+  </table>
+
+  <h3 style="font-size:1rem;margin:1.5rem 0 .25rem;color:#b8b8b8">What the engine did</h3>
+  <table>
+    <tr><th style="width:12rem">field</th><th>meaning</th></tr>
+    <tr><td class="eng">resolved</td><td>Every index expression flattened to the number that actually crossed. <code>{"index": …, "head": …, "flow": "discrete"}</code>. This is the field that tells you what the step really asked for — and it is named <code>resolved</code>, not <code>args_resolved</code>.</td></tr>
+    <tr><td class="eng">delay_ms</td><td>The relative sleep that ran before the step, after <code>delay_scale</code> was applied. Absent when zero.</td></tr>
+    <tr><td class="eng">pace</td><td><code>deadline_ns</code> is the unjittered target — consecutive values are exactly one grain apart, which is what makes an offline drift check possible. <code>late_ms</code> is the wake measured against the <em>jittered</em> target. <code>jitter_ms</code> appears only when one was drawn, <code>capped:true</code> when the sleep hit the 5 s cap.</td></tr>
+    <tr><td class="eng">cursor</td><td>Only on <code>setCursor</code>: the index the lane was seeded to. Those events also carry <code>abi:false</code>, which is how you tell a pseudo-call from a real one.</td></tr>
+    <tr><td class="eng">stored_as</td><td>The registry name a creating call produced.</td></tr>
+    <tr><td class="eng">(released)</td><td>Not a log field, despite looking like one: <code>released</code> comes back on the <strong><code>/reset</code> response</strong>, naming the handles destroyed in release order. It cannot be in the log, because reset clears the log — which is also why the next <code>/log?since=</code> answers <code>410</code> with a fresh cursor rather than an error.</td></tr>
+  </table>
+
+  <h3 style="font-size:1rem;margin:1.5rem 0 .25rem;color:#b8b8b8">The timing numbers, and which ones lie</h3>
+  <table>
+    <tr><th style="width:12rem">field</th><th>meaning</th></tr>
+    <tr><td class="abi">ots_ns</td><td>The grain's origin timestamp, derived from its index by the SDK. A string. Never <code>Number()</code> it and never subtract two of them in JavaScript — the low three digits are exactly the resolution you are trying to see.</td></tr>
+    <tr><td class="abi">age_ms</td><td><code>read wall clock − OTS</code>. How old the grain was when read. Signed: negative means you read a grain whose media time is still in the future.</td></tr>
+    <tr><td class="abi">stamp</td><td>Only when the step set <code>verify_stamp</code> and the writer set <code>fill.stamp</code>. <code>write_ns</code> is the writer's clock at fill time; <code>transit_ms</code> is <code>read wall − write wall</code>, the true end-to-end delay; <code>matches</code> says the stamped index equals the grain's, which is how you catch a stale or torn read.</td></tr>
+    <tr><td class="abi">waited_ms</td><td>How long a blocking call actually blocked. <strong>Meaningless on its own</strong> — read it against <code>timeout_ns</code>. Roughly equal means the deadline expired; much less means it woke on a commit. A timeout never arrives as <code>MXL_ERR_TIMEOUT</code>; it arrives as <code>MXL_ERR_OUT_OF_RANGE_TOO_EARLY</code>, indistinguishable from an unreachable index except by this number.</td></tr>
+    <tr><td class="eng">fill</td><td><code>fill_us</code> is the payload write, <code>bytes</code> how much, <code>stamp_ns</code> the value planted. On a 1080p v210 grain the fill is ~80% of the step.</td></tr>
+    <tr><td style="color:#ffb74d;font-family:ui-monospace,Menlo,monospace">write lateness</td><td><strong>Derived, not a field:</strong> <code>age_ms − stamp.transit_ms</code> = <code>write wall − OTS</code>. How late the <em>producer</em> was. Both terms come from the same grain, so it carries none of the frame quantisation that <code>age_ms</code> and <code>waited_ms</code> do — it is the only exact measure of source delay in the log, and it is the column M15's timing panel renders.</td></tr>
+  </table>
+
+  <div class="note"><strong>Four ways to misread a run.</strong>
+    A blocking step's row lands at the moment it <em>finished</em>, so the log's order is completion
+    order, not start order. <code>duration_us</code> is the adapter, not the ABI. <code>age_ms</code>
+    and <code>waited_ms</code> both carry ±half a grain of quantisation, because a wait ends when the
+    grain <em>nearest</em> the target commits — use write lateness when the number has to be exact.
+    And <strong>the first event of each distinct call in a process is an outlier</strong>
+    (~10 ms for <code>mxlCreateInstance</code>, and a first <code>OpenGrain</code> pays the page
+    faults for the whole ring): run a call once before trusting its <code>duration_us</code>.</div>
+
   <p style="margin-top:2rem"><a class="back" href="/">← back to the tester</a></p>
 </main>
 </body>
