@@ -56,9 +56,12 @@ applications would.
   > are. `backend/CMakeLists.txt` picks the preset directory from the host and takes a
   > `-DMXL_PRESET=` override.
 - **ABI reference documentation:** `./ea-ema-upp-mxl-sdk/Docs/C-MXL-ABI.md` — regenerated
-  for `dmf-mxl` commit `84350f7c`, which is the pinned submodule HEAD. Call descriptions in
-  the catalog are lifted from it. `Docs/Lexique.md` defines the terminology. The directory is
-  a **separate clone and is git-ignored**, so it does not arrive with a `git pull`.
+  for `dmf-mxl` commit `84350f7c`. Call descriptions in the catalog are lifted from it.
+  `Docs/Lexique.md` defines the terminology. The directory is a **separate clone and is
+  git-ignored**, so it does not arrive with a `git pull`.
+  > The pinned submodule HEAD is now `8fef61f0` (release/v1.1). The only public-header change
+  > across that range is a comment on `MXL_ERR_UNKNOWN` in `mxl.h`, so the catalog still
+  > matches the ABI — no regeneration needed until a signature or enumerator actually moves.
 - **MXL domain scan root:** `MXL_DOMAIN_ROOT`, default `/Volumes/mxl` — the tree `/domains`
   walks. Distinct from the **instance domain**, which is a single domain directory passed as
   `argv[1]` and handed to `mxlCreateInstance`. In the container the scan root is the mounted
