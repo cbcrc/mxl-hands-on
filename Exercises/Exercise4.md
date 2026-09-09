@@ -94,7 +94,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
 
 ### Steps
 
-1. Navigate to exercise 5 working directory
+1. Navigate to exercise 4 working directory
     ```sh
         cd ~/mxl-hands-on/docker/exercise-4
     ```

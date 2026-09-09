@@ -32,7 +32,6 @@ import json
 import logging
 import os
 import threading
-import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -148,7 +147,6 @@ class GstKeyer:
         with self._lock:
             self._teardown()
             self._gen += 1
-            gen = self._gen
             self._mode             = "key"
             self._audio_flow_uuid  = None
             self._audio_cb         = None
@@ -172,16 +170,6 @@ class GstKeyer:
                 self._running = False
                 self._teardown()
                 raise RuntimeError(str(exc)) from exc
-
-            output_uuid = self._output_flow_uuid
-            domain = self._domain_path
-
-        # Patch flow_def.json after mxlsink writes it (background thread)
-        threading.Thread(
-            target=self._patch_flow_def,
-            args=(domain, output_uuid, grouphint, description, label, gen),
-            daemon=True,
-        ).start()
 
         return self.get_status()
 
@@ -217,7 +205,6 @@ class GstKeyer:
         with self._lock:
             self._teardown()
             self._gen += 1
-            gen = self._gen
             self._mode             = "prompt"
             self._domain_path      = domain_path
             self._input_flow_uuid  = None
@@ -241,15 +228,6 @@ class GstKeyer:
                 self._running = False
                 self._teardown()
                 raise RuntimeError(str(exc)) from exc
-
-            output_uuid = self._output_flow_uuid
-            domain = self._domain_path
-
-        threading.Thread(
-            target=self._patch_flow_def,
-            args=(domain, output_uuid, grouphint, description, label, gen),
-            daemon=True,
-        ).start()
 
         return self.get_status()
 
@@ -458,38 +436,21 @@ class GstKeyer:
     def _add_output_branch(
         self, pipeline: Gst.Pipeline, compositor: Gst.Element, out_caps_str: str
     ) -> None:
-        # ── Output branch: compositor.src → pts_fix → videoconvert → caps(v210) → queue → mxlsink ──
+        # ── Output branch: compositor.src → videoconvert → caps(v210) → queue → mxlsink ──
         #
         # The compositor converts all input PTSes to running time (ns elapsed
-        # since the pipeline started).  mxlsink's render_video computes the
-        # grain index as:  mxl_pts = buffer.pts + (mxl_now − clock.time()).
-        # Re-adding pipeline.base_time() to each buffer PTS after the compositor
-        # makes buffer.pts an absolute pipeline-clock timestamp again, so
-        # mxl_pts ≈ mxl_now and grains land at the correct TAI index instead of
-        # near the epoch (otherwise mxl-info-gui shows latency ≈ 56 years).
+        # since the pipeline started), which is exactly what mxlsink wants: it
+        # computes the grain index as  mxl_ts = buffer.pts + base_time + D,
+        # with D = mxl_now − pipeline_clock_now.  An earlier revision re-added
+        # pipeline.base_time() to each buffer here because the mxlsink of MXL
+        # v1.0 mapped raw PTS through (mxl_now − clock.time()); since v1.1 the
+        # sink adds base_time itself, so doing it here too would double-count it
+        # and land every grain hours in the future.
         #
         # The output capsfilter pins colorimetry so the two CAPS events the
         # compositor emits (before/after CEF joins) are identical from mxlsink's
         # perspective; otherwise GstBaseSink calls set_caps twice and mxlsink
         # aborts with "another active writer".
-        pts_fix = Gst.ElementFactory.make("identity", "pts_fix")
-        if not pts_fix:
-            raise RuntimeError("Could not create identity element for PTS fix")
-        pts_fix.set_property("signal-handoffs", True)
-        pipeline.add(pts_fix)
-
-        def _on_pts_fix_handoff(element, buf):
-            base_time = pipeline.get_base_time()
-            if not base_time or base_time == Gst.CLOCK_TIME_NONE:
-                return
-            if buf.pts == Gst.CLOCK_TIME_NONE:
-                return
-            buf.pts += base_time
-            if buf.dts != Gst.CLOCK_TIME_NONE:
-                buf.dts += base_time
-
-        pts_fix.connect("handoff", _on_pts_fix_handoff)
-
         out_conv  = Gst.ElementFactory.make("videoconvert", "out_conv")
         out_caps  = Gst.ElementFactory.make("capsfilter",   "out_caps")
         out_caps.set_property("caps", Gst.Caps.from_string(out_caps_str))
@@ -502,13 +463,14 @@ class GstKeyer:
         out_sink.set_property("flow-id", self._output_flow_uuid)
         out_sink.set_property("domain", self._domain_path)
         out_sink.set_property("sync", False)
+        out_sink.set_property("group-hint", f"{self._grouphint}:Video")
+        out_sink.set_property("description", self._description or "")
+        out_sink.set_property("label", self._label or "")
 
         for el in (out_conv, out_caps, out_queue, out_sink):
             pipeline.add(el)
-        if not compositor.link(pts_fix):
-            raise RuntimeError("Failed to link compositor → pts_fix")
-        if not pts_fix.link(out_conv):
-            raise RuntimeError("Failed to link pts_fix → out_conv")
+        if not compositor.link(out_conv):
+            raise RuntimeError("Failed to link compositor → out_conv")
         if not out_conv.link(out_caps):
             raise RuntimeError("Failed to link out_conv → out_caps")
         if not out_caps.link(out_queue):
@@ -544,6 +506,12 @@ class GstKeyer:
         # set_caps on mxlsink → "another active writer").  cefsrc renders at an
         # integer fps; videorate re-paces it to the exact MXL grain rate so the
         # mixer always sees a steady cadence.
+        #
+        # cefsrc advertises framerate=0/1 (variable — one buffer per CEF paint)
+        # and takes its render rate from the `max-video-framerate` property
+        # rather than from the negotiated caps, so a framerate field in the
+        # capsfilter below fails to negotiate ("cefsrc can't handle caps …
+        # framerate=(fraction)30/1").
         cef_fps = max(1, round(num / den))
 
         cef_src = Gst.ElementFactory.make("cefsrc", "cef_src")
@@ -552,10 +520,13 @@ class GstKeyer:
                 "Could not create cefsrc — is gst-plugin-cef (libgstcef.so) installed in the plugin path?"
             )
         cef_src.set_property("url", url)
+        # util_set_object_arg parses the string into the property's GstFraction:
+        # this image has no PyGObject Gst overrides, so Gst.Fraction is unusable.
+        Gst.util_set_object_arg(cef_src, "max-video-framerate", f"{cef_fps}/1")
 
         cef_src_caps = Gst.ElementFactory.make("capsfilter", "cef_src_caps")
         cef_src_caps.set_property("caps", Gst.Caps.from_string(
-            f"video/x-raw,format=BGRA,width={W},height={H},framerate={cef_fps}/1"
+            f"video/x-raw,format=BGRA,width={W},height={H}"
         ))
 
         cef_rate = Gst.ElementFactory.make("videorate", "cef_rate")
@@ -739,36 +710,3 @@ class GstKeyer:
     def _on_warning(self, _bus: Gst.Bus, msg: Gst.Message) -> None:
         warn, debug = msg.parse_warning()
         log.warning("GStreamer warning: %s  debug: %s", warn, debug)
-
-    # ── flow_def.json patching ────────────────────────────────────────────────
-
-    def _patch_flow_def(
-        self,
-        domain_path: str,
-        flow_uuid: str,
-        grouphint: str,
-        description: str,
-        label: str,
-        gen: int,
-    ) -> None:
-        path = Path(domain_path) / f"{flow_uuid}.mxl-flow" / "flow_def.json"
-        deadline = time.monotonic() + 15
-        while not path.exists():
-            if time.monotonic() > deadline:
-                log.warning("Timeout waiting for flow_def.json: %s", path)
-                return
-            if self._gen != gen:
-                return
-            time.sleep(0.5)
-        try:
-            data = json.loads(path.read_text())
-            full_grouphint = f"{grouphint}:Video"
-            data["grouphint"]   = full_grouphint
-            data["description"] = description
-            data["label"]       = label
-            if isinstance(data.get("tags"), dict):
-                data["tags"]["urn:x-nmos:tag:grouphint/v1.0"] = [full_grouphint]
-            path.write_text(json.dumps(data, indent=2))
-            log.info("Patched flow_def.json for output flow %s", flow_uuid)
-        except Exception as exc:
-            log.warning("Could not patch flow_def.json: %s", exc)

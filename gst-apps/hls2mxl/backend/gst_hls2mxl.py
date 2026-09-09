@@ -11,10 +11,10 @@ Two-phase startup:
 
   Phase 2 – Real pipeline:
     uridecodebin → [pad-added] → videoconvert → capsfilter(v210)
-                                               → queue → mxlsink(sync=False)
+                                               → queue → mxlsink(sync=True)
                               → [pad-added] → audioconvert → audioresample
                                            → capsfilter(F32LE,48kHz)
-                                           → queue → mxlsink(sync=False)
+                                           → queue → mxlsink(sync=True)
 
 Flow UUIDs are deterministic (UUID v5) so applying a new HLS URL preserves IDs
 as long as the group hint is unchanged.
@@ -27,11 +27,8 @@ the HLS audio decoder to stop producing data before the valve opens.
 from __future__ import annotations
 
 import gc
-import json
 import logging
-import os
 import threading
-import time
 import uuid
 from typing import Optional
 
@@ -193,24 +190,16 @@ class GstHLS2MXL:
                 self._running = False
                 self._stabilising = False
 
-        # Patch flow_def.json in a background thread (polls until files appear)
-        if self._running:
-            threading.Thread(
-                target=self._patch_flow_defs,
-                args=(config, uuids, gen),
-                daemon=True,
-                name="patch-flow-defs",
-            ).start()
-
         return False  # do not reschedule the GLib timer
 
     def _build_real_pipeline(self, config: dict, uuids: dict) -> None:
         """Build the production pipeline writing to mxlsink. Caller must hold
         self._lock."""
-        domain   = config["domain"]
-        url      = config["hls_url"]
-        vid_uuid = uuids["video"]
-        aud_uuid = uuids["audio"]
+        domain    = config["domain"]
+        url       = config["hls_url"]
+        vid_uuid  = uuids["video"]
+        aud_uuid  = uuids["audio"]
+        grouphint = config.get("grouphint", "HLS2MXL")
 
         pipeline = Gst.Pipeline.new("hls2mxl")
 
@@ -228,7 +217,16 @@ class GstHLS2MXL:
         vsink  = Gst.ElementFactory.make("mxlsink",      "vsink")
         vsink.set_property("flow-id", vid_uuid)
         vsink.set_property("domain",  domain)
-        vsink.set_property("sync",    False)
+        # sync=True (the GstBaseSink default) is what paces this pipeline: mxlsink
+        # maps each buffer to a grain index as pts + base_time + (mxl_now - clock_now)
+        # and commits it straight away, so the sink waiting for the buffer's running
+        # time IS the pacing. With sync=False, uridecodebin decodes the HLS playlist
+        # as fast as it downloads and the head index runs minutes into the future
+        # (mxl-info reports a large negative latency), then stops at EOS.
+        vsink.set_property("sync",    True)
+        vsink.set_property("group-hint",  f"{grouphint}:Video")
+        vsink.set_property("description", config.get("video", {}).get("description", ""))
+        vsink.set_property("label",       config.get("video", {}).get("label", ""))
 
         for el in (vconv, vcaps, vqueue, vsink):
             pipeline.add(el)
@@ -247,7 +245,10 @@ class GstHLS2MXL:
         asink  = Gst.ElementFactory.make("mxlsink", "asink")
         asink.set_property("flow-id", aud_uuid)
         asink.set_property("domain",  domain)
-        asink.set_property("sync",    False)
+        asink.set_property("sync",    True)   # paces the pipeline — see vsink above
+        asink.set_property("group-hint",  f"{grouphint}:Audio")
+        asink.set_property("description", config.get("audio", {}).get("description", ""))
+        asink.set_property("label",       config.get("audio", {}).get("label", ""))
 
         for el in (aconv, aresample, acaps, aqueue, asink):
             pipeline.add(el)
@@ -283,47 +284,7 @@ class GstHLS2MXL:
 
         pipeline.set_state(Gst.State.PLAYING)
         self._pipeline = pipeline
-        log.info("Real MXL pipeline started (sync=False, no valves)")
-
-    # ── Background: patch flow_def.json ──────────────────────────────────────
-
-    def _patch_flow_defs(self, config: dict, uuids: dict, gen: int) -> None:
-        domain    = config["domain"]
-        grouphint = config.get("grouphint", "HLS2MXL")
-        flows = [
-            ("video", config.get("video", {}), "Video"),
-            ("audio", config.get("audio", {}), "Audio"),
-        ]
-        for key, flow_cfg, role in flows:
-            flow_uuid = uuids.get(key)
-            if not flow_uuid:
-                continue
-            path = os.path.join(domain, f"{flow_uuid}.mxl-flow", "flow_def.json")
-            deadline = time.monotonic() + 15
-            while not os.path.exists(path):
-                if time.monotonic() > deadline:
-                    log.warning("Timeout waiting for flow_def.json: %s", path)
-                    break
-                with self._lock:
-                    if self._gen != gen:
-                        return
-                time.sleep(0.5)
-            if not os.path.exists(path):
-                continue
-            try:
-                with open(path) as f:
-                    data = json.load(f)
-                full_grouphint = f"{grouphint}:{role}"
-                data["grouphint"]   = full_grouphint
-                data["description"] = flow_cfg.get("description", "")
-                data["label"]       = flow_cfg.get("label", "")
-                if isinstance(data.get("tags"), dict):
-                    data["tags"]["urn:x-nmos:tag:grouphint/v1.0"] = [full_grouphint]
-                with open(path, "w") as f:
-                    json.dump(data, f, indent=2)
-                log.info("Patched flow_def.json: %s (%s)", key, flow_uuid)
-            except Exception as exc:
-                log.warning("Could not patch flow_def.json for %s: %s", key, exc)
+        log.info("Real MXL pipeline started (sync=True, no valves)")
 
     # ── Bus message handlers ──────────────────────────────────────────────────
 

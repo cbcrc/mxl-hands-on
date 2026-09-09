@@ -18,9 +18,7 @@ the group hint produces a different set.
 from __future__ import annotations
 
 import collections
-import json
 import logging
-import os
 import struct
 import threading
 import time
@@ -351,17 +349,11 @@ class GstGenerator:
             self._anc_fifo.clear()
             self._anc_last_cc = None
             self._gen += 1
-            gen = self._gen
             self._flow_uuids = self._generate_uuids(config)
             self._build_pipeline(config)
             self._running = True
             uuids = dict(self._flow_uuids)
 
-        threading.Thread(
-            target=self._patch_flow_defs,
-            args=(config, uuids, gen),
-            daemon=True,
-        ).start()
         return uuids
 
     def stop(self) -> None:
@@ -520,6 +512,7 @@ class GstGenerator:
 
     def _build_pipeline(self, config: dict) -> None:
         domain = config["domain"]
+        grouphint = config.get("grouphint", "Test-Generator")
         w, h = RESOLUTIONS.get(self._resolution, (1920, 1080))
         fn, fd = FRAMERATES.get(self._framerate, (30, 1))
 
@@ -565,6 +558,9 @@ class GstGenerator:
             vsink = Gst.ElementFactory.make("mxlsink", "vsink")
             vsink.set_property("flow-id", self._flow_uuids["video"])
             vsink.set_property("domain", domain)
+            vsink.set_property("group-hint", f"{grouphint}:Video")
+            vsink.set_property("description", config["video"].get("description", ""))
+            vsink.set_property("label", config["video"].get("label", ""))
 
             for el in (vsrc, vcaps_src, timeoverlay, textoverlay, vconv, vcaps_sink, vqueue, vsink):
                 pipeline.add(el)
@@ -583,11 +579,15 @@ class GstGenerator:
 
         # ── Audio Flow 1 ──────────────────────────────────────────────────────
         if config.get("audio1", {}).get("active"):
-            self._build_audio_branch(pipeline, 1, self._flow_uuids["audio1"], domain)
+            self._build_audio_branch(
+                pipeline, 1, self._flow_uuids["audio1"], domain, grouphint, config["audio1"]
+            )
 
         # ── Audio Flow 2 ──────────────────────────────────────────────────────
         if config.get("audio2", {}).get("active"):
-            self._build_audio_branch(pipeline, 2, self._flow_uuids["audio2"], domain)
+            self._build_audio_branch(
+                pipeline, 2, self._flow_uuids["audio2"], domain, grouphint, config["audio2"]
+            )
 
         # ── Bus (A/V pipeline) ──────────────────────────────────────────────────
         bus = pipeline.get_bus()
@@ -637,7 +637,9 @@ class GstGenerator:
             # starting or it underflows at the trough before the next burst.
             self._anc_cushion = frames
 
-            hp, op = self._build_ancillary_pipelines(self._flow_uuids["ancillary"], domain)
+            hp, op = self._build_ancillary_pipelines(
+                self._flow_uuids["ancillary"], domain, grouphint, config.get("ancillary", {})
+            )
             self._connect_data_bus(hp)
             self._connect_data_bus(op)
             self._data_pipelines += [op, hp]   # output first so it's ready for pushes
@@ -656,7 +658,8 @@ class GstGenerator:
         bus.connect("message::warning", self._on_warning)
 
     def _build_audio_branch(
-        self, pipeline: Gst.Pipeline, flow_num: int, flow_uuid: str, domain: str
+        self, pipeline: Gst.Pipeline, flow_num: int, flow_uuid: str, domain: str,
+        grouphint: str, flow_cfg: dict
     ) -> None:
         state = self._audio1 if flow_num == 1 else self._audio2
         s = str(flow_num)
@@ -682,6 +685,9 @@ class GstGenerator:
         asink = Gst.ElementFactory.make("mxlsink", f"asink{s}")
         asink.set_property("flow-id", flow_uuid)
         asink.set_property("domain", domain)
+        asink.set_property("group-hint", f"{grouphint}:Audio")
+        asink.set_property("description", flow_cfg.get("description", ""))
+        asink.set_property("label", flow_cfg.get("label", ""))
 
         for el in (asrc, aconv, acaps, aqueue, asink):
             pipeline.add(el)
@@ -694,7 +700,7 @@ class GstGenerator:
         state.src = asrc
 
     def _build_ancillary_pipelines(
-        self, flow_uuid: str, domain: str
+        self, flow_uuid: str, domain: str, grouphint: str, flow_cfg: dict
     ) -> tuple[Gst.Pipeline, Gst.Pipeline]:
         """Build the harvest + output pipelines for the Ancillary Data flow.
 
@@ -765,6 +771,9 @@ class GstGenerator:
         ancsink = Gst.ElementFactory.make("mxlsink", "ancsink")
         ancsink.set_property("flow-id", flow_uuid)
         ancsink.set_property("domain", domain)
+        ancsink.set_property("group-hint", f"{grouphint}:Ancillary Data")
+        ancsink.set_property("description", flow_cfg.get("description", ""))
+        ancsink.set_property("label", flow_cfg.get("label", ""))
         for el in (ancsrc, ancqueue, ancsink):
             output.add(el)
         ancsrc.link(ancqueue)
@@ -877,54 +886,6 @@ class GstGenerator:
                 time.sleep(dt)
             elif dt < -0.5:
                 next_t = time.monotonic()  # fell far behind (e.g. scheduling stall); resync
-
-    def _patch_flow_defs(self, config: dict, uuids: dict, gen: int) -> None:
-        domain = config["domain"]
-        grouphint = config.get("grouphint", "Test-Generator")
-        flows = [
-            ("video",     config.get("video",     {})),
-            ("audio1",    config.get("audio1",    {})),
-            ("audio2",    config.get("audio2",    {})),
-            ("ancillary", config.get("ancillary", {})),
-        ]
-        for key, flow_cfg in flows:
-            if not flow_cfg.get("active"):
-                continue
-            flow_uuid = uuids.get(key)
-            if not flow_uuid:
-                continue
-            path = os.path.join(domain, f"{flow_uuid}.mxl-flow", "flow_def.json")
-            # Poll up to 15 s for mxlsink to write the file
-            deadline = time.monotonic() + 15
-            while not os.path.exists(path):
-                if time.monotonic() > deadline:
-                    log.warning("Timeout waiting for flow_def.json: %s", path)
-                    break
-                if self._gen != gen:
-                    return  # pipeline restarted; abort
-                time.sleep(0.5)
-            if not os.path.exists(path):
-                continue
-            try:
-                with open(path) as f:
-                    data = json.load(f)
-                role = {
-                    "video":     "Video",
-                    "audio1":    "Audio",
-                    "audio2":    "Audio",
-                    "ancillary": "Ancillary Data",
-                }.get(key, "Audio")
-                full_grouphint = f"{grouphint}:{role}"
-                data["grouphint"]   = full_grouphint
-                data["description"] = flow_cfg.get("description", "")
-                data["label"]       = flow_cfg.get("label", "")
-                if isinstance(data.get("tags"), dict):
-                    data["tags"]["urn:x-nmos:tag:grouphint/v1.0"] = [full_grouphint]
-                with open(path, "w") as f:
-                    json.dump(data, f, indent=2)
-                log.info("Patched flow_def.json: %s (%s)", key, flow_uuid)
-            except Exception as exc:
-                log.warning("Could not patch flow_def.json for %s: %s", key, exc)
 
     def _on_error(self, _bus: Gst.Bus, msg: Gst.Message) -> None:
         err, debug = msg.parse_error()

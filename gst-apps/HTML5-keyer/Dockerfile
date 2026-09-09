@@ -54,7 +54,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-RUN git clone --depth 1 https://github.com/centricular/gstcefsrc.git
+# Pinned: gstcefsrc has no releases, and master changes cefsrc's negotiation
+# behaviour from time to time (c89c2ce moved the render rate out of the caps
+# into the `max-video-framerate` property and started advertising
+# framerate=0/1, which broke the CEF branch's capsfilter). Bump deliberately.
+ARG GSTCEFSRC_COMMIT=c89c2ce5be967cfdb26920ad850436b93e62f2fc
+RUN git clone https://github.com/centricular/gstcefsrc.git \
+ && git -C gstcefsrc checkout --detach "${GSTCEFSRC_COMMIT}"
 
 WORKDIR /build/gstcefsrc
 RUN mkdir build \
@@ -126,10 +132,10 @@ RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/requirements.txt
 # ── MXL libraries ─────────────────────────────────────────────────────────────
 COPY dmf-mxl/rust/target/release/libgstmxl.so /usr/lib/x86_64-linux-gnu/gstreamer-1.0/
 
-COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.2 /opt/mxl/lib/libmxl.so.1.2
+COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.1 /opt/mxl/lib/libmxl.so.1.1
 
 RUN cd /opt/mxl/lib \
- && ln -sf libmxl.so.1.2 libmxl.so.1 \
+ && ln -sf libmxl.so.1.1 libmxl.so.1 \
  && ln -sf libmxl.so.1   libmxl.so \
  && ldconfig /opt/mxl/lib /usr/lib/x86_64-linux-gnu/gstreamer-1.0 \
  # libgstmxl.so dlopen()s libmxl.so from its compile-time build path; satisfy it

@@ -17,11 +17,9 @@ Flow UUIDs are deterministic (UUID v5) derived from the group hint.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import threading
-import time
 import uuid
 from typing import Optional
 from urllib.parse import quote
@@ -139,17 +137,11 @@ class GstPlayer:
             self._file = filename
             self._streams = streams
             self._gen += 1
-            gen = self._gen
             self._flow_uuids = self._generate_uuids(config, video_active, audio_active)
             self._build_pipeline(full, config, video_active, audio_active)
             self._running = True
             uuids = dict(self._flow_uuids)
 
-        threading.Thread(
-            target=self._patch_flow_defs,
-            args=(config, uuids, gen),
-            daemon=True,
-        ).start()
         return uuids
 
     def stop(self) -> None:
@@ -204,6 +196,7 @@ class GstPlayer:
         self, full_path: str, config: dict, video_active: bool, audio_active: bool
     ) -> None:
         domain = config["domain"]
+        grouphint = config.get("grouphint", "Clip-Player")
         pipeline = Gst.Pipeline.new("file-player")
 
         src = Gst.ElementFactory.make("uridecodebin", "src")
@@ -212,11 +205,13 @@ class GstPlayer:
 
         if video_active:
             self._vbranch_sink_pad = self._build_video_branch(
-                pipeline, self._flow_uuids["video"], domain
+                pipeline, self._flow_uuids["video"], domain,
+                grouphint, config.get("video", {})
             )
         if audio_active:
             self._abranch_sink_pad = self._build_audio_branch(
-                pipeline, self._flow_uuids["audio"], domain
+                pipeline, self._flow_uuids["audio"], domain,
+                grouphint, config.get("audio", {})
             )
 
         src.connect("pad-added", self._on_pad_added)
@@ -234,7 +229,8 @@ class GstPlayer:
         self._pipeline = pipeline
 
     def _build_video_branch(
-        self, pipeline: Gst.Pipeline, flow_uuid: str, domain: str
+        self, pipeline: Gst.Pipeline, flow_uuid: str, domain: str,
+        grouphint: str, flow_cfg: dict
     ) -> Gst.Pad:
         vqueue_in  = Gst.ElementFactory.make("queue",       "vqueue_in")
         vconv      = Gst.ElementFactory.make("videoconvert", "vconv")
@@ -244,6 +240,9 @@ class GstPlayer:
         vsink      = Gst.ElementFactory.make("mxlsink",     "vsink")
         vsink.set_property("flow-id", flow_uuid)
         vsink.set_property("domain", domain)
+        vsink.set_property("group-hint", f"{grouphint}:Video")
+        vsink.set_property("description", flow_cfg.get("description", ""))
+        vsink.set_property("label", flow_cfg.get("label", ""))
 
         for el in (vqueue_in, vconv, vcaps, vqueue_out, vsink):
             pipeline.add(el)
@@ -258,7 +257,8 @@ class GstPlayer:
         return vqueue_in.get_static_pad("sink")
 
     def _build_audio_branch(
-        self, pipeline: Gst.Pipeline, flow_uuid: str, domain: str
+        self, pipeline: Gst.Pipeline, flow_uuid: str, domain: str,
+        grouphint: str, flow_cfg: dict
     ) -> Gst.Pad:
         aqueue_in  = Gst.ElementFactory.make("queue",        "aqueue_in")
         aconv      = Gst.ElementFactory.make("audioconvert", "aconv")
@@ -274,6 +274,9 @@ class GstPlayer:
         asink      = Gst.ElementFactory.make("mxlsink",      "asink")
         asink.set_property("flow-id", flow_uuid)
         asink.set_property("domain", domain)
+        asink.set_property("group-hint", f"{grouphint}:Audio")
+        asink.set_property("description", flow_cfg.get("description", ""))
+        asink.set_property("label", flow_cfg.get("label", ""))
 
         for el in (aqueue_in, aconv, aresample, acaps, aqueue_out, asink):
             pipeline.add(el)
@@ -326,42 +329,3 @@ class GstPlayer:
     def _on_warning(self, _bus: Gst.Bus, msg: Gst.Message) -> None:
         warn, debug = msg.parse_warning()
         log.warning("GStreamer warning: %s  debug: %s", warn, debug)
-
-    # ── Flow_def.json patching ────────────────────────────────────────────────
-
-    def _patch_flow_defs(self, config: dict, uuids: dict, gen: int) -> None:
-        domain = config["domain"]
-        grouphint = config.get("grouphint", "Clip-Player")
-        flows = [
-            ("video", "Video", config.get("video", {})),
-            ("audio", "Audio", config.get("audio", {})),
-        ]
-        for key, role, flow_cfg in flows:
-            flow_uuid = uuids.get(key)
-            if not flow_uuid:
-                continue
-            path = os.path.join(domain, f"{flow_uuid}.mxl-flow", "flow_def.json")
-            deadline = time.monotonic() + 15
-            while not os.path.exists(path):
-                if time.monotonic() > deadline:
-                    log.warning("Timeout waiting for flow_def.json: %s", path)
-                    break
-                if self._gen != gen:
-                    return
-                time.sleep(0.5)
-            if not os.path.exists(path):
-                continue
-            try:
-                with open(path) as f:
-                    data = json.load(f)
-                full_grouphint = f"{grouphint}:{role}"
-                data["grouphint"]   = full_grouphint
-                data["description"] = flow_cfg.get("description", "")
-                data["label"]       = flow_cfg.get("label", "")
-                if isinstance(data.get("tags"), dict):
-                    data["tags"]["urn:x-nmos:tag:grouphint/v1.0"] = [full_grouphint]
-                with open(path, "w") as f:
-                    json.dump(data, f, indent=2)
-                log.info("Patched flow_def.json: %s (%s)", key, flow_uuid)
-            except Exception as exc:
-                log.warning("Could not patch flow_def.json for %s: %s", key, exc)

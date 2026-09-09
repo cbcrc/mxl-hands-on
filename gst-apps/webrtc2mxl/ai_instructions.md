@@ -161,8 +161,8 @@ clicked. All controls are disabled while running.
    text field (default `WEBRTC2MXL`), a **Label** field (default `webrtc-audio`), and a
    **Description** field (default `webrtc-audio-out`). The backend derives a **deterministic UUID**
    (`uuid.uuid5(_NS, f"{grouphint}:audio")`) from the group hint so restarts reuse the same flow
-   directory, patches the flow's `grouphint` to `<grouphint>:Audio`, and writes the `label` and
-   `description` into `flow_def.json`.
+   directory, and passes `<grouphint>:Audio`, the label and the description to `mxlsink` through
+   its `group-hint`, `label`, and `description` properties.
 4. **Start / Stop button** — enabled when a domain is selected and group hint / label / description
    are non-empty. Changes to **Stop** while running.
 
@@ -304,12 +304,9 @@ MEDIAMTX_WHEP = os.environ.get("MEDIAMTX_WHEP_URL",
   called. Derive the flow UUID deterministically: `uuid.uuid5(_NS, f"{grouphint}:audio")` with a
   fixed module namespace constant (mirror hls2mxl's `_derive_uuids` / `_MXL_HLS_NS`).
 - Build the WHEP-client pipeline as in "WHEP-client signalling" above. Set `mxlsink` `flow-id`
-  and `domain`, `sync=False`.
-- After the pipeline reaches PLAYING, **patch `flow_def.json`** in a background thread that polls
-  `<domain>/<uuid>.mxl-flow/flow_def.json` (up to ~15 s, because `mxlsink` creates it lazily on
-  the first buffer), then writes `grouphint` = `<grouphint>:Audio`, `label`, `description`, and
-  `tags["urn:x-nmos:tag:grouphint/v1.0"] = [<grouphint>:Audio]`. Copy `_patch_flow_defs` from
-  `./gst-apps/hls2mxl/backend/gst_hls2mxl.py` (audio-only).
+  and `domain`, `sync=False`, plus `group-hint` = `<grouphint>:Audio`, `label`, and `description`
+  — the sink writes them into `flow_def.json` (`tags["urn:x-nmos:tag:grouphint/v1.0"]` included)
+  when it creates the flow.
 - On `stop()`: set pipeline to NULL, wait for the state change, clear references, `gc.collect()`.
 
 **API endpoints:**

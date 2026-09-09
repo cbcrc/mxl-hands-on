@@ -23,7 +23,6 @@ reuses the same flow directory.
 from __future__ import annotations
 
 import gc
-import json
 import logging
 import os
 import threading
@@ -96,7 +95,6 @@ class GstWriter:
             self._flow_uuid = str(uuid.uuid5(_MXL_NS, f"{grouphint}:audio"))
             self._error_msg = None
             self._gen += 1
-            gen = self._gen
             try:
                 self._build_pipeline()
             except Exception as exc:
@@ -104,14 +102,7 @@ class GstWriter:
                 self._error_msg = str(exc)
                 self._running = False
                 raise
-            flow_uuid = self._flow_uuid
 
-        # Patch flow_def.json once mxlsink has created it (background, polls).
-        threading.Thread(
-            target=self._patch_flow_def,
-            args=(domain_path, flow_uuid, grouphint, label, description, gen),
-            daemon=True,
-        ).start()
         return self.get_status()
 
     def stop(self) -> None:
@@ -186,6 +177,7 @@ class GstWriter:
             pipeline = self._pipeline
             domain = self._domain_path
             flow_uuid = self._flow_uuid
+            grouphint = self._grouphint
             if pipeline is None or not domain or not flow_uuid:
                 return
 
@@ -203,6 +195,9 @@ class GstWriter:
             sink.set_property("flow-id", flow_uuid)
             sink.set_property("domain", domain)
             sink.set_property("sync", False)
+            sink.set_property("group-hint", f"{grouphint}:Audio")
+            sink.set_property("label", self._label or "")
+            sink.set_property("description", self._description or "")
 
             for el in (depay, dec, conv, resamp, acaps, queue, sink):
                 pipeline.add(el)
@@ -313,37 +308,6 @@ class GstWriter:
         webrtcbin.emit("set-remote-description", answer, promise)
         promise.wait()
         log.info("Remote description set — receiving from MediaMTX")
-
-    # ── Background: patch flow_def.json ─────────────────────────────────────
-
-    def _patch_flow_def(self, domain: str, flow_uuid: str, grouphint: str,
-                        label: str, description: str, gen: int) -> None:
-        """mxlsink creates <domain>/<uuid>.mxl-flow/flow_def.json lazily on the
-        first buffer; poll for it, then write the grouphint/label/description."""
-        path = os.path.join(domain, f"{flow_uuid}.mxl-flow", "flow_def.json")
-        deadline = time.monotonic() + 15
-        while not os.path.exists(path):
-            if time.monotonic() > deadline:
-                log.warning("Timeout waiting for flow_def.json: %s", path)
-                return
-            with self._lock:
-                if self._gen != gen:
-                    return
-            time.sleep(0.5)
-        try:
-            with open(path) as f:
-                data = json.load(f)
-            full_grouphint = f"{grouphint}:Audio"
-            data["grouphint"]   = full_grouphint
-            data["label"]       = label
-            data["description"] = description
-            if isinstance(data.get("tags"), dict):
-                data["tags"]["urn:x-nmos:tag:grouphint/v1.0"] = [full_grouphint]
-            with open(path, "w") as f:
-                json.dump(data, f, indent=2)
-            log.info("Patched flow_def.json: %s", flow_uuid)
-        except Exception as exc:
-            log.warning("Could not patch flow_def.json: %s", exc)
 
     # ── Teardown ────────────────────────────────────────────────────────────
 
