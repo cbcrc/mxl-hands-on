@@ -1,0 +1,4 @@
+# The directory is committed so the bind mount has a host-owned target: if Docker
+# has to create it, it creates it as root and the native tooling cannot write here.
+*
+!.gitignore

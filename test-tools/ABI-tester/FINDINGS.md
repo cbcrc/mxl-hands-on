@@ -1,0 +1,582 @@
+# MXL under load — what the ABI-tester measured
+
+Findings from the M11.5 load sweep, 2026-08-30, plus §8 and §9 — a correctness bug in the
+synchronization group and the cost model of a group wait, both found 2026-09-04 while building the
+bundled scenarios. Everything here is measured on this machine with the tooling in this
+directory; the reproduction recipe is at the end.
+
+These are notes for **someone building a real media function on MXL**, not a description
+of the tester. The single most useful item is §1 — but read **§8 if you use
+`mxlFlowSynchronizationGroup`**: a group with more than one member silently stopped
+synchronizing after its first successful wait, **fixed upstream 2026-09-09 and confirmed fixed
+here** (§8 keeps both sets of numbers), and §9 for why a wait's `waited_ms` is not a latency.
+
+---
+
+## Environment
+
+| | |
+|---|---|
+| CPU | AMD Ryzen 9 7900X3D — 12 cores / 24 threads, 128 MiB L3 across 2 CCDs |
+| RAM | 62 GB; MXL domain on a 10 GB `tmpfs` at `/Volumes/mxl` |
+| SDK | `dmf-mxl`, `Linux-Clang-Release` |
+| Flow | 1080p29.97 v210 — grain **5,529,600 B**, `grain_count` **5** (ring = 26.4 MiB/flow) |
+| Load | N threads, each writing its own flow, paced to every grain's OTS with ±2 ms jitter |
+| Run | 600 grains/lane (~20 s). **First 5 grains of every lane excluded** from all statistics — see §5 |
+
+---
+
+## 1. 80% of the cost of writing a grain is the payload — so render *into* the grain
+
+Per-grain cost budget, single lane, measured:
+
+| | |
+|---|---:|
+| `mxlFlowWriterOpenGrain` (call itself) | **18–34 µs** |
+| writing the 5.27 MiB payload | **180 µs** |
+| `mxlFlowWriterCommitGrain` | **11 µs** |
+| | |
+| MXL's own overhead | ~45 µs |
+| **payload as a share of total** | **80%** |
+
+MXL's API cost is small and, as §2 shows, does not grow with load. What costs is the one
+pass over the frame. That pass is **unavoidable in principle but very easy to pay twice**.
+
+`mxlFlowWriterOpenGrain` hands back a pointer directly into the shared-memory ring slot:
+
+```c
+mxlStatus mxlFlowWriterOpenGrain(mxlFlowWriter writer, uint64_t index,
+                                 mxlGrainInfo* mxlGrainInfo, uint8_t** payload);
+//                                                           ^^^^^^^^^^^^^^^^^
+//  \param[out] payload  The requested grain payload.
+```
+
+> **Recommendation — open the grain first, render directly into `payload`, then commit.**
+>
+> The tempting structure is: decode/scale/composite into your own buffer, then open a grain
+> and `memcpy` into it. That pays the full-frame pass **twice** — once producing, once
+> copying — and the copy is pure overhead.
+>
+> Invert it. Call `mxlFlowWriterOpenGrain` *before* you produce the frame, hand `payload` to
+> your renderer / decoder / colour converter as its output buffer, and `mxlFlowWriterCommitGrain`
+> when it returns. MXL's cost then really is ~45 µs per grain instead of ~225 µs.
+>
+> At 1080p29.97 v210 that is a **4–5× reduction in non-application cost per frame**, and the
+> saving scales with resolution: at UHD the copy alone is ~720 µs a frame.
+>
+> `mxlFlowWriterCancelGrain` exists for the failure path — if the render fails after you have
+> opened the grain, cancel it rather than committing a half-written frame.
+
+The same argument applies on the read side: `mxlFlowReaderGetGrain*` gives you a pointer into
+the ring. Decode/process from it in place where the downstream API allows a caller-supplied
+input pointer, rather than copying out first.
+
+---
+
+## 2. The MXL API path does not degrade with load. Memory bandwidth does.
+
+Removing only the payload write (`fill: {mode: "none"}`) and changing nothing else:
+
+| lanes | variant | `OpenGrain` call p50 | payload p50 | `late_ms` p50 |
+|---:|---|---:|---:|---:|
+| 96 | normal | 2044.8 µs | 1582.4 µs | 0.76 ms |
+| 96 | **payload removed** | **18.3 µs** | 1.7 µs | **0.06 ms** |
+| 256 | normal | 41.3 µs | 490.0 µs | **391.82 ms** |
+| 256 | **payload removed** | **18.3 µs** | 1.5 µs | **0.06 ms** |
+
+**`OpenGrain` costs 18.3 µs at 96 lanes and 18.3 µs at 256 lanes** — identical, and identical
+to the single-lane figure. With the payload write gone, 256 concurrent paced writers hold the
+media clock to **60 µs**. Every bit of the degradation in the "normal" rows is the memset.
+
+So when a loaded MXL system misses its deadlines, look at memory bandwidth first. The API is
+not where the time goes.
+
+**Measured sustained ceiling: ~38 GB/s of grain writes**, i.e. **~230 concurrent 1080p29.97
+v210 flows** on this machine. At 256 lanes the offered load is 40.4 GB/s, the system falls
+~10% behind real time, and `late_ms` climbs to 392 ms.
+
+⚠️ **CPU utilisation is a misleading indicator here.** The system monitor showed ~30% at 96
+lanes and ~40% at 256 — 2.5× the work for 1.33× the CPU. A thread stalled on memory still
+counts as "busy", so that 40% is not 60% of headroom. `late_ms` and achieved GB/s are the
+honest signals.
+
+---
+
+## 3. Phase, not average load, sets your p99
+
+Every writer seeded its clock at the same moment, so all N targeted the same grain boundary
+and fired together. Adding a per-lane `pace.offset_ms` spread across the 33.3667 ms grain
+period — **same lane count, same total bandwidth, same work, only the phase changed**:
+
+| 96 lanes | `OpenGrain` call p50 | payload p50 | `late_ms` p50 | phase σ |
+|---|---:|---:|---:|---:|
+| all in phase | 2044.8 µs | 1582.4 µs | 0.76 ms | 4.12 ms |
+| **staggered** | **19.9 µs** | **182.4 µs** | **0.06 ms** | 9.63 ms |
+| | **103× better** | **8.7× better** | | |
+
+Staggered, 96 concurrent writers perform like **one** writer (182.4 µs against a single-lane
+180 µs). In phase, the offered average is 15.9 GB/s — under half the ceiling — yet 96 × 5.27 MiB
+= **506 MiB arrives compressed into a few milliseconds** instead of spread over 33.4.
+
+Phase σ is the diagnostic: 9.63 ms is exactly `33.3667/√12`, a uniform spread. At ≤32 lanes
+in-phase it measures 1.10–1.17 ms, which is precisely `stddev(uniform(−2,+2)) = 4/√12 = 1.155`
+— i.e. the *only* spread present was the jitter we injected.
+
+> **Recommendation — deliberately stagger the phase of independent writers.**
+>
+> In a genlocked plant this is the real deployment condition, not a test artefact: everything
+> is locked to one clock, so everything bursts together. Give each writer a fixed offset within
+> the grain period. Mixed frame rates decorrelate for free; a single rate does not.
+>
+> Note the counterintuitive corollary: at 256 lanes the system is *saturated*, pacing has
+> collapsed, and the writers have naturally desynchronised — which gives it **better** per-call
+> latency (490 µs) than the unsaturated but synchronised 96 (1582 µs). A spread-out heavy load
+> beats a bursty light one.
+
+*Untested:* whether staggering also helps at 256. It should improve latency, but cannot create
+bandwidth — the average demand there already exceeds the ceiling.
+
+---
+
+## 4. Instances, flows, and where the limits actually are
+
+**Use one `mxlInstance` per process per domain, with many readers and writers on it.**
+Not one instance per flow. Three reasons, in order of weight:
+
+1. **Flow synchronization groups are instance-scoped.** `createFlowSynchronizationGroup()` is a
+   method on `Instance`, so flows in *different* instances cannot be time-aligned to each other.
+   The per-flow model doesn't just cost more — it removes the capability.
+2. **Reader sharing is instance-scoped.** `getFlowReader` refcounts and returns an existing
+   `FlowReader` for the same flow id. Two components sharing one instance share one mapping;
+   through separate instances they each map it independently.
+3. **You'd spend the scarce resource to save the abundant one** — see the table below.
+
+### Limits found, none of them documented
+
+| limit | value | why |
+|---|---|---|
+| **inotify instances** | **128 per _user_** | every `mxlCreateInstance` builds a `DomainWatcher` → one `inotify_init1`. Shared with the desktop session, so ~64 were actually available. Watches, by contrast, are per-*flow* inside that one fd, capped at 65,536 — a 512× ratio pointing the other way. |
+| **file descriptors** | **~7 per flow writer** | default soft `ulimit -n` of 1024 caps a process at **~145 flows**. `ulimit -n 65536` fixes it; no root needed. |
+| **memory bandwidth** | **~38 GB/s** | ≈ 230 concurrent 1080p29.97 v210 flows on this host. |
+| **writer creation** | **~8 ms per flow, serialised** | `Instance::createFlowWriter` holds `Instance::_mutex` across the whole creation. 256 writers took **2.13 s** wall to create. |
+
+That last one is a **startup** cost, not a steady-state one — `OpenGrain`/`CommitGrain` never
+take that mutex, which is why §2's 18.3 µs is flat at 256 lanes. Sharing an instance is still
+the right call; just budget for serialised setup on a large fan-out, and don't create flows
+on a latency-sensitive path.
+
+### Both limits fail badly
+
+- `mxlCreateInstance` returns a bare `nullptr` with no errno and no status code. The
+  `inotify_init1` failure is logged internally (`DomainWatcher.cpp:55`) and then discarded by
+  the `catch` in `mxl.cpp`.
+- Descriptor exhaustion surfaces to the caller as `Input/output error` on `flow_def.json` and
+  then as a generic `MXL_ERR_UNKNOWN`. The true cause — `Too many open files` — appears only in
+  a **cleanup warning** at `FlowManager.cpp:187`, at `warning` level, on a different line.
+
+If you are debugging either, **read the library's stderr**; the API return value will send you
+somewhere else.
+
+---
+
+## 5. Pacing: sleep at the edges, be event-driven in the middle
+
+- **Sources** (SDI ingest, generators) must be paced — their rate *is* the clock. These are the
+  ones to phase-stagger per §3.
+- **Transforms** (read A → process → write B) should **not** self-pace against the grain rate.
+  Drive them from a blocking read on the input. Output is then paced by input, and each stage's
+  phase is naturally offset by the previous stage's processing time — which decorrelates the
+  herd for free.
+
+Do **not** read this as "don't sleep". Deadline sleeping is what makes an idle stage free: an
+earlier measurement in this project found a 5 ms idle poll costing **48.7% of a core at 512
+lanes**, which a condition variable took to **0.0%**. An unpaced stage with nothing to do is a
+busy-wait.
+
+### The first `grain_count` grains of any flow measure page faults, not MXL
+
+`fill_us` for a fresh flow, one lane:
+
+```
+1821  1730  2331  1745  2282  |  162  212  178  178 ...
+└──── exactly grain_count (5) ────┘   └── steady state ──┘
+```
+
+First-touch faults on the ring's mmap; once it wraps, every slot is faulted in. ~10× the
+steady-state cost. Any benchmark shorter than a ring wrap is measuring the kernel's page
+allocator. **Discard the first `grain_count` grains** — all figures above do.
+
+---
+
+## 6. Interop: a real GStreamer consumer reads what this tool writes
+
+While 8 lanes wrote concurrently, `mxlsrc` consumed lane A's flow:
+
+```
+rendered: 294, dropped: 0, current: 29.92, average: 30.08
+Execution ended after 0:00:10.010061585
+```
+
+300 grains at 30000/1001 is exactly 10.0100 s; the pipeline ran 10.010061585 s — **62 µs over
+ten seconds (6 ppm), zero dropped buffers, no warnings.** `mxl-info -l` lists every flow by its
+grouphint name, and `mxl-info -f` reports `Active: true`, `Grain count: 5`,
+`Latency (grains, ms): 1`.
+
+```bash
+gst-launch-1.0 -v mxlsrc domain=/Volumes/mxl/domain_1 \
+    video-flow-id=<flow-id> num-buffers=300 \
+  ! video/x-raw,framerate=30000/1001 \
+  ! fpsdisplaysink video-sink=fakesink sync=false text-overlay=false
+```
+
+The downstream framerate capsfilter is required — `mxlsrc` needs it to negotiate.
+
+Note the flow definition must carry a **`urn:x-nmos:tag:grouphint/v1.0` tag**: `validateGroupHint`
+in `FlowParser.cpp:114` is mandatory, and omitting it fails `mxlCreateFlowWriter` with a bare
+`MXL_ERR_UNKNOWN`.
+
+---
+
+## 7. The GStreamer plugin pays the payload tax in both directions
+
+`gst-mxl-rs` copies the full frame on each side. It is a shim between MXL and GStreamer
+memory, not a native zero-copy binding — but the two copies do **not** have the same status.
+
+**Read side — `mxlsrc/create_discrete.rs:101`:**
+
+```rust
+DiscreteFormat::Video => gst::Buffer::from_slice(grain_data.payload.to_vec()),
+//                                                             ^^^^^^^^^
+```
+
+`.to_vec()` heap-allocates 5.27 MiB and copies the grain out of the ring, every frame.
+
+**Write side — `mxlsink/render_discrete.rs:75-77`:**
+
+```rust
+let destination = access.payload_mut();
+let copy_len = std::cmp::min(destination.len(), payload.len());
+destination[..copy_len].copy_from_slice(&payload[..copy_len]);
+```
+
+~180 µs per frame in each direction at 1080p29.97 v210 (§1), so an `mxlsrc → … → mxlsink`
+chain pays it twice on top of whatever the elements in between do.
+
+### The read-side copy is currently forced; the write-side one is not
+
+**`mxlsrc` cannot safely avoid it today, because MXL has no reader-side grain pin.**
+`mxlFlowReaderGetGrain` returns a pointer into the ring with no matching release call, and the
+writer overwrites that slot after `grain_count` grains regardless of any reader — **167 ms at
+29.97 with `grain_count` 5**. A `GstBuffer` handed downstream can easily outlive that inside a
+`queue`, an encoder, or a muxer, and would tear. The copy buys lifetime decoupling, which is a
+real purchase, not an oversight. Removing it needs either an MXL API addition (hold/release a
+slot) or a deeper ring plus a policy bet about downstream latency.
+
+> **Cheap improvement that keeps the safety:** the copy is forced, the *allocation* is not.
+> `gst::Buffer::from_slice(…to_vec())` mallocs and frees 5.27 MiB per frame. A `GstBufferPool`
+> of reusable buffers keeps the copy and removes the allocation.
+
+### Testable hypothesis: the allocation costs more than the copy it serves
+
+**Claim.** glibc's `malloc` services allocations above `M_MMAP_THRESHOLD` (~128 KB by default)
+with `mmap` rather than the heap, and returns them with `munmap`. A 5.27 MiB grain is 40× that
+threshold, so **every frame** plausibly costs one `mmap`, **~1,350 first-touch page faults**
+(5,529,600 / 4096), and one `munmap` — on top of the copy itself.
+
+That is the same first-touch mechanism §5 documents costing ~1.9 ms on a fresh ring, except
+recurring *per frame* instead of once per ring wrap. If it holds, pooling is worth substantially
+more than "removing allocator churn" suggests, and the read-side copy — which §7 argues is
+forced — becomes the *cheaper* half of what `mxlsrc` currently pays per frame.
+
+**How to falsify.** `mxlsrc` is a live source, so wall time is pinned at real rate and shows
+nothing. The signal is **minor page faults per frame**, with CPU time as corroboration:
+
+```bash
+/usr/bin/time -v gst-launch-1.0 mxlsrc domain=<domain> video-flow-id=<id> num-buffers=300 \
+  ! video/x-raw,framerate=30000/1001 ! fakesink sync=false
+```
+
+Read *Minor (reclaiming a frame) page faults*, *User time*, *System time*.
+
+| | prediction if the claim holds |
+|---|---|
+| minor faults, 300 frames | **~405,000** (300 × 1350), i.e. ~1350/frame above baseline |
+| after pooling | falls to near-constant — the pool faults its buffers in once |
+| user+system time | drops by the fault-handling cost, several tens of ms over 300 frames |
+
+If baseline minor faults are already flat (a few thousand total), the claim is **wrong** —
+either the allocator is reusing the mapping or `M_MMAP_THRESHOLD` has been raised dynamically,
+and pooling is then worth only the memcpy-free `malloc` bookkeeping, which is negligible.
+
+Worth running as a two-arm A/B on a fork of the SDK before proposing anything upstream.
+
+**`mxlsink` can avoid its copy with a standard GStreamer mechanism.** Implement
+`propose_allocation()` offering a `GstBufferPool` whose memory is backed by grain payloads;
+upstream then renders directly into the grain and the sink only commits. That is §1's
+"render into the grain" expressed in GStreamer's own idiom, and it is the change with the
+better return of the two — it removes a full-frame pass with no safety trade.
+
+*Not benchmarked here* — this section is a source reading (`gst-mxl-rs` at
+`dmf-mxl/rust/gst-mxl-rs`), not a measurement.
+
+---
+
+## 8. A synchronization group with more than one member stopped synchronizing after its first successful wait
+
+> **FIXED upstream 2026-09-09** — merged to `main` as `f0fff0c2`, cherry-picked to `release/v1.1`
+> as `cbc99a4a`, with an upstream regression test in `8fef61f0`
+> (`lib/tests/test_flow_sync_groups.cpp`). This repo's submodule was moved to `8fef61f0` in
+> `755bde0`. **Everything below is retained as the before/after record**; the measurements in
+> "What was measured" are the *broken* library, and "Confirmed fixed" carries the same steps
+> re-run against the fixed one. If you are reading this to decide whether to trust multi-member
+> groups: you can, on `cbc99a4a` or later.
+
+**Found 2026-09-04. This was a correctness bug, not a load finding, and it failed in the worst
+possible shape: by returning `MXL_STATUS_OK` immediately.** Nothing in the API surface reported a
+problem, so a consumer built on a multi-member group ran unsynchronized and looked healthy.
+
+### What was measured (broken library, `84350f7c`)
+
+Two flows written in real time — 1080p29.97 video and 48 kHz float32 audio, both paced to their
+own OTS. One group holds the video reader only; another holds both. Each group is asked the same
+question four times in a row, `mxlFlowSynchronizationGroupWaitForDataAt(group, now + 300 ms, 2 s)`:
+
+| group | members | wait 1 | wait 2 | wait 3 | wait 4 |
+|---|---|---:|---:|---:|---:|
+| `G1` | video | 283.9 ms | 300.3 ms | 300.3 ms | 300.3 ms |
+| `G2` | video + audio | 310.1 ms | **0.000 ms** | **0.000 ms** | **0.000 ms** |
+
+Every `G2` answer after the first is `MXL_STATUS_OK` in ~0.0003 ms — less time than it takes to
+read one flow's runtime info, so no member was consulted. The single-member group is correct
+indefinitely. (The healthy numbers in that table are dominated by the media grid, not by the
+group; §9 decomposes them, and the group's own cost is ~28 µs.)
+
+Reproduced independently inside a larger scenario: with a group that had completed one successful
+wait, a request for data 300 ms in the future returned in **0.0001 ms**, while the very next step —
+an ordinary head read on one of that group's own readers — reported the newest grain was **68 ms
+old**. Two adjacent log rows that cannot both be true is what exposed it.
+
+### Cause
+
+`lib/internal/src/FlowSynchronizationGroup.cpp:112`, inside the optimisation that promotes the
+slowest source to the front of the list so future waits check it first:
+
+```cpp
+_readers.splice_after(_readers.before_begin(), _readers, current);
+```
+
+`std::forward_list::splice_after(pos, other, it)` moves **the element following `it`** — not
+`*it`. A forward list cannot unlink the element an iterator points at, which is why the API is
+defined that way, so promoting `current` requires the iterator *before* it. As written the call
+moves the wrong member; and when `current` is the **last** member, `std::next(current) == end()`
+and the call is undefined behaviour. Observed effect: the reader list is destroyed and the group
+thereafter behaves as though it were empty.
+
+A one-member group never reaches the statement. The guard above it is
+
+```cpp
+if (sourceDelay > current->maxObservedSourceDelay) {
+    current->maxObservedSourceDelay = sourceDelay;
+    if (current->maxObservedSourceDelay > _readers.begin()->maxObservedSourceDelay) { ...splice... }
+}
+```
+
+and with one member `current == _readers.begin()`, so the inner comparison is a value against
+itself and is always false. With two members it fires as soon as the second member's observed
+delay exceeds the first's — in these runs, on the very first successful wait.
+
+### Confirmed fixed (`8fef61f0`, re-run 2026-09-09)
+
+`scenarios/07-sync-group.json`, unchanged, against the rebuilt library. `c15` is the step that
+existed to exhibit the bug; `c19` asks the identical question of a *fresh* group and was the
+workaround control. **They now agree to within 1.04 ms — a fifth of a frame:**
+
+| Step | Ask | Group | Broken (`84350f7c`) | Fixed (`8fef61f0`) |
+|---|---|---|---:|---:|
+| `c8` | 1 — video only | 1 member | ~300 ms | 303.57 ms |
+| `c9` | 2 — audio silent | 2 members | 2000 ms, TOO_EARLY | 2000.11 ms, TOO_EARLY |
+| `c11` | 3 — audio removed | 1 member | ~302 ms | 302.35 ms |
+| `c13` | 4 — baseline, video punctual | 2 members | 303.7 ms | 304.25 ms |
+| `c15` | **5a — the bug** | 2 members, **reused** | **0.0003 ms** | **365.98 ms** |
+| `c19` | 5b — control | 2 members, fresh | 366.4 ms | 367.02 ms |
+
+ASK 2 is unchanged and is *supposed* to burn its deadline — the audio member genuinely has no data
+yet. The fix does not make a group answer a question it cannot answer.
+
+Two checks rule out a quiet scenario, because "`c15` is non-zero" on its own would also be
+satisfied by a run in which the laggard was never late:
+
+1. **The lag was really injected.** Write lateness (`age_ms` − `stamp.transit_ms`, quantisation-free
+   because both terms come from the same grain) went `c14` **0.478 ms** → `c20` **66.984 ms**, a
+   delta of **66.506 ms** against the 66.7334 ms in `a6`'s `pace.offset_ms`.
+2. **The group held for it.** `c15` exceeds the `c13` baseline by **61.73 ms**, tracking that lag.
+   The fixed group did not merely return non-zero; it waited *longer, by about the laggard's
+   lateness*, which is the property the feature exists to provide.
+
+Environment checked, since a stale `.so` would fake this result either way: `libmxl.so.1.1` built
+after the submodule bump, byte-identical in size to the host `Linux-Clang-Release` build, and
+baked into the running `abi-tester:latest`.
+
+### Impact (on `84350f7c` and earlier)
+
+- **A multi-member synchronization group was effectively unusable.** The only workaround was to
+  rebuild the group before every wait, which means creating a group and re-adding every reader per
+  frame, and which throws away the `maxObservedSourceDelay` state the feature exists to accumulate.
+  That is a rendezvous rebuilt 30 times a second, not a synchronization group.
+- **Existing consumers were silently affected.** Anything holding one group with several readers
+  across many waits was unsynchronized from its first wait and had no way to notice.
+  `gst-apps/flow-aligner` realigns via a sync group; it has **not yet been re-run** against the
+  fixed library, and it remains the first thing to check.
+- Single-member groups were safe, but a single-member group is just a blocking read with extra steps.
+
+### Workaround — no longer needed on `cbc99a4a` or later
+
+Retained for anyone pinned to an older SDK. Use a **fresh group per wait**, or one member per
+group. Measured in the same second, on the same two readers: the already-used group returned in
+0.0001 ms while a pristine group built from the same two readers waited 366.4 ms — correctly, for
+a video source that had been given a deliberate 2-frame lag.
+
+### The fix, as merged
+
+Track the predecessor iterator while walking the list and splice with that (`splice_after` wants
+the element *before* the one being moved), then `continue` — after the splice `prev` already
+precedes `it` and must not advance. Three lines in `FlowSynchronizationGroup.cpp`; the
+last-element case needs no separate guard once the predecessor is the thing being passed, because
+`before_begin()` is always a valid predecessor. Holding the readers in a `std::list` and using
+`splice`/`erase` on the iterator directly would also have worked, at the cost of a heavier node.
+
+### Reproducing — now a regression check
+
+`scenarios/07-sync-group.json` in this directory no longer demonstrates a bug; it **guards against
+its return**. Steps `c15` and `c19` ask one question of a reused and a fresh multi-member group,
+and the assertion is that they agree: if `c15` ever collapses toward zero again while `c19` stays
+near 366 ms, the reordering regressed. Upstream now carries its own unit-level version of this in
+`lib/tests/test_flow_sync_groups.cpp`.
+
+The minimum repro of the original bug is smaller: create two flows, one reader each, add both to
+one group, and call `mxlFlowSynchronizationGroupWaitForDataAt` twice with a lead of a few hundred
+milliseconds. On a broken library the first call waits and the second returns `MXL_STATUS_OK` in
+microseconds; on a fixed one both wait.
+
+The 2-frame lag `07` uses to prove the workaround is injected with `pace: {"offset_ms": 66.7334}`
+on the writer's `OpenGrain` step, and read back exactly as **write lateness = `age_ms` −
+`stamp.transit_ms`** (write wall clock − OTS, both terms from the same grain, so no frame
+quantisation): **0.238 ms → 66.972 ms** against 66.7334 injected.
+
+**SDK version:** broken run on submodule `84350f7c`, fixed run on `8fef61f0`. Both report
+`libmxl` 1.1.0 (`1.1.0-rc1+0 g`), `Linux-Clang-Release`, Ubuntu 24.04 — **the version string does
+not distinguish them**, so identify the library by submodule commit, not by `/health`.
+
+---
+
+## 9. `waited_ms` on a synchronization group is not a latency
+
+The group's own cost is **~28 µs**. Everything else in a wait belongs to the media grid and to the
+writers, and reading `waited_ms` as "how long the group took" is wrong by four orders of magnitude.
+This matters for §8 too: the table there shows *hundreds of milliseconds* for a healthy wait and
+*zero* for a broken one, and neither number is about the group's speed.
+
+### The decomposition, measured
+
+One run, four waits, each asking for data 300 ms ahead. `quantisation δ` is where the grain the
+group actually waits for sits relative to the requested timestamp; `commit → return` is the gap
+between that grain's commit event being logged and the wait returning:
+
+| wait | members | `waited_ms` | quantisation δ | commit → return | residual |
+|---|---|---:|---:|---:|---:|
+| `c8`  | video | 300.287 | −0.289 | 300.259 | **0.028** |
+| `c11` | video | 301.908 | +1.335 | 301.880 | **0.029** |
+| `c19` | video | 362.382 | −4.643 | 362.358 | **0.024** |
+| `c13` | video + audio | 307.916 | +1.131 | 301.665 | **6.251** |
+
+### The four terms
+
+1. **The lead you asked for.** Here 300 ms. Fixed and known.
+
+2. **Grid phase: ±16.68 ms at 29.97, and it is re-rolled every run.** `timestampToIndex` rounds to
+   the **nearest** grain, so the grain the group waits for can sit up to half a frame either side of
+   the timestamp you named. Nothing about the software varies — the phase between your lead and the
+   frame grid does, because the writer's cursor is seeded from wall-clock time. Across five runs the
+   same video-only wait returned 293.5 / 294.0 / 300.3 / 305.8 / 306.4 ms. That 13 ms spread is a
+   uniform draw from a 33.4 ms window, not jitter.
+
+3. **Publication delay: a floor of ~0.31 ms.** A punctual paced writer commits a grain a median
+   **0.309 ms after that grain's own OTS** (p10 0.265, p90 0.555, n = 205 grains): the pace wake,
+   then `OpenGrain` plus a 5.5 MB fill at a median 192 µs, then the commit. **Data is never
+   available at its OTS**, and no consumer can do better than this floor.
+
+4. **The coarsest member's commit unit.** `c13` above returned **6.25 ms after** the video grain it
+   was waiting for had already been committed — that residual is the *audio* member, which publishes
+   in 480-sample batches, so data for an arbitrary timestamp only appears at the next 10 ms boundary.
+   **A group is never finer-grained than its coarsest member.** The single-member rows show the true
+   group cost, 24–29 µs, because nothing else is in the way.
+
+### Consequences for a consumer
+
+- **Size the lead against term 4, not against term 1.** A lead shorter than the coarsest member's
+  commit unit plus half its own grid quantum will time out intermittently, and the timeout arrives
+  as `MXL_ERR_OUT_OF_RANGE_TOO_EARLY` with nothing naming the member responsible (§8's table shows
+  what that looks like). Writing audio in the SDK's own default batch — `grainRate.numerator /
+  (100 × denominator)`, i.e. **480 samples = 10 ms at 48 kHz**, from `Instance.cpp:275` — keeps that
+  term small; a 1024-sample batch more than doubles it.
+- **Never quote `waited_ms` as a latency or a source delay.** Use **write lateness =
+  `age_ms` − `stamp.transit_ms`** (write wall clock − OTS). Both terms come from the same grain, so
+  every quantisation term above cancels. Injecting a deliberate 2-frame lag with
+  `pace: {"offset_ms": 66.7334}` and reading it back this way over three runs gave **66.740,
+  66.739 and 66.734 ms** — the last within six tenths of a microsecond. `waited_ms` over the same
+  runs could only place the lag between 31 and 63 ms.
+
+### Reproducing the decomposition
+
+From a `07-sync-group` run, for each successful wait: take `resolved.timestamp_ns` as `T` and
+`t_wall_ns − waited_ms` as the start; compute `idx = (T·num + 5e8·den) / (1e9·den)` and
+`ots = (idx·den·1e9 + num/2) / num` (the SDK's own integer forms, `IndexConversion.hpp:12` and
+`:25`); `ots − T` is the quantisation δ, and the `mxlFlowWriterCommitGrain` event whose `index`
+equals `idx` gives the commit moment. The residual is the group's cost, plus — for a multi-member
+group — whatever the other members were still waiting on.
+
+---
+
+## Reproducing
+
+```bash
+cd test-tools/ABI-tester
+ulimit -n 65536
+./sweep.sh "1 8 32 96 256" 599        # ~4 min; writes /tmp/abi-load-<N>.ndjson
+```
+
+Then, in one query over every run — `filename=true` recovers the lane count, and
+`t_wall_ns::BIGINT` is exact where `jq`'s doubles quantise at ~256 ns:
+
+```sql
+WITH ev AS (
+  SELECT regexp_extract(filename,'abi-load-(\d+)',1)::INT AS lanes,
+         lane, call, duration_us, t_wall_ns::BIGINT AS t,
+         fill.fill_us AS fill_us, pace.late_ms AS late_ms,
+         duration_us - coalesce(fill.fill_us,0) AS abi_us,
+         row_number() OVER (PARTITION BY filename, lane, call ORDER BY seq) AS n
+  FROM read_json_auto('/tmp/abi-load-*.ndjson', filename=true, union_by_name=true)
+  WHERE ok AND step_id IN ('s5','s6')
+)
+SELECT lanes, replace(call,'mxlFlowWriter','') AS call, count(*) AS n,
+       round(quantile_cont(abi_us,0.50),1)      AS abi_p50_us,
+       round(quantile_cont(fill_us,0.50),1)     AS payload_p50_us,
+       round(quantile_cont(duration_us,0.99),1) AS p99_us,
+       round(quantile_cont(late_ms,0.50),3)     AS late_p50_ms,
+       round(stddev((t % 33366667)/1e6),2)      AS phase_sd_ms
+FROM ev WHERE n > 5          -- drop the page-fault region; see §5
+GROUP BY 1,2 ORDER BY 2,1;
+```
+
+The two diagnostics in §2 and §3 are one-line edits to `gen-load.sh`'s `s5` step:
+
+```jq
+fill:{mode:"none"},                                          # §2 — isolate the payload write
+pace:{jitter_ms:2, offset_ms:($i * 33.3667 / $lanes)},       # §3 — spread the phase
+```
+
+**Before any run:** make sure nothing else is listening on port 9600. cpp-httplib sets
+`SO_REUSEPORT` (`httplib.h:1860`), so a stale server does **not** fail to bind — the kernel
+round-robins connections between listeners and requests land nondeterministically, with no
+error anywhere. `sweep.sh` guards against this; ad-hoc runs should `pkill -f build/abi-tester`
+first.

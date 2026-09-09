@@ -1,0 +1,178 @@
+{
+  "name": "04-writer-conflict",
+  "description": "There is no writer exclusion. MXL_ERR_CONFLICT is declared in mxl.h and returned from nowhere in the library: every flow mapping is opened LockMode::Shared, so a second writer on the same flow from a second instance succeeds. mxlIsFlowActive tests the flow with flock(LOCK_EX|LOCK_NB) and reports failure as 'active', so it means 'someone holds this flow open', not 'a writer is publishing' -- and it stays true until the LAST holder releases.",
+  "lanes": {
+    "A": [
+      {
+        "id": "a0",
+        "call": "mxlCreateInstance",
+        "args": {},
+        "out": {
+          "instance": "I"
+        }
+      },
+      {
+        "id": "a1",
+        "call": "mxlCreateFlowWriter",
+        "out": {
+          "writer": "W"
+        },
+        "args": {
+          "instance": "I",
+          "flow_def": "{\n    \"id\": \"a1b2c3d4-0001-4000-8000-000000000001\",\n    \"label\": \"ABI Tester Video\",\n    \"description\": \"1080p29.97 v210 test flow written by the ABI tester\",\n    \"format\": \"urn:x-nmos:format:video\",\n    \"media_type\": \"video/v210\",\n    \"tags\": {\n      \"urn:x-nmos:tag:grouphint/v1.0\": [\n        \"ABI-Tester:Video\"\n      ]\n    },\n    \"parents\": [],\n    \"grain_rate\": {\n      \"numerator\": 30000,\n      \"denominator\": 1001\n    },\n    \"frame_width\": 1920,\n    \"frame_height\": 1080,\n    \"interlace_mode\": \"progressive\",\n    \"colorspace\": \"BT709\",\n    \"components\": [\n      { \"name\": \"Y\",  \"width\": 1920, \"height\": 1080, \"bit_depth\": 10 },\n      { \"name\": \"Cb\", \"width\": 960,  \"height\": 1080, \"bit_depth\": 10 },\n      { \"name\": \"Cr\", \"width\": 960,  \"height\": 1080, \"bit_depth\": 10 }\n    ]\n}"
+        }
+      },
+      {
+        "id": "a2",
+        "call": "mxlIsFlowActive",
+        "args": {
+          "instance": "I",
+          "flow_id": "a1b2c3d4-0001-4000-8000-000000000001"
+        },
+        "note": "is_active true: our own shared lock is enough to make it so"
+      },
+      {
+        "id": "a3",
+        "call": "setCursor",
+        "args": {
+          "index": {
+            "mode": "current",
+            "edit_rate": {
+              "num": 30000,
+              "den": 1001
+            }
+          }
+        }
+      },
+      {
+        "id": "a4",
+        "call": "mxlFlowWriterOpenGrain",
+        "out": {
+          "grain": "g"
+        },
+        "args": {
+          "writer": "W",
+          "index": {
+            "mode": "cursor"
+          }
+        },
+        "fill": {
+          "mode": "const",
+          "byte": 17,
+          "stamp": true
+        }
+      },
+      {
+        "id": "a5",
+        "call": "mxlFlowWriterCommitGrain",
+        "advance_cursor": 1,
+        "args": {
+          "writer": "W",
+          "grain": "g"
+        }
+      },
+      {
+        "id": "a6",
+        "call": "mxlReleaseFlowWriter",
+        "delay_before_ms": 2000,
+        "args": {
+          "instance": "I",
+          "writer": "W"
+        }
+      },
+      {
+        "id": "a7",
+        "call": "mxlIsFlowActive",
+        "delay_before_ms": 500,
+        "args": {
+          "instance": "I",
+          "flow_id": "a1b2c3d4-0001-4000-8000-000000000001"
+        },
+        "note": "STILL true: lane B's writer holds the flow, though this lane released it"
+      }
+    ],
+    "B": [
+      {
+        "id": "b0",
+        "call": "mxlCreateInstance",
+        "delay_before_ms": 500,
+        "args": {},
+        "out": {
+          "instance": "I2"
+        }
+      },
+      {
+        "id": "b1",
+        "call": "mxlCreateFlowWriter",
+        "out": {
+          "writer": "WB"
+        },
+        "args": {
+          "instance": "I2",
+          "flow_def": "{\n    \"id\": \"a1b2c3d4-0001-4000-8000-000000000001\",\n    \"label\": \"ABI Tester Video\",\n    \"description\": \"1080p29.97 v210 test flow written by the ABI tester\",\n    \"format\": \"urn:x-nmos:format:video\",\n    \"media_type\": \"video/v210\",\n    \"tags\": {\n      \"urn:x-nmos:tag:grouphint/v1.0\": [\n        \"ABI-Tester:Video\"\n      ]\n    },\n    \"parents\": [],\n    \"grain_rate\": {\n      \"numerator\": 30000,\n      \"denominator\": 1001\n    },\n    \"frame_width\": 1920,\n    \"frame_height\": 1080,\n    \"interlace_mode\": \"progressive\",\n    \"colorspace\": \"BT709\",\n    \"components\": [\n      { \"name\": \"Y\",  \"width\": 1920, \"height\": 1080, \"bit_depth\": 10 },\n      { \"name\": \"Cb\", \"width\": 960,  \"height\": 1080, \"bit_depth\": 10 },\n      { \"name\": \"Cr\", \"width\": 960,  \"height\": 1080, \"bit_depth\": 10 }\n    ]\n}"
+        },
+        "note": "the finding: a second writer on the same flow returns MXL_STATUS_OK"
+      },
+      {
+        "id": "b2",
+        "call": "setCursor",
+        "args": {
+          "index": {
+            "mode": "current",
+            "edit_rate": {
+              "num": 30000,
+              "den": 1001
+            }
+          }
+        }
+      },
+      {
+        "id": "b3",
+        "call": "mxlFlowWriterOpenGrain",
+        "out": {
+          "grain": "gb"
+        },
+        "args": {
+          "writer": "WB",
+          "index": {
+            "mode": "cursor"
+          }
+        },
+        "fill": {
+          "mode": "const",
+          "byte": 34,
+          "stamp": true
+        },
+        "note": "both writers are live on one ring; nothing in the ABI notices"
+      },
+      {
+        "id": "b4",
+        "call": "mxlFlowWriterCommitGrain",
+        "advance_cursor": 1,
+        "args": {
+          "writer": "WB",
+          "grain": "gb"
+        }
+      },
+      {
+        "id": "b5",
+        "call": "mxlReleaseFlowWriter",
+        "delay_before_ms": 3000,
+        "args": {
+          "instance": "I2",
+          "writer": "WB"
+        }
+      },
+      {
+        "id": "b6",
+        "call": "mxlIsFlowActive",
+        "delay_before_ms": 500,
+        "args": {
+          "instance": "I2",
+          "flow_id": "a1b2c3d4-0001-4000-8000-000000000001"
+        },
+        "note": "MXL_ERR_FLOW_NOT_FOUND, not is_active false: releasing the LAST writer upgrades the shared lock to exclusive and deletes the flow (Instance.cpp:176)"
+      }
+    ]
+  }
+}

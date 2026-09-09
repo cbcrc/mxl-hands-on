@@ -1,0 +1,152 @@
+{
+  "name": "02-audio-write-read",
+  "description": "Baseline continuous round trip. Lane A commits three 1024-sample batches a second apart; lane B reads the newest batch non-blocking, blocks for one that does not exist yet and must wake on the commit, then lets a deadline expire on an unreachable index.",
+  "lanes": {
+    "A": [
+      {
+        "id": "a0",
+        "call": "mxlCreateInstance",
+        "args": {},
+        "out": {
+          "instance": "I"
+        }
+      },
+      {
+        "id": "a1",
+        "call": "mxlCreateFlowWriter",
+        "out": {
+          "writer": "W"
+        },
+        "args": {
+          "instance": "I",
+          "flow_def": "{\n    \"id\": \"a1b2c3d4-0002-4000-8000-000000000002\",\n    \"label\": \"ABI Tester Audio\",\n    \"description\": \"48 kHz 2-channel float32 test flow written by the ABI tester\",\n    \"format\": \"urn:x-nmos:format:audio\",\n    \"media_type\": \"audio/float32\",\n    \"tags\": {\n        \"urn:x-nmos:tag:grouphint/v1.0\": [\n            \"ABI-Tester:Audio\"\n        ]\n    },\n    \"parents\": [],\n    \"sample_rate\": {\n        \"numerator\": 48000\n    },\n    \"channel_count\": 2,\n    \"bit_depth\": 32\n}"
+        },
+        "note": "spliced in by jq from flows/audio-48k-2ch-f32.json"
+      },
+      {
+        "id": "a2",
+        "call": "mxlFlowWriterGetMaxWriteLengthSamples",
+        "args": {
+          "writer": "W"
+        },
+        "note": "half the ring: 200 ms at 48 kHz is 9600 samples, so ~4800. 1024 is well inside"
+      },
+      {
+        "id": "a3",
+        "call": "setCursor",
+        "args": {
+          "index": {
+            "mode": "current",
+            "edit_rate": {
+              "num": 48000,
+              "den": 1
+            }
+          }
+        },
+        "note": "a continuous flow's edit rate is its sample rate: this cursor counts samples"
+      },
+      {
+        "id": "a4",
+        "call": "mxlFlowWriterOpenSamples",
+        "delay_before_ms": 1000,
+        "args": {
+          "writer": "W",
+          "index": {
+            "mode": "cursor",
+            "offset": 1024
+          },
+          "count": 1024,
+          "fill": "ramp"
+        },
+        "note": "index is the exclusive END, so this opens [cursor, cursor+1024)"
+      },
+      {
+        "id": "a5",
+        "call": "mxlFlowWriterCommitSamples",
+        "args": {
+          "writer": "W"
+        },
+        "advance_cursor": 1024,
+        "note": "no range argument -- the writer remembers what OpenSamples opened"
+      },
+      {
+        "id": "a6",
+        "call": "repeat",
+        "args": {
+          "to": "a4",
+          "times": 2
+        }
+      }
+    ],
+    "B": [
+      {
+        "id": "b0",
+        "call": "mxlCreateInstance",
+        "delay_before_ms": 1500,
+        "args": {},
+        "out": {
+          "instance": "I2"
+        }
+      },
+      {
+        "id": "b1",
+        "call": "mxlCreateFlowReader",
+        "out": {
+          "reader": "R"
+        },
+        "args": {
+          "instance": "I2",
+          "flow_id": "a1b2c3d4-0002-4000-8000-000000000002"
+        }
+      },
+      {
+        "id": "b2",
+        "call": "mxlFlowReaderGetMaxReadLengthSamples",
+        "args": {
+          "reader": "R"
+        }
+      },
+      {
+        "id": "b3",
+        "call": "mxlFlowReaderGetSamplesNonBlocking",
+        "args": {
+          "reader": "R",
+          "index": {
+            "mode": "head",
+            "offset": 1
+          },
+          "count": 1024
+        },
+        "note": "head mode gives head-1 on a continuous flow; +1 restores the exclusive end, so this is the newest 1024 samples"
+      },
+      {
+        "id": "b4",
+        "call": "mxlFlowReaderGetSamples",
+        "args": {
+          "reader": "R",
+          "index": {
+            "mode": "head",
+            "offset": 1025
+          },
+          "count": 1024,
+          "timeout_ns": 3000000000
+        },
+        "note": "one batch past the head: must WAKE on lane A's next commit, ~500 ms into a 3 s deadline"
+      },
+      {
+        "id": "b5",
+        "call": "mxlFlowReaderGetSamples",
+        "args": {
+          "reader": "R",
+          "index": {
+            "mode": "head",
+            "offset": 100001
+          },
+          "count": 1024,
+          "timeout_ns": 500000000
+        },
+        "note": "unreachable: expect MXL_ERR_OUT_OF_RANGE_TOO_EARLY with waited_ms ~500, never MXL_ERR_TIMEOUT"
+      }
+    ]
+  }
+}

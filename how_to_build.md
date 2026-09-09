@@ -53,21 +53,13 @@ This scripts will:
 - Build the rust part of the project in the ./dmf-mxl/rust directory
 - Place the rust build artifacts in ./dmf-mxl/rust/target
 
-## Step 2: Build the GStreamer based application images.
-
-```sh
-   # Navigate to the gst-apps directory first
-   cd gst-apps
-   docker compose build
-```
-
-## Step 3: Build Docker Images. ONLY WORK UNDER LINUX
+## Step 2: Build Docker Images. ONLY WORK UNDER LINUX
 
 After the project is built, create the Docker images:
 
 ```bash
 # Navigate to the build-images directory first
-cd build-images
+cd ~/mxl-hands-on/build-images
 ./build-demo-images.sh
 ```
 
@@ -82,9 +74,9 @@ the nomenclature of the generated tag is:
 Exemple:
 ```mxl-reader:mxl-8d280db-linux-Clang-release```
 
-## Step 4: Upload to image repository
+## Step 3: Upload to image repository
 
-All images are published with `docker buildx build --push` instead of `docker tag` + `docker push`: this generates an **SPDX SBOM and provenance attestation** for each image and attaches them to the pushed image (see `THIRD-PARTY-NOTICES.md` for why we publish SBOMs). The builds reuse the cache from Steps 2 and 3, so this is mostly a re-export + push. Attestations only attach when buildx pushes directly to the registry — images loaded locally and then `docker push`ed lose them, which is why the local build scripts don't bother with `--sbom`.
+All images are published with `docker buildx build --push` instead of `docker tag` + `docker push`: this generates an **SPDX SBOM and provenance attestation** for each image and attaches them to the pushed image (see `THIRD-PARTY-NOTICES.md` for why we publish SBOMs). The tools/demo images reuse the cache from Step 2, so those are mostly a re-export + push; the application images are built here for the first time. Attestations only attach when buildx pushes directly to the registry — images loaded locally and then `docker push`ed lose them, which is why the local build scripts don't bother with `--sbom`.
 
 > ⚠️ Use `docker buildx build` here, not `docker compose build --sbom=true` — on current Docker versions the compose flag silently produces no SBOM. Attestations also require the **containerd image store** (Docker Desktop: Settings → General → "Use containerd for pulling and storing images").
 
@@ -93,7 +85,7 @@ All images are published with `docker buildx build --push` instead of `docker ta
    # enter your personnal Github token (permission scope: Workflows, Write+Delete Package)
 ```
 
-First the tools/demo images (writer, reader, clip-player). This reuses the `mxl-builder` cache from Step 3, and pushes both `:$TAG_TOOLS` and `:latest` with the SBOM attached:
+First the tools/demo images (writer, reader, clip-player). This reuses the `mxl-builder` cache from Step 2, and pushes both `:$TAG_TOOLS` and `:latest` with the SBOM attached:
 
 ```sh
    # Run from the repository root.
@@ -123,15 +115,34 @@ Then the gst-apps images, same pattern:
    done
 ```
 
+Then the ABI-tester (`test-tools/`), same pattern but a single image rather than a loop. Its build
+context is also the repository root: the `COPY` paths are root-relative and it reads the SDK headers
+and `libmxl.so.1.1` straight out of Step 1's build directory, so **Step 1 must have run**.
+
+```sh
+   # Run from the repository root. Pushes both :$TAG_APP and :latest with SBOM attached.
+   docker buildx build --platform linux/amd64 --sbom=true --provenance=mode=max \
+     -f test-tools/ABI-tester/Dockerfile \
+     -t "ghcr.io/cbcrc/abi-tester:${TAG_APP}" -t "ghcr.io/cbcrc/abi-tester:latest" \
+     --push .
+```
+
+> Note the context stays `.` even though the app lives in `test-tools/`: BuildKit picks up
+> `test-tools/ABI-tester/Dockerfile.dockerignore` because of `-f`, and that file is what keeps the
+> multi-GB repository root out of the context (it denies everything, then allows the ~12 MB this
+> build actually reads). This image has a Node frontend stage and a CMake backend stage, so a cold
+> build takes a couple of minutes; `docker compose build` in `test-tools/` warms the cache if you
+> are iterating.
+
 To verify the SBOM landed on GHCR (prints the SPDX document):
 
 ```sh
    docker buildx imagetools inspect ghcr.io/cbcrc/file-player:latest --format '{{ json .SBOM }}' | head -c 500
 ```
 
-These versions are the **latest stable** version of mxl that we deploy by default: both buildx loops above already pushed the moving `latest` tag alongside the versioned tags, so no separate `docker tag` + `docker push` step is needed.
+These versions are the **latest stable** version of mxl that we deploy by default: every buildx command above already pushed the moving `latest` tag alongside the versioned tags, so no separate `docker tag` + `docker push` step is needed.
 
-## Step 5 Test with Exercises
+## Step 4 Test with Exercises
 
 After building the Docker images, follow the exercises in the repository to test and explore MXL functionality:
 

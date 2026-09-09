@@ -1,0 +1,26 @@
+{
+    "id": "a1b2c3d4-0001-4000-8000-000000000001",
+    "label": "ABI Tester Video",
+    "description": "1080p29.97 v210 test flow written by the ABI tester",
+    "format": "urn:x-nmos:format:video",
+    "media_type": "video/v210",
+    "tags": {
+      "urn:x-nmos:tag:grouphint/v1.0": [
+        "ABI-Tester:Video"
+      ]
+    },
+    "parents": [],
+    "grain_rate": {
+      "numerator": 30000,
+      "denominator": 1001
+    },
+    "frame_width": 1920,
+    "frame_height": 1080,
+    "interlace_mode": "progressive",
+    "colorspace": "BT709",
+    "components": [
+      { "name": "Y",  "width": 1920, "height": 1080, "bit_depth": 10 },
+      { "name": "Cb", "width": 960,  "height": 1080, "bit_depth": 10 },
+      { "name": "Cr", "width": 960,  "height": 1080, "bit_depth": 10 }
+    ]
+}

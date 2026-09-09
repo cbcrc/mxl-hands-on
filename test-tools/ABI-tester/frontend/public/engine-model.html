@@ -1,0 +1,471 @@
+<!doctype html>
+<!-- SPDX-FileCopyrightText: 2026 CBC/Radio-Canada -->
+<!-- SPDX-License-Identifier: CC-BY-4.0 -->
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<title>ABI Tester — the engine and the ABI</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: #0f0f0f; color: #e0e0e0; padding: 2rem 1rem 4rem; }
+  main { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 1.6rem; margin-bottom: .4rem; }
+  h2 { font-size: 1.15rem; margin: 2.5rem 0 .5rem; }
+  p  { color: #b8b8b8; line-height: 1.55; margin-bottom: .75rem; max-width: 78ch; }
+  .sub { color: #888; font-size: .9rem; margin-bottom: 1.5rem; }
+  .panel { background: #1c1c1c; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
+  svg { width: 100%; height: auto; display: block; }
+  code { font-family: ui-monospace, Menlo, monospace; font-size: .85em; color: #cfcfcf; }
+  table { width: 100%; border-collapse: collapse; font-size: .88rem; margin-top: .5rem; }
+  th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid #333; vertical-align: top; }
+  th { color: #888; font-weight: 600; }
+  td.eng { color: #81c784; font-family: ui-monospace, Menlo, monospace; white-space: nowrap; }
+  td.abi { color: #64b5f6; font-family: ui-monospace, Menlo, monospace; white-space: nowrap; }
+  .key { display: flex; gap: 1.5rem; flex-wrap: wrap; font-size: .85rem; margin: .75rem 0 0; }
+  .key span { display: flex; align-items: center; gap: .4rem; color: #b8b8b8; }
+  .sw { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+  a.back { color: #81c784; font-size: .9rem; text-decoration: none; }
+  a.back:hover { text-decoration: underline; }
+  .note { border-left: 2px solid #ffb74d; padding-left: .8rem; color: #b8b8b8;
+          font-size: .9rem; margin: .75rem 0; max-width: 78ch; }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="/">← back to the tester</a>
+  <h1 style="margin-top:.75rem">Two layers: the engine and the ABI</h1>
+  <div class="sub">Everything green is scenario vocabulary invented by this tool. Everything blue
+    is an argument that actually crosses into <code>libmxl</code>. Confusing the two is the single
+    most common way to misread a run.</div>
+
+  <div class="key">
+    <span><i class="sw" style="background:#81c784"></i> engine only — never reaches libmxl</span>
+    <span><i class="sw" style="background:#64b5f6"></i> crosses the ABI boundary</span>
+    <span><i class="sw" style="background:#ffb74d"></i> lane bookkeeping</span>
+  </div>
+
+  <h2>1 · One step, end to end</h2>
+  <p>A step is a line of JSON. By the time <code>libmxl</code> sees anything, every expression has
+     been flattened to a number or a pointer — the ABI has no idea a lane, a cursor or a mode ever
+     existed.</p>
+  <div class="panel">
+  <svg viewBox="0 0 1040 540" role="img" aria-label="A scenario step flowing through the engine into a libmxl call">
+    <defs>
+      <marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 z" fill="#777"/>
+      </marker>
+      <marker id="arb" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 z" fill="#64b5f6"/>
+      </marker>
+    </defs>
+
+    <!-- boundary -->
+    <line x1="712" y1="26" x2="712" y2="524" stroke="#64b5f6" stroke-width="1.5" stroke-dasharray="6 5"/>
+    <text x="718" y="42" fill="#64b5f6" font-size="12" font-family="ui-monospace,Menlo,monospace">ABI boundary</text>
+
+    <!-- P1 -->
+    <rect x="12" y="56" width="300" height="452" rx="6" fill="#151515" stroke="#333"/>
+    <text x="26" y="80" fill="#e0e0e0" font-size="14" font-weight="600">1 · the step you wrote</text>
+    <text x="26" y="98" fill="#777" font-size="11">scenario JSON</text>
+    <g font-family="ui-monospace,Menlo,monospace" font-size="12">
+      <text x="26" y="128" fill="#888">{</text>
+      <text x="38" y="146" fill="#81c784">"id": "a5",</text>
+      <text x="38" y="164" fill="#64b5f6">"call": "mxlFlowWriterOpenGrain",</text>
+      <text x="38" y="188" fill="#81c784">"pace": { "offset_ms": 0 },</text>
+      <text x="38" y="212" fill="#888">"args": {</text>
+      <text x="50" y="230" fill="#64b5f6">"writer": "W",</text>
+      <text x="50" y="248" fill="#81c784">"index": {</text>
+      <text x="62" y="266" fill="#81c784">"mode": "cursor",</text>
+      <text x="62" y="284" fill="#81c784">"offset": 0 }</text>
+      <text x="38" y="302" fill="#888">},</text>
+      <text x="38" y="326" fill="#81c784">"fill": { "mode": "const",</text>
+      <text x="62" y="344" fill="#81c784">"stamp": true },</text>
+      <text x="38" y="368" fill="#81c784">"out": { "grain": "g" },</text>
+      <text x="38" y="392" fill="#ffb74d">"advance_cursor": 1</text>
+      <text x="26" y="410" fill="#888">}</text>
+    </g>
+    <text x="26" y="446" fill="#777" font-size="11">green keys have no counterpart</text>
+    <text x="26" y="462" fill="#777" font-size="11">anywhere in mxl/flow.h</text>
+
+    <!-- P2 -->
+    <rect x="352" y="56" width="330" height="452" rx="6" fill="#151515" stroke="#333"/>
+    <text x="366" y="80" fill="#e0e0e0" font-size="14" font-weight="600">2 · what the engine does</text>
+    <text x="366" y="98" fill="#777" font-size="11">in this order, per step, on the lane thread</text>
+    <g font-size="12">
+      <rect x="366" y="112" width="302" height="52" rx="4" fill="#1c1c1c" stroke="#3a4a3a"/>
+      <text x="378" y="130" fill="#81c784" font-weight="600">WAIT</text>
+      <text x="378" y="148" fill="#a9a9a9" font-size="11">pace → sleep until OTS(index)+offset_ms</text>
+      <text x="378" y="160" fill="#a9a9a9" font-size="11">or delay_before_ms × delay_scale</text>
+
+      <rect x="366" y="174" width="302" height="52" rx="4" fill="#1c1c1c" stroke="#3a4a3a"/>
+      <text x="378" y="192" fill="#81c784" font-weight="600">RESOLVE</text>
+      <text x="378" y="210" fill="#a9a9a9" font-size="11">any arg that is an object with "mode"</text>
+      <text x="378" y="222" fill="#a9a9a9" font-size="11">→ one uint64  (engine.cpp:568)</text>
+
+      <rect x="366" y="236" width="302" height="52" rx="4" fill="#1c1c1c" stroke="#3a4a3a"/>
+      <text x="378" y="254" fill="#81c784" font-weight="600">MERGE</text>
+      <text x="378" y="272" fill="#a9a9a9" font-size="11">fill merged into args AFTER resolve</text>
+      <text x="378" y="284" fill="#a9a9a9" font-size="11">out → store_as</text>
+
+      <rect x="366" y="298" width="302" height="40" rx="4" fill="#1c1c1c" stroke="#3a4a3a"/>
+      <text x="378" y="316" fill="#81c784" font-weight="600">LOOK UP</text>
+      <text x="378" y="332" fill="#a9a9a9" font-size="11">handle names → opaque pointers (Registry)</text>
+
+      <rect x="366" y="348" width="302" height="36" rx="4" fill="#1c1c1c" stroke="#64b5f6"/>
+      <text x="378" y="371" fill="#64b5f6" font-weight="600">CALL the adapter →</text>
+
+      <rect x="366" y="394" width="302" height="52" rx="4" fill="#1c1c1c" stroke="#3a4a3a"/>
+      <text x="378" y="412" fill="#81c784" font-weight="600">RECORD</text>
+      <text x="378" y="430" fill="#a9a9a9" font-size="11">t_wall_ns, duration_us, resolved{}, status</text>
+      <text x="378" y="442" fill="#a9a9a9" font-size="11">→ appended to the event log</text>
+
+      <rect x="366" y="456" width="302" height="40" rx="4" fill="#1c1c1c" stroke="#4a4030"/>
+      <text x="378" y="474" fill="#ffb74d" font-weight="600">BOOKKEEP</text>
+      <text x="378" y="490" fill="#a9a9a9" font-size="11">advance_cursor, next++, repeat jumps back</text>
+    </g>
+
+    <!-- P3 -->
+    <rect x="742" y="56" width="286" height="452" rx="6" fill="#151515" stroke="#333"/>
+    <text x="756" y="80" fill="#e0e0e0" font-size="14" font-weight="600">3 · what libmxl receives</text>
+    <text x="756" y="98" fill="#777" font-size="11">mxl/flow.h</text>
+    <g font-family="ui-monospace,Menlo,monospace" font-size="11.5">
+      <text x="756" y="128" fill="#64b5f6">mxlFlowWriterOpenGrain(</text>
+      <text x="768" y="148" fill="#cfcfcf">mxlFlowWriter writer,</text>
+      <text x="768" y="166" fill="#cfcfcf">uint64_t      index,</text>
+      <text x="768" y="184" fill="#cfcfcf">mxlGrainInfo* info,</text>
+      <text x="768" y="202" fill="#cfcfcf">uint8_t**     payload)</text>
+      <text x="756" y="224" fill="#64b5f6">→ mxlStatus</text>
+    </g>
+    <text x="756" y="256" fill="#888" font-size="11.5">the only argument kinds here:</text>
+    <g font-size="11.5" fill="#a9a9a9" font-family="ui-monospace,Menlo,monospace">
+      <text x="756" y="278">opaque handles (pointers)</text>
+      <text x="756" y="296">uint64: index, count,</text>
+      <text x="768" y="312">timeout_ns, timestamp_ns</text>
+      <text x="756" y="330">mxlRational {num, den}</text>
+      <text x="756" y="348">flags, valid_slices,</text>
+      <text x="768" y="364">min_valid_slices</text>
+      <text x="756" y="382">out-params: mxlGrainInfo,</text>
+      <text x="768" y="398">payload*, slices</text>
+    </g>
+    <line x1="756" y1="416" x2="1014" y2="416" stroke="#333"/>
+    <text x="756" y="436" fill="#e57373" font-size="11.5" font-weight="600">never crosses:</text>
+    <g font-size="11" fill="#8a8a8a" font-family="ui-monospace,Menlo,monospace">
+      <text x="756" y="454">lane, cursor, mode, offset,</text>
+      <text x="756" y="470">pace, delay_before_ms,</text>
+      <text x="756" y="486">delay_scale, advance_cursor,</text>
+      <text x="756" y="502">repeat, out, fill, id, note</text>
+    </g>
+
+    <!-- arrows -->
+    <line x1="314" y1="282" x2="350" y2="282" stroke="#777" stroke-width="1.5" marker-end="url(#ar)"/>
+    <line x1="670" y1="366" x2="740" y2="366" stroke="#64b5f6" stroke-width="1.5" marker-end="url(#arb)"/>
+    <path d="M 740 424 L 700 424 L 700 440 L 670 440" fill="none" stroke="#555"
+          stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#ar)"/>
+    <text x="686" y="376" fill="#777" font-size="9">status +</text>
+    <text x="686" y="388" fill="#777" font-size="9">out-params</text>
+  </svg>
+  </div>
+
+  <div class="note"><strong>The one consequence worth memorising.</strong> An index is chosen by
+    the engine, and OTS is derived from the index by <code>libmxl</code> — it is never stored in a
+    grain. So the engine's arithmetic <em>is</em> the media time. That is why a scenario can run
+    slower than real time and still produce timestamps a real consumer accepts.</div>
+
+  <h2>2 · Lanes, cursors, and what is shared</h2>
+  <p>A lane is a thread with a step list, a cursor and a program counter. Lanes never share those.
+     They do share the handle registry and the event log — which is why one lane can create a
+     writer another lane could name, and why the console shows a single interleaved timeline.</p>
+  <div class="panel">
+  <svg viewBox="0 0 1040 400" role="img" aria-label="Three lanes with independent cursors sharing a registry and an event log">
+    <defs><marker id="ar2" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="#777"/></marker></defs>
+    
+    <text x="12" y="26" fill="#888" font-size="12">lane pool — 8 slots, A..H (ABI_TESTER_LANES)</text>
+
+    <g font-family="ui-monospace,Menlo,monospace" font-size="12">
+      <!-- lane A -->
+      <rect x="12" y="40" width="700" height="72" rx="6" fill="#151515" stroke="#333"/>
+      <text x="26" y="64" fill="#e0e0e0" font-size="13" font-weight="600">lane A</text>
+      <text x="26" y="84" fill="#ffb74d" font-size="11">cursor 53602464907</text>
+      <text x="26" y="100" fill="#777" font-size="11">next = 4</text>
+      <g>
+        <rect x="190" y="52" width="66" height="46" rx="3" fill="#1c1c1c" stroke="#3a4a3a"/><text x="202" y="80" fill="#a9a9a9">a0</text>
+        <rect x="264" y="52" width="66" height="46" rx="3" fill="#1c1c1c" stroke="#3a4a3a"/><text x="276" y="80" fill="#a9a9a9">a1</text>
+        <rect x="338" y="52" width="66" height="46" rx="3" fill="#1c1c1c" stroke="#3a4a3a"/><text x="350" y="80" fill="#a9a9a9">a2</text>
+        <rect x="412" y="52" width="66" height="46" rx="3" fill="#232f23" stroke="#81c784"/><text x="424" y="80" fill="#81c784">a3</text>
+        <rect x="486" y="52" width="66" height="46" rx="3" fill="#1c1c1c" stroke="#333"/><text x="498" y="80" fill="#666">a4</text>
+        <rect x="560" y="52" width="90" height="46" rx="3" fill="#1c1c1c" stroke="#4a4030"/><text x="570" y="80" fill="#ffb74d" font-size="11">repeat</text>
+      </g>
+      <text x="422" y="112" fill="#81c784" font-size="10">running</text>
+
+      <!-- lane B -->
+      <rect x="12" y="124" width="700" height="72" rx="6" fill="#151515" stroke="#333"/>
+      <text x="26" y="148" fill="#e0e0e0" font-size="13" font-weight="600">lane B</text>
+      <text x="26" y="168" fill="#ffb74d" font-size="11">cursor 85849946401977</text>
+      <text x="26" y="184" fill="#777" font-size="11">next = 3</text>
+      <g>
+        <rect x="190" y="136" width="66" height="46" rx="3" fill="#1c1c1c" stroke="#3a4a3a"/><text x="202" y="164" fill="#a9a9a9">b0</text>
+        <rect x="264" y="136" width="66" height="46" rx="3" fill="#1c1c1c" stroke="#3a4a3a"/><text x="276" y="164" fill="#a9a9a9">b1</text>
+        <rect x="338" y="136" width="66" height="46" rx="3" fill="#232f23" stroke="#81c784"/><text x="350" y="164" fill="#81c784">b2</text>
+        <rect x="412" y="136" width="66" height="46" rx="3" fill="#1c1c1c" stroke="#333"/><text x="424" y="164" fill="#666">b3</text>
+      </g>
+      <text x="26" y="204" fill="#777" font-size="10.5">a different cursor, in a different unit: samples, not grains</text>
+
+      <!-- lane C -->
+      <rect x="12" y="216" width="700" height="60" rx="6" fill="#151515" stroke="#333"/>
+      <text x="26" y="240" fill="#e0e0e0" font-size="13" font-weight="600">lane C</text>
+      <text x="26" y="256" fill="#777" font-size="11">no setCursor,</text>
+      <text x="26" y="270" fill="#777" font-size="11">so cursor unused</text>
+      <g>
+        <rect x="190" y="228" width="66" height="36" rx="3" fill="#232f23" stroke="#81c784"/><text x="202" y="251" fill="#81c784">c0</text>
+        <rect x="264" y="228" width="66" height="36" rx="3" fill="#1c1c1c" stroke="#333"/><text x="276" y="251" fill="#666">c1</text>
+      </g>
+
+      <rect x="12" y="288" width="700" height="44" rx="6" fill="#141414" stroke="#2a2a2a" stroke-dasharray="4 4"/>
+      <text x="26" y="315" fill="#666" font-size="12">lanes D..H — empty pool slots, drawn as buttons, never stepped</text>
+    </g>
+
+    <!-- shared -->
+    <rect x="742" y="40" width="286" height="112" rx="6" fill="#151515" stroke="#64b5f6"/>
+    <text x="756" y="64" fill="#64b5f6" font-size="13" font-weight="600">Registry — shared</text>
+    <g font-family="ui-monospace,Menlo,monospace" font-size="11.5" fill="#a9a9a9">
+      <text x="756" y="86">"I" → mxlInstance*</text>
+      <text x="756" y="104">"W" → mxlFlowWriter*  owner "I"</text>
+      <text x="756" y="122">"R" → mxlFlowReader*  owner "I2"</text>
+      <text x="756" y="140" fill="#777" font-size="10.5">names are ours; pointers are the ABI's</text>
+    </g>
+
+    <rect x="742" y="164" width="286" height="112" rx="6" fill="#151515" stroke="#64b5f6"/>
+    <text x="756" y="188" fill="#64b5f6" font-size="13" font-weight="600">Event log — shared</text>
+    <g font-family="ui-monospace,Menlo,monospace" font-size="11.5" fill="#a9a9a9">
+      <text x="756" y="210">seq 41  lane A  a3  OK  192 us</text>
+      <text x="756" y="228">seq 42  lane B  b2  OK  10 us</text>
+      <text x="756" y="246">seq 43  lane A  a4  OK  34 us</text>
+      <text x="756" y="266" fill="#777">one monotonic sequence; /log?since=</text>
+    </g>
+
+    <rect x="742" y="288" width="286" height="44" rx="6" fill="#151515" stroke="#333"/>
+    <text x="756" y="308" fill="#888" font-size="11.5">transport is global: /run, /pause, /reset</text>
+    <text x="756" y="324" fill="#888" font-size="11.5">/step takes one lane at a time</text>
+
+    <line x1="716" y1="76" x2="738" y2="76" stroke="#555" stroke-width="1.2" marker-end="url(#ar2)"/>
+    <line x1="716" y1="160" x2="738" y2="200" stroke="#555" stroke-width="1.2" marker-end="url(#ar2)"/>
+    <line x1="716" y1="244" x2="738" y2="214" stroke="#555" stroke-width="1.2" marker-end="url(#ar2)"/>
+  </svg>
+  </div>
+
+  <h2>3 · <code>delay_before_ms</code> vs <code>pace</code></h2>
+  <p>Both make a step wait, and they are not interchangeable. One measures from the previous step;
+     the other measures from the grain's own OTS. Only the second keeps a writer on the media grid,
+     and only the first is affected by the transport bar's delay scale.</p>
+  <div class="panel">
+  <svg viewBox="0 0 1040 330" role="img" aria-label="Relative delay drifting against absolute pacing">
+    <!-- grid -->
+    <g stroke="#333">
+      <line x1="200" y1="40" x2="200" y2="300"/><line x1="360" y1="40" x2="360" y2="300"/>
+      <line x1="520" y1="40" x2="520" y2="300"/><line x1="680" y1="40" x2="680" y2="300"/>
+      <line x1="840" y1="40" x2="840" y2="300"/><line x1="1000" y1="40" x2="1000" y2="300"/>
+    </g>
+    <g fill="#777" font-size="11" font-family="ui-monospace,Menlo,monospace" text-anchor="middle">
+      <text x="200" y="32">OTS(n)</text><text x="360" y="32">OTS(n+1)</text><text x="520" y="32">OTS(n+2)</text>
+      <text x="680" y="32">OTS(n+3)</text><text x="840" y="32">OTS(n+4)</text><text x="1000" y="32">OTS(n+5)</text>
+    </g>
+    <text x="12" y="16" fill="#888" font-size="11">grain grid, 33.367 ms</text>
+
+    <!-- relative -->
+    <text x="12" y="86" fill="#e57373" font-size="13" font-weight="600">delay_before_ms</text>
+    <text x="12" y="104" fill="#888" font-size="11">relative to the</text>
+    <text x="12" y="118" fill="#888" font-size="11">previous step</text>
+    <g fill="#e57373">
+      <rect x="200" y="70" width="14" height="26" rx="2"/>
+      <rect x="368" y="70" width="14" height="26" rx="2"/>
+      <rect x="544" y="70" width="14" height="26" rx="2"/>
+      <rect x="728" y="70" width="14" height="26" rx="2"/>
+      <rect x="920" y="70" width="14" height="26" rx="2"/>
+    </g>
+    <g stroke="#e57373" stroke-width="1" stroke-dasharray="3 3">
+      <line x1="368" y1="96" x2="360" y2="118"/><line x1="544" y1="96" x2="520" y2="118"/>
+      <line x1="728" y1="96" x2="680" y2="118"/><line x1="920" y1="96" x2="840" y2="118"/>
+    </g>
+    <text x="520" y="140" fill="#e57373" font-size="11.5">each step's own overhead is added to the next — the error compounds</text>
+
+    <!-- absolute -->
+    <text x="12" y="200" fill="#81c784" font-size="13" font-weight="600">pace: { }</text>
+    <text x="12" y="218" fill="#888" font-size="11">sleeps until this</text>
+    <text x="12" y="232" fill="#888" font-size="11">grain's own OTS</text>
+    <g fill="#81c784">
+      <rect x="200" y="184" width="14" height="26" rx="2"/>
+      <rect x="360" y="184" width="14" height="26" rx="2"/>
+      <rect x="520" y="184" width="14" height="26" rx="2"/>
+      <rect x="680" y="184" width="14" height="26" rx="2"/>
+      <rect x="840" y="184" width="14" height="26" rx="2"/>
+    </g>
+    <text x="520" y="230" fill="#81c784" font-size="11.5">a late step catches up instead of pushing everything after it</text>
+
+    <!-- offset -->
+    <text x="12" y="286" fill="#ffb74d" font-size="13" font-weight="600">pace.offset_ms</text>
+    <g fill="#ffb74d">
+      <rect x="267" y="270" width="14" height="24" rx="2"/>
+      <rect x="427" y="270" width="14" height="24" rx="2"/>
+      <rect x="587" y="270" width="14" height="24" rx="2"/>
+      <rect x="747" y="270" width="14" height="24" rx="2"/>
+      <rect x="907" y="270" width="14" height="24" rx="2"/>
+    </g>
+    <g stroke="#ffb74d" stroke-width="1">
+      <line x1="200" y1="282" x2="265" y2="282" stroke-dasharray="3 2"/>
+    </g>
+    <text x="430" y="316" fill="#ffb74d" font-size="11.5">a constant shift off the grid — this is how a "2 frames late" source is simulated</text>
+  </svg>
+  </div>
+
+  <div class="note"><strong>Three asymmetries that bite.</strong> The transport bar's
+    <code>delay_scale</code> multiplies <code>delay_before_ms</code> <em>only</em> — a paced step
+    ignores it entirely. <code>pace</code> and <code>delay_before_ms</code> are mutually exclusive
+    on one step. And <code>pace</code> needs a resolved unsigned <code>index</code> plus a handle
+    whose grain rate is known, because it aims at that index's OTS. A step may carry both
+    <code>offset_ms</code> and <code>jitter_ms</code>: the first biases every grain the same way,
+    the second scatters them.</div>
+
+  <h2>4 · The four index modes</h2>
+  <p>One expression shape, four sources for the number. <code>offset</code> is plain signed
+     arithmetic applied last, to whichever number the mode produced — it is not a length, a count
+     or a duration.</p>
+  <div class="panel">
+  <svg viewBox="0 0 1040 300" role="img" aria-label="The four index modes on an index number line">
+    <defs><marker id="ar4" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 z" fill="#777"/></marker></defs>
+    
+    <line x1="60" y1="150" x2="990" y2="150" stroke="#555" stroke-width="1.5"/>
+    <g stroke="#333">
+      <line x1="180" y1="142" x2="180" y2="158"/><line x1="360" y1="142" x2="360" y2="158"/>
+      <line x1="540" y1="142" x2="540" y2="158"/><line x1="720" y1="142" x2="720" y2="158"/>
+      <line x1="900" y1="142" x2="900" y2="158"/>
+    </g>
+    <text x="985" y="140" fill="#777" font-size="11" text-anchor="end">index →</text>
+
+    <!-- literal -->
+    <circle cx="180" cy="150" r="5" fill="#b39ddb"/>
+    <text x="180" y="126" fill="#b39ddb" font-size="12" text-anchor="middle" font-family="ui-monospace,Menlo,monospace">literal</text>
+    <text x="180" y="110" fill="#888" font-size="10.5" text-anchor="middle">the number you typed</text>
+
+    <!-- head -->
+    <circle cx="540" cy="150" r="5" fill="#81c784"/>
+    <text x="540" y="126" fill="#81c784" font-size="12" text-anchor="middle" font-family="ui-monospace,Menlo,monospace">head</text>
+    <text x="540" y="110" fill="#888" font-size="10.5" text-anchor="middle">newest readable, from a reader</text>
+    <text x="540" y="196" fill="#666" font-size="10.5" text-anchor="middle">discrete: headIndex  |  continuous: headIndex − 1</text>
+
+    <!-- current -->
+    <circle cx="720" cy="150" r="5" fill="#64b5f6"/>
+    <text x="720" y="126" fill="#64b5f6" font-size="12" text-anchor="middle" font-family="ui-monospace,Menlo,monospace">current</text>
+    <text x="720" y="110" fill="#888" font-size="10.5" text-anchor="middle">mxlGetCurrentIndex(edit_rate) — now</text>
+
+    <!-- cursor -->
+    <circle cx="360" cy="150" r="5" fill="#ffb74d"/>
+    <text x="360" y="126" fill="#ffb74d" font-size="12" text-anchor="middle" font-family="ui-monospace,Menlo,monospace">cursor</text>
+    <text x="360" y="110" fill="#888" font-size="10.5" text-anchor="middle">this lane's counter</text>
+    <path d="M 360 168 L 360 182 L 420 182" fill="none" stroke="#ffb74d" stroke-width="1.2" marker-end="url(#ar4)"/>
+    <text x="428" y="186" fill="#ffb74d" font-size="10.5">setCursor seeds it, advance_cursor moves it</text>
+
+    <!-- offset -->
+    <path d="M 540 150 L 600 150" stroke="#e0e0e0" stroke-width="2" marker-end="url(#ar4)"/>
+    <text x="612" y="154" fill="#e0e0e0" font-size="11.5" font-family="ui-monospace,Menlo,monospace">+ offset</text>
+    <text x="612" y="170" fill="#888" font-size="10.5">signed; applied after the mode, in index units</text>
+
+    <line x1="60" y1="226" x2="990" y2="226" stroke="#333"/>
+    <text x="60" y="250" fill="#888" font-size="11.5">A resolved index means different things per flow kind:</text>
+    <text x="60" y="270" fill="#a9a9a9" font-size="11.5" font-family="ui-monospace,Menlo,monospace">discrete  → the grain itself</text>
+    <text x="380" y="270" fill="#a9a9a9" font-size="11.5" font-family="ui-monospace,Menlo,monospace">continuous → the EXCLUSIVE END of [index − count, index)</text>
+    <text x="60" y="290" fill="#777" font-size="10.5">which is why a continuous writer sets offset = count = advance_cursor to stay contiguous</text>
+  </svg>
+  </div>
+
+  <h2>Vocabulary, by layer</h2>
+  <table>
+    <tr><th style="width:15rem">term</th><th style="width:5rem">layer</th><th>what it does</th></tr>
+    <tr><td class="eng">lane</td><td>engine</td><td>A thread with its own step list, cursor and program counter. Lanes share the registry and the log, nothing else.</td></tr>
+    <tr><td class="eng">cursor</td><td>engine</td><td>Per-lane index counter. Seeded by <code>setCursor</code>, moved by <code>advance_cursor</code>. In grains for a discrete flow, in samples for a continuous one.</td></tr>
+    <tr><td class="eng">mode / offset</td><td>engine</td><td>An index <em>expression</em>. Flattened to one <code>uint64</code> before the adapter runs; <code>offset</code> is signed and applied last.</td></tr>
+    <tr><td class="eng">delay_before_ms</td><td>engine</td><td>Sleep before the step, measured from the previous one. Compounds. Multiplied by the transport's <code>delay_scale</code>.</td></tr>
+    <tr><td class="eng">pace</td><td>engine</td><td>Sleep until this grain's own OTS (plus <code>offset_ms</code>, plus optional <code>jitter_ms</code>). Absolute, self-correcting, ignores <code>delay_scale</code>.</td></tr>
+    <tr><td class="eng">pace.offset_ms</td><td>engine</td><td>A constant shift of the pace target off the grid. Positive means this writer publishes late by that much on every grain — how a late source is simulated. The indices, and therefore the OTS, do not move.</td></tr>
+    <tr><td class="eng">pace.jitter_ms</td><td>engine</td><td>A <em>random</em> shift, redrawn per step from a uniform distribution over <code>±jitter_ms</code>. Where <code>offset_ms</code> is a bias, this is spread — it exists to stop many lanes hitting the ring in lockstep. The RNG is one per lane thread, seeded from the lane name, so lanes do not jitter together and a run is reproducible per lane. Must be ≥ 0.<br><strong>The event reports both:</strong> <code>pace.deadline_ns</code> is the unjittered media truth, whose consecutive deltas are exactly one grain, while <code>late_ms</code> measures the wake against the jittered target. Injected error and scheduler error therefore never collapse into one number.</td></tr>
+    <tr><td class="eng">advance_cursor</td><td>engine</td><td>Move the lane cursor after the step. Ignored on <code>setCursor</code>.</td></tr>
+    <tr><td class="eng">repeat</td><td>engine</td><td>A backward jump within the lane — <code>{to, times}</code>. Runs no ABI call.</td></tr>
+    <tr><td class="eng">out / store_as</td><td>engine</td><td>Name the handle a creating call produced. The registry is names; the ABI only ever sees pointers.</td></tr>
+    <tr><td class="eng">fill</td><td>engine</td><td>The payload this tool writes into the grain, and the 24-byte stamp. The ABI hands back a pointer and never inspects the bytes.</td></tr>
+    <tr><td class="abi">index</td><td>ABI</td><td>A plain <code>uint64</code> by the time it crosses. OTS is derived from it — never stored in the grain.</td></tr>
+    <tr><td class="abi">edit_rate</td><td>ABI</td><td><code>mxlRational{numerator, denominator}</code>. A flow's grain rate, or a sample rate for a continuous flow.</td></tr>
+    <tr><td class="abi">count</td><td>ABI</td><td>Samples per channel in one continuous batch. Unrelated to <code>offset</code>, despite usually being equal to it.</td></tr>
+    <tr><td class="abi">valid_slices / flags</td><td>ABI</td><td>How much of a grain is declared readable, and the grain flag bitmask.</td></tr>
+    <tr><td class="abi">timeout_ns / timestamp_ns</td><td>ABI</td><td>Deadlines and TAI instants, as <code>uint64</code> nanoseconds. Reported back as strings — a TAI ns value exceeds JavaScript's safe integer range.</td></tr>
+    <tr><td class="abi">mxlStatus</td><td>ABI</td><td>The return code, rendered by name. A non-OK status is often the point of a step, not a failure of it.</td></tr>
+  </table>
+
+
+  <h2>Reading the log</h2>
+  <p>Every step appends one JSON object to <code>/log</code>. Some of its fields are the engine's
+     account of what it did, some are the ABI's answer, and a few of the most useful numbers are
+     neither — they are derived. Fields appear only when they apply, so a short event is normal.</p>
+
+  <h3 style="font-size:1rem;margin:1.5rem 0 .25rem;color:#b8b8b8">On every event</h3>
+  <table>
+    <tr><th style="width:12rem">field</th><th>meaning</th></tr>
+    <tr><td class="abi">seq</td><td>Monotonic across all lanes. <code>/log?since=&lt;seq&gt;</code> resumes from it; a <code>410</code> means the tail was evicted and carries the cursor to re-sync from.</td></tr>
+    <tr><td class="abi">lane / step_id</td><td>Which lane ran it and the step's <code>id</code> from the scenario.</td></tr>
+    <tr><td class="abi">t_wall_ns</td><td>TAI nanoseconds, <strong>stamped after the call returns</strong> — so a blocking step's row appears in the log at its <em>end</em>, not its start. A string, because the value exceeds JavaScript's safe integer range.</td></tr>
+    <tr><td class="abi">duration_us</td><td>Brackets the <strong>adapter</strong>, not just the ABI call: argument marshalling, the payload fill, and the call itself. Subtract <code>fill.fill_us</code> for the call alone. Excludes any <code>delay_before_ms</code> or <code>pace</code> sleep.</td></tr>
+    <tr><td class="abi">ok / status</td><td><code>status</code> is the <code>mxlStatus</code> by name. <code>ok:false</code> accompanies any non-OK status — including the ones a scenario is <em>trying</em> to produce, so a red row is often the point of the step rather than a failure of it.</td></tr>
+    <tr><td class="abi">error</td><td>Present when the step failed <em>before</em> the ABI — an unknown handle name, a bad argument type, an index expression that would not resolve. No <code>status</code>, because nothing was called.</td></tr>
+  </table>
+
+  <h3 style="font-size:1rem;margin:1.5rem 0 .25rem;color:#b8b8b8">What the engine did</h3>
+  <table>
+    <tr><th style="width:12rem">field</th><th>meaning</th></tr>
+    <tr><td class="eng">resolved</td><td>Every index expression flattened to the number that actually crossed. <code>{"index": …, "head": …, "flow": "discrete"}</code>. This is the field that tells you what the step really asked for — and it is named <code>resolved</code>, not <code>args_resolved</code>.</td></tr>
+    <tr><td class="eng">delay_ms</td><td>The relative sleep that ran before the step, after <code>delay_scale</code> was applied. Absent when zero.</td></tr>
+    <tr><td class="eng">pace</td><td><code>deadline_ns</code> is the unjittered target — consecutive values are exactly one grain apart, which is what makes an offline drift check possible. <code>late_ms</code> is the wake measured against the <em>jittered</em> target. <code>jitter_ms</code> appears only when one was drawn, <code>capped:true</code> when the sleep hit the 5 s cap.</td></tr>
+    <tr><td class="eng">cursor</td><td>Only on <code>setCursor</code>: the index the lane was seeded to. Those events also carry <code>abi:false</code>, which is how you tell a pseudo-call from a real one.</td></tr>
+    <tr><td class="eng">stored_as</td><td>The registry name a creating call produced.</td></tr>
+    <tr><td class="eng">(released)</td><td>Not a log field, despite looking like one: <code>released</code> comes back on the <strong><code>/reset</code> response</strong>, naming the handles destroyed in release order. It cannot be in the log, because reset clears the log — which is also why the next <code>/log?since=</code> answers <code>410</code> with a fresh cursor rather than an error.</td></tr>
+  </table>
+
+  <h3 style="font-size:1rem;margin:1.5rem 0 .25rem;color:#b8b8b8">The timing numbers, and which ones lie</h3>
+  <table>
+    <tr><th style="width:12rem">field</th><th>meaning</th></tr>
+    <tr><td class="abi">ots_ns</td><td>The grain's origin timestamp, derived from its index by the SDK. A string. Never <code>Number()</code> it and never subtract two of them in JavaScript — the low three digits are exactly the resolution you are trying to see.</td></tr>
+    <tr><td class="abi">age_ms</td><td><code>read wall clock − OTS</code>. How old the grain was when read. Signed: negative means you read a grain whose media time is still in the future.</td></tr>
+    <tr><td class="abi">stamp</td><td>Only when the step set <code>verify_stamp</code> and the writer set <code>fill.stamp</code>. <code>write_ns</code> is the writer's clock at fill time; <code>transit_ms</code> is <code>read wall − write wall</code>, the true end-to-end delay; <code>matches</code> says the stamped index equals the grain's, which is how you catch a stale or torn read.</td></tr>
+    <tr><td class="abi">waited_ms</td><td>How long a blocking call actually blocked. <strong>Meaningless on its own</strong> — read it against <code>timeout_ns</code>. Roughly equal means the deadline expired; much less means it woke on a commit. A timeout never arrives as <code>MXL_ERR_TIMEOUT</code>; it arrives as <code>MXL_ERR_OUT_OF_RANGE_TOO_EARLY</code>, indistinguishable from an unreachable index except by this number.</td></tr>
+    <tr><td class="eng">fill</td><td><code>fill_us</code> is the payload write, <code>bytes</code> how much, <code>stamp_ns</code> the value planted. On a 1080p v210 grain the fill is ~80% of the step.</td></tr>
+    <tr><td style="color:#ffb74d;font-family:ui-monospace,Menlo,monospace">write lateness</td><td><strong>Derived, not a field:</strong> <code>age_ms − stamp.transit_ms</code> = <code>write wall − OTS</code>. How late the <em>producer</em> was. Both terms come from the same grain, so it carries none of the frame quantisation that <code>age_ms</code> and <code>waited_ms</code> do — it is the only exact measure of source delay in the log, and it is the column M15's timing panel renders.</td></tr>
+  </table>
+
+  <div class="note"><strong>Four ways to misread a run.</strong>
+    A blocking step's row lands at the moment it <em>finished</em>, so the log's order is completion
+    order, not start order. <code>duration_us</code> is the adapter, not the ABI. <code>age_ms</code>
+    and <code>waited_ms</code> both carry ±half a grain of quantisation, because a wait ends when the
+    grain <em>nearest</em> the target commits — use write lateness when the number has to be exact.
+    And <strong>the first event of each distinct call in a process is an outlier</strong>
+    (~10 ms for <code>mxlCreateInstance</code>, and a first <code>OpenGrain</code> pays the page
+    faults for the whole ring): run a call once before trusting its <code>duration_us</code>.</div>
+
+  <p style="margin-top:2rem"><a class="back" href="/">← back to the tester</a></p>
+</main>
+
+<script>
+  // "back to the tester" closes this tab when the app opened it (target="engine-model"
+  // leaves window.opener set), so a round trip does not leave a second copy of the app
+  // behind. Opened directly -- bookmark, refresh, someone pasting the URL -- there is no
+  // opener, close() would be refused, and the href navigates instead. Deliberately never
+  // preventDefault: if closing is blocked for any reason the link must still work.
+  for (const a of document.querySelectorAll("a.back")) {
+    a.addEventListener("click", function () {
+      if (window.opener && !window.opener.closed) {
+        try { window.close(); } catch (e) { /* falls through to the href */ }
+      }
+    });
+  }
+</script>
+</body>
+</html>

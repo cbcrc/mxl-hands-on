@@ -1,0 +1,141 @@
+{
+  "name": "03-late-reader",
+  "description": "Ring eviction. Lane A writes 20 grains back to back with no pacing; lane B then reads the newest (OK), the oldest of the burst (MXL_ERR_OUT_OF_RANGE_TOO_LATE, evicted) and one past the head (MXL_ERR_OUT_OF_RANGE_TOO_EARLY, not yet written).",
+  "lanes": {
+    "A": [
+      {
+        "id": "a0",
+        "call": "mxlCreateInstance",
+        "args": {},
+        "out": {
+          "instance": "I"
+        }
+      },
+      {
+        "id": "a1",
+        "call": "mxlCreateFlowWriter",
+        "out": {
+          "writer": "W"
+        },
+        "args": {
+          "instance": "I",
+          "flow_def": "{\n    \"id\": \"a1b2c3d4-0001-4000-8000-000000000001\",\n    \"label\": \"ABI Tester Video\",\n    \"description\": \"1080p29.97 v210 test flow written by the ABI tester\",\n    \"format\": \"urn:x-nmos:format:video\",\n    \"media_type\": \"video/v210\",\n    \"tags\": {\n      \"urn:x-nmos:tag:grouphint/v1.0\": [\n        \"ABI-Tester:Video\"\n      ]\n    },\n    \"parents\": [],\n    \"grain_rate\": {\n      \"numerator\": 30000,\n      \"denominator\": 1001\n    },\n    \"frame_width\": 1920,\n    \"frame_height\": 1080,\n    \"interlace_mode\": \"progressive\",\n    \"colorspace\": \"BT709\",\n    \"components\": [\n      { \"name\": \"Y\",  \"width\": 1920, \"height\": 1080, \"bit_depth\": 10 },\n      { \"name\": \"Cb\", \"width\": 960,  \"height\": 1080, \"bit_depth\": 10 },\n      { \"name\": \"Cr\", \"width\": 960,  \"height\": 1080, \"bit_depth\": 10 }\n    ]\n}"
+        },
+        "note": "spliced in by jq from flows/video-1080p2997-v210.json"
+      },
+      {
+        "id": "a2",
+        "call": "setCursor",
+        "args": {
+          "index": {
+            "mode": "current",
+            "edit_rate": {
+              "num": 30000,
+              "den": 1001
+            }
+          }
+        }
+      },
+      {
+        "id": "a3",
+        "call": "mxlFlowWriterOpenGrain",
+        "out": {
+          "grain": "g"
+        },
+        "args": {
+          "writer": "W",
+          "index": {
+            "mode": "cursor"
+          }
+        },
+        "fill": {
+          "mode": "none"
+        },
+        "note": "no fill and no delay: this burst exists to move the head, not to be measured"
+      },
+      {
+        "id": "a4",
+        "call": "mxlFlowWriterCommitGrain",
+        "advance_cursor": 1,
+        "args": {
+          "writer": "W",
+          "grain": "g"
+        }
+      },
+      {
+        "id": "a5",
+        "call": "repeat",
+        "args": {
+          "to": "a3",
+          "times": 19
+        }
+      }
+    ],
+    "B": [
+      {
+        "id": "b0",
+        "call": "mxlCreateInstance",
+        "delay_before_ms": 2000,
+        "args": {},
+        "out": {
+          "instance": "I2"
+        }
+      },
+      {
+        "id": "b1",
+        "call": "mxlCreateFlowReader",
+        "out": {
+          "reader": "R"
+        },
+        "args": {
+          "instance": "I2",
+          "flow_id": "a1b2c3d4-0001-4000-8000-000000000001"
+        }
+      },
+      {
+        "id": "b2",
+        "call": "mxlFlowReaderGetInfo",
+        "args": {
+          "reader": "R"
+        },
+        "note": "records the ring depth: if grain_count >= 19 the offset below is too small"
+      },
+      {
+        "id": "b3",
+        "call": "mxlFlowReaderGetGrainNonBlocking",
+        "args": {
+          "reader": "R",
+          "index": {
+            "mode": "head"
+          },
+          "verify_stamp": false
+        },
+        "note": "control: the newest grain is always readable"
+      },
+      {
+        "id": "b4",
+        "call": "mxlFlowReaderGetGrainNonBlocking",
+        "args": {
+          "reader": "R",
+          "index": {
+            "mode": "head",
+            "offset": -19
+          }
+        },
+        "note": "the first grain of the burst: expect MXL_ERR_OUT_OF_RANGE_TOO_LATE"
+      },
+      {
+        "id": "b5",
+        "call": "mxlFlowReaderGetGrainNonBlocking",
+        "args": {
+          "reader": "R",
+          "index": {
+            "mode": "head",
+            "offset": 1
+          }
+        },
+        "note": "the other edge: expect MXL_ERR_OUT_OF_RANGE_TOO_EARLY"
+      }
+    ]
+  }
+}

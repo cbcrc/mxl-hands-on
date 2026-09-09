@@ -1,0 +1,173 @@
+{
+  "name": "05-slice-write",
+  "description": "Partial commits. Lane A opens one grain and commits it four times at 270 / 540 / 810 / all of its 1080 slices, a second apart -- the writer closes the grain only when validSlices reaches totalSlices. Lane B polls the same grain with mxlFlowReaderGetGrainSliceNonBlocking; whether it sees the grain depends only on how many slices are valid at that moment.",
+  "lanes": {
+    "A": [
+      {
+        "id": "a0",
+        "call": "mxlCreateInstance",
+        "args": {},
+        "out": {
+          "instance": "I"
+        }
+      },
+      {
+        "id": "a1",
+        "call": "mxlCreateFlowWriter",
+        "out": {
+          "writer": "W"
+        },
+        "args": {
+          "instance": "I",
+          "flow_def": "{\n    \"id\": \"a1b2c3d4-0001-4000-8000-000000000001\",\n    \"label\": \"ABI Tester Video\",\n    \"description\": \"1080p29.97 v210 test flow written by the ABI tester\",\n    \"format\": \"urn:x-nmos:format:video\",\n    \"media_type\": \"video/v210\",\n    \"tags\": {\n      \"urn:x-nmos:tag:grouphint/v1.0\": [\n        \"ABI-Tester:Video\"\n      ]\n    },\n    \"parents\": [],\n    \"grain_rate\": {\n      \"numerator\": 30000,\n      \"denominator\": 1001\n    },\n    \"frame_width\": 1920,\n    \"frame_height\": 1080,\n    \"interlace_mode\": \"progressive\",\n    \"colorspace\": \"BT709\",\n    \"components\": [\n      { \"name\": \"Y\",  \"width\": 1920, \"height\": 1080, \"bit_depth\": 10 },\n      { \"name\": \"Cb\", \"width\": 960,  \"height\": 1080, \"bit_depth\": 10 },\n      { \"name\": \"Cr\", \"width\": 960,  \"height\": 1080, \"bit_depth\": 10 }\n    ]\n}"
+        }
+      },
+      {
+        "id": "a2",
+        "call": "setCursor",
+        "args": {
+          "index": {
+            "mode": "current",
+            "edit_rate": {
+              "num": 30000,
+              "den": 1001
+            }
+          }
+        }
+      },
+      {
+        "id": "a3",
+        "call": "mxlFlowWriterOpenGrain",
+        "out": {
+          "grain": "g"
+        },
+        "args": {
+          "writer": "W",
+          "index": {
+            "mode": "cursor"
+          }
+        },
+        "fill": {
+          "mode": "const",
+          "byte": 255,
+          "stamp": true
+        },
+        "note": "the whole payload is written up front; only the declared slice count changes below"
+      },
+      {
+        "id": "a4",
+        "call": "mxlFlowWriterCommitGrain",
+        "delay_before_ms": 1000,
+        "args": {
+          "writer": "W",
+          "grain": "g",
+          "valid_slices": 270
+        }
+      },
+      {
+        "id": "a5",
+        "call": "mxlFlowWriterCommitGrain",
+        "delay_before_ms": 1000,
+        "args": {
+          "writer": "W",
+          "grain": "g",
+          "valid_slices": 540
+        }
+      },
+      {
+        "id": "a6",
+        "call": "mxlFlowWriterCommitGrain",
+        "delay_before_ms": 1000,
+        "args": {
+          "writer": "W",
+          "grain": "g",
+          "valid_slices": 810
+        }
+      },
+      {
+        "id": "a7",
+        "call": "mxlFlowWriterCommitGrain",
+        "delay_before_ms": 1000,
+        "advance_cursor": 1,
+        "args": {
+          "writer": "W",
+          "grain": "g"
+        },
+        "note": "no valid_slices means totalSlices: this one closes the grain and drops the cached slot"
+      }
+    ],
+    "B": [
+      {
+        "id": "b0",
+        "call": "mxlCreateInstance",
+        "delay_before_ms": 1500,
+        "args": {},
+        "out": {
+          "instance": "I2"
+        }
+      },
+      {
+        "id": "b1",
+        "call": "mxlCreateFlowReader",
+        "out": {
+          "reader": "R"
+        },
+        "args": {
+          "instance": "I2",
+          "flow_id": "a1b2c3d4-0001-4000-8000-000000000001"
+        }
+      },
+      {
+        "id": "b2",
+        "call": "mxlFlowReaderGetGrainSliceNonBlocking",
+        "args": {
+          "reader": "R",
+          "index": {
+            "mode": "head"
+          },
+          "min_valid_slices": 270
+        },
+        "note": "270 committed at t=1000: expect MXL_STATUS_OK"
+      },
+      {
+        "id": "b3",
+        "call": "mxlFlowReaderGetGrainSliceNonBlocking",
+        "args": {
+          "reader": "R",
+          "index": {
+            "mode": "head"
+          },
+          "min_valid_slices": 540
+        },
+        "note": "same grain, same instant, twice the demand: expect MXL_ERR_OUT_OF_RANGE_TOO_EARLY"
+      },
+      {
+        "id": "b4",
+        "call": "mxlFlowReaderGetGrainSliceNonBlocking",
+        "delay_before_ms": 1200,
+        "args": {
+          "reader": "R",
+          "index": {
+            "mode": "head"
+          },
+          "min_valid_slices": 540
+        },
+        "note": "t~2700, after the 540 commit: the identical call now succeeds"
+      },
+      {
+        "id": "b5",
+        "call": "mxlFlowReaderGetGrainSliceNonBlocking",
+        "delay_before_ms": 1800,
+        "args": {
+          "reader": "R",
+          "index": {
+            "mode": "head"
+          },
+          "min_valid_slices": 1080,
+          "verify_stamp": true
+        },
+        "note": "t~4500, after the closing commit: the whole grain, stamp included"
+      }
+    ]
+  }
+}
