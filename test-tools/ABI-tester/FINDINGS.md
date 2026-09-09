@@ -6,10 +6,10 @@ bundled scenarios. Everything here is measured on this machine with the tooling 
 directory; the reproduction recipe is at the end.
 
 These are notes for **someone building a real media function on MXL**, not a description
-of the tester. The single most useful item is §1 — but read **§8 first if you use
-`mxlFlowSynchronizationGroup`**: a group with more than one member silently stops
-synchronizing after its first successful wait, and §9 for why a wait's `waited_ms` is not
-a latency.
+of the tester. The single most useful item is §1 — but read **§8 if you use
+`mxlFlowSynchronizationGroup`**: a group with more than one member silently stopped
+synchronizing after its first successful wait, **fixed upstream 2026-09-09 and confirmed fixed
+here** (§8 keeps both sets of numbers), and §9 for why a wait's `waited_ms` is not a latency.
 
 ---
 
@@ -321,13 +321,21 @@ better return of the two — it removes a full-frame pass with no safety trade.
 
 ---
 
-## 8. A synchronization group with more than one member stops synchronizing after its first successful wait
+## 8. A synchronization group with more than one member stopped synchronizing after its first successful wait
 
-**Found 2026-09-04. This is a correctness bug, not a load finding, and it fails in the worst
-possible shape: by returning `MXL_STATUS_OK` immediately.** Nothing in the API surface reports a
-problem, so a consumer built on a multi-member group runs unsynchronized and looks healthy.
+> **FIXED upstream 2026-09-09** — merged to `main` as `f0fff0c2`, cherry-picked to `release/v1.1`
+> as `cbc99a4a`, with an upstream regression test in `8fef61f0`
+> (`lib/tests/test_flow_sync_groups.cpp`). This repo's submodule was moved to `8fef61f0` in
+> `755bde0`. **Everything below is retained as the before/after record**; the measurements in
+> "What was measured" are the *broken* library, and "Confirmed fixed" carries the same steps
+> re-run against the fixed one. If you are reading this to decide whether to trust multi-member
+> groups: you can, on `cbc99a4a` or later.
 
-### What was measured
+**Found 2026-09-04. This was a correctness bug, not a load finding, and it failed in the worst
+possible shape: by returning `MXL_STATUS_OK` immediately.** Nothing in the API surface reported a
+problem, so a consumer built on a multi-member group ran unsynchronized and looked healthy.
+
+### What was measured (broken library, `84350f7c`)
 
 Two flows written in real time — 1080p29.97 video and 48 kHz float32 audio, both paced to their
 own OTS. One group holds the video reader only; another holds both. Each group is asked the same
@@ -377,44 +385,87 @@ and with one member `current == _readers.begin()`, so the inner comparison is a 
 itself and is always false. With two members it fires as soon as the second member's observed
 delay exceeds the first's — in these runs, on the very first successful wait.
 
-### Impact
+### Confirmed fixed (`8fef61f0`, re-run 2026-09-09)
 
-- **A multi-member synchronization group is effectively unusable on this SDK version.** The only
-  workaround is to rebuild the group before every wait, which means creating a group and re-adding
-  every reader per frame, and which throws away the `maxObservedSourceDelay` state the feature
-  exists to accumulate. That is a rendezvous rebuilt 30 times a second, not a synchronization group.
-- **Existing consumers are silently affected.** Anything holding one group with several readers
-  across many waits has been unsynchronized since its first wait and has had no way to notice.
-  `gst-apps/flow-aligner` realigns via a sync group and should be checked first.
-- Single-member groups are safe, but a single-member group is just a blocking read with extra steps.
+`scenarios/07-sync-group.json`, unchanged, against the rebuilt library. `c15` is the step that
+existed to exhibit the bug; `c19` asks the identical question of a *fresh* group and was the
+workaround control. **They now agree to within 1.04 ms — a fifth of a frame:**
 
-### Workaround, verified
+| Step | Ask | Group | Broken (`84350f7c`) | Fixed (`8fef61f0`) |
+|---|---|---|---:|---:|
+| `c8` | 1 — video only | 1 member | ~300 ms | 303.57 ms |
+| `c9` | 2 — audio silent | 2 members | 2000 ms, TOO_EARLY | 2000.11 ms, TOO_EARLY |
+| `c11` | 3 — audio removed | 1 member | ~302 ms | 302.35 ms |
+| `c13` | 4 — baseline, video punctual | 2 members | 303.7 ms | 304.25 ms |
+| `c15` | **5a — the bug** | 2 members, **reused** | **0.0003 ms** | **365.98 ms** |
+| `c19` | 5b — control | 2 members, fresh | 366.4 ms | 367.02 ms |
 
-Use a **fresh group per wait**, or one member per group. Measured in the same second, on the same
-two readers: the already-used group returned in 0.0001 ms while a pristine group built from the
-same two readers waited 366.4 ms — correctly, for a video source that had been given a deliberate
-2-frame lag.
+ASK 2 is unchanged and is *supposed* to burn its deadline — the audio member genuinely has no data
+yet. The fix does not make a group answer a question it cannot answer.
 
-### Suggested fix
+Two checks rule out a quiet scenario, because "`c15` is non-zero" on its own would also be
+satisfied by a run in which the laggard was never late:
+
+1. **The lag was really injected.** Write lateness (`age_ms` − `stamp.transit_ms`, quantisation-free
+   because both terms come from the same grain) went `c14` **0.478 ms** → `c20` **66.984 ms**, a
+   delta of **66.506 ms** against the 66.7334 ms in `a6`'s `pace.offset_ms`.
+2. **The group held for it.** `c15` exceeds the `c13` baseline by **61.73 ms**, tracking that lag.
+   The fixed group did not merely return non-zero; it waited *longer, by about the laggard's
+   lateness*, which is the property the feature exists to provide.
+
+Environment checked, since a stale `.so` would fake this result either way: `libmxl.so.1.1` built
+after the submodule bump, byte-identical in size to the host `Linux-Clang-Release` build, and
+baked into the running `abi-tester:latest`.
+
+### Impact (on `84350f7c` and earlier)
+
+- **A multi-member synchronization group was effectively unusable.** The only workaround was to
+  rebuild the group before every wait, which means creating a group and re-adding every reader per
+  frame, and which throws away the `maxObservedSourceDelay` state the feature exists to accumulate.
+  That is a rendezvous rebuilt 30 times a second, not a synchronization group.
+- **Existing consumers were silently affected.** Anything holding one group with several readers
+  across many waits was unsynchronized from its first wait and had no way to notice.
+  `gst-apps/flow-aligner` realigns via a sync group; it has **not yet been re-run** against the
+  fixed library, and it remains the first thing to check.
+- Single-member groups were safe, but a single-member group is just a blocking read with extra steps.
+
+### Workaround — no longer needed on `cbc99a4a` or later
+
+Retained for anyone pinned to an older SDK. Use a **fresh group per wait**, or one member per
+group. Measured in the same second, on the same two readers: the already-used group returned in
+0.0001 ms while a pristine group built from the same two readers waited 366.4 ms — correctly, for
+a video source that had been given a deliberate 2-frame lag.
+
+### The fix, as merged
 
 Track the predecessor iterator while walking the list and splice with that (`splice_after` wants
-the element *before* the one being moved), or hold the readers in a `std::list` and use
-`splice`/`erase` on the iterator directly. Either way the last-element case needs an explicit guard.
+the element *before* the one being moved), then `continue` — after the splice `prev` already
+precedes `it` and must not advance. Three lines in `FlowSynchronizationGroup.cpp`; the
+last-element case needs no separate guard once the predecessor is the thing being passed, because
+`before_begin()` is always a valid predecessor. Holding the readers in a `std::list` and using
+`splice`/`erase` on the iterator directly would also have worked, at the cost of a heavier node.
 
-### Reproducing
+### Reproducing — now a regression check
 
-`scenarios/07-sync-group.json` in this directory demonstrates the bug and the workaround side by
-side (steps `c15` and `c19`), against video and audio flows written in real time. The minimum
-repro is smaller: create two flows, one reader each, add both to one group, and call
-`mxlFlowSynchronizationGroupWaitForDataAt` twice with a lead of a few hundred milliseconds. The
-first call waits; the second returns `MXL_STATUS_OK` in microseconds.
+`scenarios/07-sync-group.json` in this directory no longer demonstrates a bug; it **guards against
+its return**. Steps `c15` and `c19` ask one question of a reused and a fresh multi-member group,
+and the assertion is that they agree: if `c15` ever collapses toward zero again while `c19` stays
+near 366 ms, the reordering regressed. Upstream now carries its own unit-level version of this in
+`lib/tests/test_flow_sync_groups.cpp`.
+
+The minimum repro of the original bug is smaller: create two flows, one reader each, add both to
+one group, and call `mxlFlowSynchronizationGroupWaitForDataAt` twice with a lead of a few hundred
+milliseconds. On a broken library the first call waits and the second returns `MXL_STATUS_OK` in
+microseconds; on a fixed one both wait.
 
 The 2-frame lag `07` uses to prove the workaround is injected with `pace: {"offset_ms": 66.7334}`
 on the writer's `OpenGrain` step, and read back exactly as **write lateness = `age_ms` −
 `stamp.transit_ms`** (write wall clock − OTS, both terms from the same grain, so no frame
 quantisation): **0.238 ms → 66.972 ms** against 66.7334 injected.
 
-**SDK version:** `libmxl` 1.1.0 (`1.1.0-rc1+0 g`), `Linux-Clang-Release`, Ubuntu 24.04.
+**SDK version:** broken run on submodule `84350f7c`, fixed run on `8fef61f0`. Both report
+`libmxl` 1.1.0 (`1.1.0-rc1+0 g`), `Linux-Clang-Release`, Ubuntu 24.04 — **the version string does
+not distinguish them**, so identify the library by submodule commit, not by `/health`.
 
 ---
 
