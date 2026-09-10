@@ -15,14 +15,7 @@ This guide explains how to build multi-architecture Docker images for the MXL pr
 mxl lib is integrated as submodule, i.e. an external repo that needs to be initialized:
 
 ```bash
-git submodule update --init
-```
-Update the submodule to latest commit of main branch.
-```sh
-   cd ~/mxl-hands-on/dmf-mxl
-   git checkout main
-   git pull origin main
-   cd ..
+git submodule update --remote
 ```
 
 Setting up the TAG variable according to the version you are building:
