@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,6 +50,9 @@ class StartRequest(BaseModel):
     hls_url: str
     video: FlowCfg
     audio: FlowCfg
+    # rtspsrc's default jitterbuffer is 2000 ms; set this to override it when
+    # the source is RTSP (ignored for sources without a latency property).
+    rtsp_latency_ms: Optional[int] = None
 
 
 class ApplyRequest(BaseModel):

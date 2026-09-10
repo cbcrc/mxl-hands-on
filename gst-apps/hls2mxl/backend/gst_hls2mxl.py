@@ -58,6 +58,7 @@ class GstHLS2MXL:
         self._config: Optional[dict] = None
         self._hls_url: str = ""
         self._flow_uuids: dict[str, str] = {}
+        self._stop_reason: str = ""  # why the pipeline halted ("eos" / "error: ...")
 
         self._glib_loop = GLib.MainLoop()
         threading.Thread(target=self._glib_loop.run, daemon=True, name="glib-loop").start()
@@ -74,6 +75,7 @@ class GstHLS2MXL:
             self._flow_uuids = self._derive_uuids(config)
             self._running = True
             self._stabilising = True
+            self._stop_reason = ""
             self._build_warmup_pipeline(config, dict(self._flow_uuids), self._gen)
             uuids = dict(self._flow_uuids)
         return uuids
@@ -84,6 +86,7 @@ class GstHLS2MXL:
             self._running = False
             self._stabilising = False
             self._flow_uuids = {}
+            self._stop_reason = ""
 
     def apply(self, new_url: str) -> dict:
         with self._lock:
@@ -97,6 +100,7 @@ class GstHLS2MXL:
             self._gen += 1
             self._flow_uuids = self._derive_uuids(config)
             self._stabilising = True
+            self._stop_reason = ""
             self._build_warmup_pipeline(config, dict(self._flow_uuids), self._gen)
             uuids = dict(self._flow_uuids)
         return uuids
@@ -108,6 +112,7 @@ class GstHLS2MXL:
                 "stabilising": self._stabilising,
                 "hls_url":     self._hls_url,
                 "flow_uuids":  dict(self._flow_uuids),
+                "stop_reason": self._stop_reason,
             }
 
     # ── UUID derivation ───────────────────────────────────────────────────────
@@ -118,6 +123,24 @@ class GstHLS2MXL:
             "video": str(uuid.uuid5(_MXL_HLS_NS, f"{gh}:video")),
             "audio": str(uuid.uuid5(_MXL_HLS_NS, f"{gh}:audio")),
         }
+
+    # ── Source tuning ─────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _connect_source_setup(src: Gst.Element, config: dict) -> None:
+        """Apply source tuning that uridecodebin's defaults get wrong.
+        rtsp_latency_ms: rtspsrc defaults to a 2000 ms jitterbuffer, which adds
+        2 s of avoidable latency on a clean network. Only set when configured."""
+        latency = config.get("rtsp_latency_ms")
+        if latency is None:
+            return
+
+        def on_source_setup(_bin, source):
+            if source.find_property("latency") is not None:
+                source.set_property("latency", int(latency))
+                log.info("source-setup: latency=%d ms on %s", int(latency), source.get_name())
+
+        src.connect("source-setup", on_source_setup)
 
     # ── Pipeline teardown ─────────────────────────────────────────────────────
 
@@ -142,6 +165,7 @@ class GstHLS2MXL:
         src = Gst.ElementFactory.make("uridecodebin", "src")
         src.set_property("uri", url)
         src.set_property("connection-speed", 50000)
+        self._connect_source_setup(src, config)
         pipeline.add(src)
 
         def on_pad_added(_src, pad):
@@ -183,7 +207,7 @@ class GstHLS2MXL:
                 return False  # do not reschedule
             self._teardown()
             try:
-                self._build_real_pipeline(config, uuids)
+                self._build_real_pipeline(config, uuids, gen)
                 self._stabilising = False
             except Exception as exc:
                 log.error("Failed to start MXL pipeline: %s", exc)
@@ -192,7 +216,7 @@ class GstHLS2MXL:
 
         return False  # do not reschedule the GLib timer
 
-    def _build_real_pipeline(self, config: dict, uuids: dict) -> None:
+    def _build_real_pipeline(self, config: dict, uuids: dict, gen: int) -> None:
         """Build the production pipeline writing to mxlsink. Caller must hold
         self._lock."""
         domain    = config["domain"]
@@ -207,6 +231,7 @@ class GstHLS2MXL:
         src = Gst.ElementFactory.make("uridecodebin", "src")
         src.set_property("uri", url)
         src.set_property("connection-speed", 50000)
+        self._connect_source_setup(src, config)
         pipeline.add(src)
 
         # ── Video branch ──────────────────────────────────────────────────────
@@ -278,23 +303,40 @@ class GstHLS2MXL:
         # ── Bus ───────────────────────────────────────────────────────────────
         bus = pipeline.get_bus()
         bus.add_signal_watch()
-        bus.connect("message::error",   self._on_error)
+        bus.connect("message::error",   self._on_error, gen)
         bus.connect("message::warning", self._on_warning)
-        bus.connect("message::eos",     self._on_eos)
+        bus.connect("message::eos",     self._on_eos, gen)
 
         pipeline.set_state(Gst.State.PLAYING)
         self._pipeline = pipeline
         log.info("Real MXL pipeline started (sync=True, no valves)")
 
     # ── Bus message handlers ──────────────────────────────────────────────────
+    # error/EOS halt the pipeline and record why: a stopped pipeline that still
+    # reports running=True is invisible to callers polling /pipeline/status
+    # (a VOD playlist hitting EOS looked identical to a healthy live stream).
 
-    def _on_error(self, _bus: Gst.Bus, msg: Gst.Message) -> None:
+    def _on_error(self, _bus: Gst.Bus, msg: Gst.Message, gen: int) -> None:
         err, debug = msg.parse_error()
         log.error("GStreamer error: %s  debug: %s", err, debug)
+        self._halt(f"error: {err.message}", gen)
 
     def _on_warning(self, _bus: Gst.Bus, msg: Gst.Message) -> None:
         warn, debug = msg.parse_warning()
         log.warning("GStreamer warning: %s  debug: %s", warn, debug)
 
-    def _on_eos(self, _bus: Gst.Bus, _msg: Gst.Message) -> None:
-        log.info("EOS received")
+    def _on_eos(self, _bus: Gst.Bus, _msg: Gst.Message, gen: int) -> None:
+        log.info("EOS received — halting pipeline")
+        self._halt("eos", gen)
+
+    def _halt(self, reason: str, gen: int) -> None:
+        """Tear down after a terminal bus message so status reflects reality.
+        Runs on the GLib main loop (signal watch); gen guards against messages
+        from a pipeline that apply()/start() already replaced."""
+        with self._lock:
+            if self._gen != gen or not self._running:
+                return
+            self._teardown()
+            self._running = False
+            self._stabilising = False
+            self._stop_reason = reason
