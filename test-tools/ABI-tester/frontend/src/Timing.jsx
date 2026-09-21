@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
 // SPDX-License-Identifier: Apache-2.0
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { sectionStyle, tableStyle, cellStyle, monoStyle, kOk, kWarn } from "./styles";
 
 const kCols = ["seq", "lane", "index", "write OTS", "write wall", "read wall",
@@ -36,7 +36,15 @@ export default function Timing({ events }) {
   // A read step that could not resolve its flow's rate carries no ots_ns (calls.cpp:381),
   // so that is the filter: these are exactly the events with something to time.
   const timed = events.filter((e) => e.ots_ns !== undefined);
-  const rows = timed.slice(-kMaxRows);
+  const live = timed.slice(-kMaxRows);
+
+  // Scrolling up freezes the window. Without this the view slides out from under you:
+  // the slice keeps only the newest kMaxRows, so every read drops a row off the front
+  // and everything you are looking at moves up one line, ~30 times a second. Holding
+  // scrollTop still does not help -- it is the content that moved, not the scrollbar.
+  // Scroll back to the bottom to resume.
+  const [frozen, setFrozen] = useState(null);
+  const rows = frozen ?? live;
 
   // Darwin's CLOCK_REALTIME is microsecond-granular, so every t_wall_ns there ends in
   // "000" and a finer decimal on a ms value is a permanent zero. Read from the data
@@ -63,7 +71,9 @@ export default function Timing({ events }) {
 
   function onScroll() {
     const el = boxRef.current;
-    stuckRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    stuckRef.current = atBottom;
+    setFrozen((prev) => atBottom ? null : (prev ?? live));
   }
 
   useLayoutEffect(() => {
@@ -75,7 +85,9 @@ export default function Timing({ events }) {
     <section style={sectionStyle}>
       <h2 style={{ marginBottom: "1rem" }}>Timing <span style={{ ...monoStyle, color: "#666" }}>
         ({rows.length} row{rows.length === 1 ? "" : "s"}
-        {(timed.length > rows.length) ? " of " + timed.length + " held" : ""})</span></h2>
+        {(timed.length > rows.length) ? " of " + timed.length + " held" : ""})</span>
+        {frozen && <span style={{ ...monoStyle, color: kWarn, marginLeft: "0.5rem" }}>
+          paused -- scroll to the bottom to resume</span>}</h2>
       <div style={boxStyle} ref={boxRef} onScroll={onScroll}>
         {rows.length === 0 ? (
           <div style={{ ...monoStyle, color: "#666" }}>No timed reads yet.</div>

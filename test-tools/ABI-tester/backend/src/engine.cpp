@@ -147,22 +147,17 @@ uint64_t EventLog::append(std::string const& lane, std::string const& stepId,
     return appendLocked(lane, stepId, wallNs, result);
 }
 
-bool EventLog::since(uint64_t sinceSeq, nlohmann::ordered_json& out, std::string& error) const
+bool EventLog::since(uint64_t sinceSeq, std::size_t limit, nlohmann::ordered_json& out,
+                     uint64_t& dropped, std::string& error) const
 {
     std::lock_guard<std::mutex> guard(_mutex);
 
-    // sinceSeq is exclusive, so the oldest answerable question is _baseSeq - 1.
-    if ((sinceSeq + 1) < _baseSeq)
-    {
-        error = "events up to seq " + std::to_string(_baseSeq - 1) +
-                " are no longer in memory; ask for since=" + std::to_string(_baseSeq - 1) +
-                " or later";
-        return false;
-    }
+    dropped = 0;
 
-    // The mirror case: a cursor ahead of the log. /reset restarts seq at 1 while a
-    // browser keeps its old cursor, and the copy loop below would then start past the
-    // end and return [] - indistinguishable from "nothing new since you last asked".
+    // A cursor *ahead* of the log is the one case a clamp cannot repair: /reset restarts
+    // seq at 1 while a browser keeps its old cursor, and there is no event to send that
+    // would move it backwards. This one stays a refusal -- and its resync value, 0, does
+    // not expire, so a client can actually spend it.
     if (sinceSeq > _lastSeq)
     {
         error = "seq " + std::to_string(sinceSeq) + " is ahead of the log (last seq is " +
@@ -170,9 +165,29 @@ bool EventLog::since(uint64_t sinceSeq, nlohmann::ordered_json& out, std::string
         return false;
     }
 
+    // Trimmed past: serve from the oldest event still held and report the gap, rather
+    // than refuse. Refusing was unrecoverable in practice -- the suggested cursor is
+    // exactly _baseSeq - 1, and with no log file trim() advances _baseSeq on every
+    // append, so the number was stale about 11 ms after it was issued and a 250 ms poll
+    // could only ever come back for another refusal.
+    std::size_t first = 0;
+    if ((sinceSeq + 1) < _baseSeq)
+    {
+        dropped = _baseSeq - (sinceSeq + 1);
+    }
+    else
+    {
+        first = (std::size_t)(sinceSeq + 1 - _baseSeq);
+    }
+
     out = nlohmann::ordered_json::array();
 
-    for (std::size_t i = (std::size_t)(sinceSeq + 1 - _baseSeq); i < _events.size(); ++i)
+    // The bound is the point: handing a client that is already behind the entire tail
+    // is what kept it behind. It comes back for the rest on the next poll.
+    std::size_t const end =
+        (limit == 0) ? _events.size() : std::min(_events.size(), first + limit);
+
+    for (std::size_t i = first; i < end; ++i)
     {
         out.push_back(_events[i]);
     }

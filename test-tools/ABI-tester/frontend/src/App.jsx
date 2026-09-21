@@ -81,7 +81,11 @@ function useLog(pollMs = 250) {
             setEvents([]);   // the new reuses seq 1.., and key={e.seq} must stay unique
             continue;
           }
-          setLogError(null);
+          // The backend clamps a trimmed cursor instead of refusing it, and says in a
+          // header how many events went by unseen. Worth showing: a gap in a timing
+          // trace that nothing announced is indistinguishable from a quiet interval.
+          const dropped = res.headers.get("X-Log-Dropped");
+          setLogError(dropped ? ("fell behind; " + dropped + " events skipped") : null);
           if (body.length === 0) return;
           sinceRef.current = body[body.length - 1].seq;
           setEvents((prev) => prev.concat(body).slice(-kMaxEvents));
@@ -182,17 +186,26 @@ export default function App() {
   // Recomputed every render, deliberately: 2000 events is nothing, and a useMemo
   // here would be a cache to keep correct in exchange for no measurable gain.
   const lanes = [...new Set(events.map((e) => e.lane ?? "-"))].sort();
-  const shown = lane === null ? events : events.filter((e) => (e.lane ?? "-") === lane);
+  const live = lane === null ? events : events.filter((e) => (e.lane ?? "-") === lane);
+
+  // Scrolling up freezes the list. The tail keeps only the newest kMaxEvents, so once
+  // it is full every poll drops lines off the front and the line you are reading walks
+  // up and out -- ~90 lines a second in a 30 fps scenario. Freezing is the only thing
+  // that makes a specific event readable; scroll back to the bottom to resume.
+  const [frozen, setFrozen] = useState(null);
+  const shown = frozen ?? live;
 
   function onConsoleScroll() {
     const el = consoleRef.current;
-    stuckRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    stuckRef.current = atBottom;
+    setFrozen((prev) => atBottom ? null : (prev ?? live));
   }
 
   useLayoutEffect(() => {
     const el = consoleRef.current;
     if (el && stuckRef.current) el.scrollTop = el.scrollHeight;
-  }, [events, lane]);
+  }, [shown, lane]);
 
   useEffect(() => {
     async function load() {
@@ -260,11 +273,13 @@ export default function App() {
           {logError ?? ""}</div>
         <div style={{ marginBottom: "0.5rem" }}>
           <button type="button" style={chipStyle(lane === null)}
-                  onClick={() => setLane(null)}>all</button>
+                  onClick={() => { setLane(null); setFrozen(null); }}>all</button>
           {lanes.map((ln) => (
             <button type="button" key={ln} style={chipStyle(lane === ln)}
-                    onClick={() => setLane(ln)}>{ln}</button>
+                    onClick={() => { setLane(ln); setFrozen(null); }}>{ln}</button>
           ))}
+          {frozen && <span style={{ ...monoStyle, color: kWarn, marginLeft: "0.5rem" }}>
+            paused -- scroll to the bottom to resume</span>}
         </div>
         <div style={headRowStyle}>{row("seq", "ln", "step", "call", "status", "duration")}</div>
         <div style={consoleStyle} ref={consoleRef} onScroll={onConsoleScroll}>

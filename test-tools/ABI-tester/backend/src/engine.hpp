@@ -38,10 +38,14 @@ public:
     uint64_t append(std::string const& lane, std::string const& stepId,
                     uint64_t wallNs, nlohmann::json const& result);
     
-    // Every event with seq > sinceSeq, oldest first, as a JSON array. false + `error`
-    // when those events have already been trimmed: returning [] would read exactly
-    // like "nothing new since you last asked".
-    bool since(uint64_t sinceSeq, nlohmann::ordered_json& out, std::string& error) const;
+    // Every event with seq > sinceSeq, oldest first, as a JSON array, at most `limit`
+    // of them -- 0 means no limit. A cursor older than the tail is *clamped* to the
+    // oldest event still held rather than refused, and `dropped` says how many went by
+    // unseen; refusing could not be recovered from, because resyncSeq() names the exact
+    // lower bound and trim() moves it out from under the client mid-round-trip.
+    // false + `error` only for a cursor ahead of the log, which no clamp can repair.
+    bool since(uint64_t sinceSeq, std::size_t limit, nlohmann::ordered_json& out,
+               uint64_t& dropped, std::string& error) const;
 
     // The cursor a client should resync to after a 410, in either direction: the last
     // seq that is no longer answerable. 0 after clear(), the last trimmed seq after a
