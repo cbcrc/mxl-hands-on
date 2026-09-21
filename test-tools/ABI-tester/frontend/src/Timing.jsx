@@ -1,9 +1,20 @@
 // SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
 // SPDX-License-Identifier: Apache-2.0
+import { useLayoutEffect, useRef } from "react";
 import { sectionStyle, tableStyle, cellStyle, monoStyle, kOk, kWarn } from "./styles";
 
 const kCols = ["seq", "lane", "index", "write OTS", "write wall", "read wall",
                "age ms", "transit ms", "write late ms"];
+
+// Same height and stick-to-bottom rule as the console in App.jsx, for the same
+// reason: a 29.97 fps scenario adds ~1800 rows a minute, and an uncapped table
+// pushes the transport controls off the top of an ever-growing page.
+const boxStyle = { maxHeight: "22rem", overflow: "auto" };
+
+// The section's own background, opaque: the rows scroll *under* the header, and a
+// transparent one would let them show through.
+const headStyle = { ...cellStyle, ...monoStyle, color: "#888",
+                    position: "sticky", top: 0, background: "#1c1c1c" };
 
 export default function Timing({ events }) {
   // A read step that could not resolve its flow's rate carries no ots_ns (calls.cpp:381),
@@ -26,16 +37,32 @@ export default function Timing({ events }) {
     return { e, first };
   });
 
+  // Follow the tail only while the operator is already at it. Scrolling up to read a
+  // row is a deliberate act, and yanking it back every 250 ms would undo it.
+  const boxRef = useRef(null);
+  const stuckRef = useRef(true);
+
+  function onScroll() {
+    const el = boxRef.current;
+    stuckRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  }
+
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (el && stuckRef.current) el.scrollTop = el.scrollHeight;
+  }, [rows.length]);
+
   return (
     <section style={sectionStyle}>
-      <h2 style={{ marginBottom: "1rem" }}>Timing</h2>
+      <h2 style={{ marginBottom: "1rem" }}>Timing <span style={{ ...monoStyle, color: "#666" }}>
+        ({rows.length} row{rows.length === 1 ? "" : "s"})</span></h2>
       {rows.length === 0 ? (
         <div style={{ ...monoStyle, color: "#666" }}>No timed reads yet.</div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
+        <div style={boxStyle} ref={boxRef} onScroll={onScroll}>
           <table style={tableStyle}>
             <thead><tr>{kCols.map((c) => (
-              <th key={c} style={{ ...cellStyle, ...monoStyle, color: "#888" }}>{c}</th>))}</tr>
+              <th key={c} style={headStyle}>{c}</th>))}</tr>
             </thead>
             <tbody>
               {marked.map(({ e, first }) => (
