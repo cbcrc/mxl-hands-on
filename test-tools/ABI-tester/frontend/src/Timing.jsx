@@ -9,7 +9,19 @@ const kCols = ["seq", "lane", "index", "write OTS", "write wall", "read wall",
 // Same height and stick-to-bottom rule as the console in App.jsx, for the same
 // reason: a 29.97 fps scenario adds ~1800 rows a minute, and an uncapped table
 // pushes the transport controls off the top of an ever-growing page.
-const boxStyle = { maxHeight: "22rem", overflow: "auto" };
+//
+// height, not maxHeight: the empty state renders inside this same box, so the
+// section is one constant height from the first render. A section that changes
+// height re-clamps the *page* scroll under it, which is what made scrolling to
+// the bottom during a run bounce back up.
+const boxStyle = { height: "22rem", overflow: "auto" };
+
+// Only the newest rows go in the DOM. The box shows about a dozen at a time, and
+// rendering every row the console tail happens to hold cost ~1700 rows x 9 cells
+// every 250 ms -- enough to stall the poll until the backend trimmed past its
+// cursor, at which point the resync emptied the table and the section collapsed.
+// The NDJSON log is where the full history lives; see mxl-transit-stats.py.
+const kMaxRows = 300;
 
 // The section's own background, opaque: the rows scroll *under* the header, and a
 // transparent one would let them show through.
@@ -19,7 +31,8 @@ const headStyle = { ...cellStyle, ...monoStyle, color: "#888",
 export default function Timing({ events }) {
   // A read step that could not resolve its flow's rate carries no ots_ns (calls.cpp:381),
   // so that is the filter: these are exactly the events with something to time.
-  const rows = events.filter((e) => e.ots_ns !== undefined);
+  const timed = events.filter((e) => e.ots_ns !== undefined);
+  const rows = timed.slice(-kMaxRows);
 
   // Darwin's CLOCK_REALTIME is microsecond-granular, so every t_wall_ns there ends in
   // "000" and a finer decimal on a ms value is a permanent zero. Read from the data
@@ -30,12 +43,14 @@ export default function Timing({ events }) {
 
   // The first event of each distinct call in a fresh process is a warm-up outlier: a
   // slow first mxlFlowReaderGetGrain stamps readNs late, inflating age and transit.
+  // Over `timed`, not `rows`: judged against everything still held, or the oldest
+  // row left in the window would wear the dagger every time one scrolled out.
+  const firstSeqs = new Set();
   const seen = new Set();
-  const marked = rows.map((e) => {
-    const first = !seen.has(e.call);
-    seen.add(e.call);
-    return { e, first };
-  });
+  for (const e of timed) {
+    if (!seen.has(e.call)) { seen.add(e.call); firstSeqs.add(e.seq); }
+  }
+  const marked = rows.map((e) => ({ e, first: firstSeqs.has(e.seq) }));
 
   // Follow the tail only while the operator is already at it. Scrolling up to read a
   // row is a deliberate act, and yanking it back every 250 ms would undo it.
@@ -55,11 +70,12 @@ export default function Timing({ events }) {
   return (
     <section style={sectionStyle}>
       <h2 style={{ marginBottom: "1rem" }}>Timing <span style={{ ...monoStyle, color: "#666" }}>
-        ({rows.length} row{rows.length === 1 ? "" : "s"})</span></h2>
-      {rows.length === 0 ? (
-        <div style={{ ...monoStyle, color: "#666" }}>No timed reads yet.</div>
-      ) : (
-        <div style={boxStyle} ref={boxRef} onScroll={onScroll}>
+        ({rows.length} row{rows.length === 1 ? "" : "s"}
+        {(timed.length > rows.length) ? " of " + timed.length + " held" : ""})</span></h2>
+      <div style={boxStyle} ref={boxRef} onScroll={onScroll}>
+        {rows.length === 0 ? (
+          <div style={{ ...monoStyle, color: "#666" }}>No timed reads yet.</div>
+        ) : (
           <table style={tableStyle}>
             <thead><tr>{kCols.map((c) => (
               <th key={c} style={headStyle}>{c}</th>))}</tr>
@@ -85,8 +101,8 @@ export default function Timing({ events }) {
               ))}
             </tbody>
           </table>
-        </div>
-      )}
+        )}
+      </div>
       <div style={{ ...monoStyle, color: "#666", marginTop: "0.5rem" }}>
         {"\u2020"} first of its call in this process -- warm-up, not a measurement.
         {usHost ? "  Host clock is microsecond-granular." : ""}
