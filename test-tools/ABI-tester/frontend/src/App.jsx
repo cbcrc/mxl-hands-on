@@ -45,32 +45,52 @@ function useLog(pollMs = 250) {
   const [events, setEvents] = useState([]);
   const [logError, setLogError] = useState(null);
   const sinceRef = useRef(0);
+  const busyRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
 
     async function poll() {
+      // setInterval does not wait for an async tick to finish. A resync hands back the
+      // backend's whole 5000-event tail -- 2.9 MB, which the server produces in 52 ms
+      // but a loaded main thread takes seconds to read -- so without this guard a dozen
+      // identical requests for the same backlog are in flight at once. They compete for
+      // the one thread that has to render the result, so the client never catches up,
+      // and never stops asking for the backlog it is behind on.
+      if (busyRef.current) return;
+      busyRef.current = true;
       try {
-        const res = await fetch(API + "/log?since=" + sinceRef.current);
-        const body = await res.json();
-        if (!alive) return;             // unmounted while the fetch was in flight
-        if (!Array.isArray(body)) {
-          setLogError(body?.error ?? "HTTP " + res.status);
-          // A 410 carries the cursor to resync to -- 0 after /reset, the last trimmed
-          // seq after a trim. Not computable here: both directions resync to the same
-          // number for opposite reasons. typeof, not ||, because that number is usually 0.
-          if (typeof body?.since === "number") {
+        // The retry is not politeness, it is the only way the cursor is usable. A 410
+        // suggests the oldest seq still held, and once the backend's ring is full every
+        // new event trims one, so that number expires in about 11 ms at 90 events/s.
+        // Waiting for the next 250 ms tick to spend it earns another 410, and the log
+        // never starts flowing again -- which is what left the panels empty mid-run.
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const res = await fetch(API + "/log?since=" + sinceRef.current);
+          const body = await res.json();
+          if (!alive) return;           // unmounted while the fetch was in flight
+          if (!Array.isArray(body)) {
+            setLogError(body?.error ?? "HTTP " + res.status);
+            // A 410 carries the cursor to resync to -- 0 after /reset, the last trimmed
+            // seq after a trim. Not computable here: both directions resync to the same
+            // number for opposite reasons. typeof, not ||, because that number is usually 0.
+            if (typeof body?.since !== "number") {
+              return;                   // not a resync; nothing to retry with
+            }
             sinceRef.current = body.since;
-            setEvents([]);    // the new reuses seq 1.., and key={e.seq} must stay unique
+            setEvents([]);   // the new reuses seq 1.., and key={e.seq} must stay unique
+            continue;
           }
+          setLogError(null);
+          if (body.length === 0) return;
+          sinceRef.current = body[body.length - 1].seq;
+          setEvents((prev) => prev.concat(body).slice(-kMaxEvents));
           return;
         }
-        setLogError(null);
-        if (body.length === 0) return;
-        sinceRef.current = body[body.length - 1].seq;
-        setEvents((prev) => prev.concat(body).slice(-kMaxEvents));
       } catch (e) {
         if (alive) setLogError(String(e));
+      } finally {
+        busyRef.current = false;
       }
     }
 
