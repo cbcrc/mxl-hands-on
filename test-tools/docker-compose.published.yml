@@ -38,6 +38,15 @@ services:
       - type: bind
         source: ./ABI-tester/logs
         target: /app/logs
+      # The frontend is compiled into the image, so a UI change in the working tree is
+      # invisible to a published container and a git pull does not help (dist is
+      # gitignored). Uncomment after `cd ABI-tester/frontend && npm install && npm run
+      # build` to serve the working tree's bundle instead -- no C++ build needed.
+      # Leave it commented while dist is absent: the mount would serve an empty
+      # directory, and the page would come back blank rather than stale.
+      # - type: bind
+      #   source: ./ABI-tester/frontend/dist
+      #   target: /app/frontend/dist
     environment:
       - MXL_DOMAIN_ROOT=/mxl-domain
       - SCENARIO_DIR=/app/scenarios
