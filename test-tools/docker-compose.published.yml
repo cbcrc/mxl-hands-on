@@ -1,0 +1,47 @@
+# SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
+#
+# The ABI tester from the published image, with no build stage and no dependency
+# on the gst-apps stack. Use this on a machine that only has Docker and a clone of
+# this repository -- notably the far host in a transit measurement, which runs
+# 09-transit-remote-reader and nothing else.
+#
+#   MXL_DOMAIN_DEVICE=/Volumes/mxl/domain_1 \
+#     docker compose -f test-tools/docker-compose.published.yml up -d
+#
+# The domain directory must exist and hold a domain_def.json before `up`: the bind
+# below does not create it, and a missing path fails the mount rather than the app.
+name: test-tools
+
+services:
+  abi-tester:
+    platform: linux/amd64
+    image: ghcr.io/cbcrc/abi-tester:latest
+    pull_policy: always
+    container_name: abi-tester
+    hostname: abi-tester
+    domainname: local
+    ports:
+      - "9607:9600"   # the C++ backend serves both the API and the React frontend
+    volumes:
+      # The domain itself, bound straight from the host. The gst-apps compose file
+      # wraps this same path in a named volume; here there is nothing to depend on.
+      - type: bind
+        source: ${MXL_DOMAIN_DEVICE:-/Volumes/mxl/domain_1}
+        target: /mxl-domain
+      # The image bakes scenarios 01-07. This mount replaces that directory with the
+      # working tree's, which is the only way 08 and 09 reach a container built from
+      # an older commit.
+      - type: bind
+        source: ./ABI-tester/scenarios
+        target: /app/scenarios
+      - type: bind
+        source: ./ABI-tester/logs
+        target: /app/logs
+    environment:
+      - MXL_DOMAIN_ROOT=/mxl-domain
+      - SCENARIO_DIR=/app/scenarios
+      # On by default here, unlike docker-compose.yml: this file exists for the
+      # transit runs, and those are only measurable if the events reach disk.
+      - ABI_TESTER_LOG_FILE=/app/logs/events.ndjson
+      - ABI_TESTER_LOG_MAX_BYTES=2000000000
