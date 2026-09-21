@@ -1,0 +1,114 @@
+{
+  "description": "Remote transit. Reader half of 08-transit-local, to run on the far host against the domain the RDMA transfer lands in. Same flow id, same two reader lanes, no writer. stamp.transit_ms now spans two machines, so it is only meaningful if both clocks are disciplined to the same PTP/TAI source -- an unsynchronised pair reports the clock offset, not the transport. Start it once the flow is visible in the local domain (mxl-info -d); the writer runs 20 min, so there is time to bring RDMA up first.",
+  "lanes": {
+    "B": [
+      {
+        "args": {},
+        "call": "mxlCreateInstance",
+        "delay_before_ms": 0,
+        "id": "b0",
+        "out": {
+          "instance": "I2"
+        }
+      },
+      {
+        "args": {
+          "flow_id": "a1b2c3d4-0008-4000-8000-000000000008",
+          "instance": "I2"
+        },
+        "call": "mxlIsFlowActive",
+        "id": "b1",
+        "note": "diagnostic only; the lane does not branch on it. is_active:false here means the flow has no writer in THIS domain yet"
+      },
+      {
+        "args": {
+          "flow_id": "a1b2c3d4-0008-4000-8000-000000000008",
+          "instance": "I2"
+        },
+        "call": "mxlCreateFlowReader",
+        "id": "b2",
+        "out": {
+          "reader": "R"
+        }
+      },
+      {
+        "args": {
+          "index": {
+            "mode": "head",
+            "offset": 1,
+            "reader": "R"
+          }
+        },
+        "call": "setCursor",
+        "id": "b3",
+        "note": "the first grain not yet written; every read after this blocks on the writer instead of racing it"
+      },
+      {
+        "advance_cursor": 1,
+        "args": {
+          "index": {
+            "mode": "cursor"
+          },
+          "reader": "R",
+          "timeout_ns": 2000000000,
+          "verify_stamp": true
+        },
+        "call": "mxlFlowReaderGetGrain",
+        "id": "b4",
+        "note": "blocking, so the loop is paced by the writer itself -- no delay_before_ms"
+      },
+      {
+        "args": {
+          "times": 35999,
+          "to": "b4"
+        },
+        "call": "repeat",
+        "id": "b5"
+      }
+    ],
+    "C": [
+      {
+        "args": {},
+        "call": "mxlCreateInstance",
+        "delay_before_ms": 2000,
+        "id": "c0",
+        "out": {
+          "instance": "I3"
+        }
+      },
+      {
+        "args": {
+          "flow_id": "a1b2c3d4-0008-4000-8000-000000000008",
+          "instance": "I3"
+        },
+        "call": "mxlCreateFlowReader",
+        "id": "c1",
+        "out": {
+          "reader": "R2"
+        }
+      },
+      {
+        "args": {
+          "index": {
+            "mode": "head"
+          },
+          "reader": "R2",
+          "verify_stamp": true
+        },
+        "call": "mxlFlowReaderGetGrainNonBlocking",
+        "delay_before_ms": 1000,
+        "id": "c2",
+        "note": "always jumps to the newest committed grain, so this lane can never desync; its transit carries up to one commit interval of extra age"
+      },
+      {
+        "args": {
+          "times": 1199,
+          "to": "c2"
+        },
+        "call": "repeat",
+        "id": "c3"
+      }
+    ]
+  },
+  "name": "09-transit-remote-reader"
+}
