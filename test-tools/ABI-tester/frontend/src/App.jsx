@@ -89,6 +89,7 @@ const consoleStyle = {
   lineHeight: 1.45,
   height: "22rem",
   overflowY: "auto",
+  overflowAnchor: "none",   // see the same note on boxStyle in Timing.jsx
   background: "#111",
   borderRadius: "6px",
   padding: "0.5rem 0.75rem",
@@ -231,7 +232,12 @@ export default function App() {
       <Timing events={events} />
       <section style={sectionStyle}>
         <h2 style={{ marginBottom: "1rem" }}>Console</h2>
-        {logError && <div style={{ color: kBad, marginBottom: "0.5rem" }}>{logError}</div>}
+        {/* Always rendered, never conditional: a resync raises this for one poll and
+            drops it on the next, and a line appearing and vanishing under a run changes
+            the page height -- which re-clamps the main scrollbar off the bottom. Same
+            rule as the timing box's empty state. */}
+        <div style={{ color: kBad, marginBottom: "0.5rem", minHeight: "1.2rem" }}>
+          {logError ?? ""}</div>
         <div style={{ marginBottom: "0.5rem" }}>
           <button type="button" style={chipStyle(lane === null)}
                   onClick={() => setLane(null)}>all</button>

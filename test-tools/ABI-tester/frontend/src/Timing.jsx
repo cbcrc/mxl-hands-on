@@ -14,7 +14,11 @@ const kCols = ["seq", "lane", "index", "write OTS", "write wall", "read wall",
 // section is one constant height from the first render. A section that changes
 // height re-clamps the *page* scroll under it, which is what made scrolling to
 // the bottom during a run bounce back up.
-const boxStyle = { height: "22rem", overflow: "auto" };
+// overflowAnchor none: this box re-pins itself to the bottom four times a second,
+// and the browser's scroll anchoring treats a row moving under that as content
+// shifting -- then compensates by scrolling the *page*, which is what dragged the
+// main scrollbar back up off the bottom. Nothing in this app scrolls the page.
+const boxStyle = { height: "22rem", overflow: "auto", overflowAnchor: "none" };
 
 // Only the newest rows go in the DOM. The box shows about a dozen at a time, and
 // rendering every row the console tail happens to hold cost ~1700 rows x 9 cells
