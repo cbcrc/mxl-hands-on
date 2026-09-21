@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
 // SPDX-License-Identifier: Apache-2.0
-import { useState, useEffect, useLayoutEffect, useRef } from "react";
+import { memo, useState, useEffect, useLayoutEffect, useRef } from "react";
 import { sectionStyle, tableStyle, cellStyle, chipStyle, monoStyle,
   kOk, kBad, kWarn } from "./styles";
 import Builder from "./Builder";
@@ -157,7 +157,12 @@ function eventColor(e) {
   return kBad;
 }
 
-function EventLine({ e }) {
+// memo, because every poll builds a new events array and React would otherwise call
+// all 2000 of these again -- 4000 times under StrictMode's double render -- to produce
+// output identical for all but the ~20 lines that actually changed. The event objects
+// are the same references from poll to poll (prev.concat keeps them), so the shallow
+// prop compare holds and the unchanged lines are skipped outright.
+const EventLine = memo(function EventLine({ e }) {
   const [open, setOpen] = useState(false);
   return (
     <div>
@@ -171,7 +176,7 @@ function EventLine({ e }) {
       {open && <div style={detailStyle}>{JSON.stringify(e, null, 2)}</div>}
     </div>
   );
-}
+});
 // -- APP ------------------------------------------------------------
 
 export default function App() {

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
 // SPDX-License-Identifier: Apache-2.0
-import { useLayoutEffect, useRef, useState } from "react";
+import { memo, useLayoutEffect, useRef, useState } from "react";
 import { sectionStyle, tableStyle, cellStyle, monoStyle, kOk, kWarn } from "./styles";
 
 const kCols = ["seq", "lane", "index", "write OTS", "write wall", "read wall",
@@ -32,6 +32,31 @@ const kMaxRows = 300;
 const headStyle = { ...cellStyle, ...monoStyle, color: "#888",
                     position: "sticky", top: 0, background: "#1c1c1c" };
 
+// One row, memoised for the same reason as EventLine in App.jsx: the table is rebuilt
+// on every poll, and without this React re-renders all 300 rows to produce output that
+// differs in one. usHost is passed rather than closed over so the props stay shallow.
+const Row = memo(function Row({ e, first, usHost }) {
+  const ms = (v) => (typeof v === "number") ? v.toFixed(usHost ? 3 : 6) : "\u2014";
+  return (
+    <tr>
+      <td style={{ ...cellStyle, ...monoStyle, color: first ? kWarn : "#888" }}>
+        {e.seq}{first ? " \u2020" : ""}</td>
+      <td style={{ ...cellStyle, ...monoStyle, color: "#888" }}>{e.lane ?? "-"}</td>
+      <td style={{ ...cellStyle, ...monoStyle, color: "#888" }}>{e.index}</td>
+      <td style={{ ...cellStyle, ...monoStyle, color: "#666" }}>{e.ots_ns}</td>
+      <td style={{ ...cellStyle, ...monoStyle, color: "#666" }}>
+        {e.stamp?.valid ? e.stamp.write_ns : "\u2014"}</td>
+      <td style={{ ...cellStyle, ...monoStyle, color: "#666" }}>{e.t_wall_ns}</td>
+      <td style={{ ...cellStyle, ...monoStyle, color: (e.age_ms < 0) ? kWarn : kOk }}>
+        {ms(e.age_ms)}</td>
+      <td style={{ ...cellStyle, ...monoStyle, color: kOk }}>
+        {ms(e.stamp?.valid ? e.stamp.transit_ms : undefined)}</td>
+      <td style={{ ...cellStyle, ...monoStyle, color: kOk }}>
+        {ms(e.stamp?.valid ? e.age_ms - e.stamp.transit_ms : undefined)}</td>
+    </tr>
+  );
+});
+
 export default function Timing({ events }) {
   // A read step that could not resolve its flow's rate carries no ots_ns (calls.cpp:381),
   // so that is the filter: these are exactly the events with something to time.
@@ -51,7 +76,6 @@ export default function Timing({ events }) {
   // rather than hardcoded per platform. One row can fool it once in a thousand; the
   // next event corrects it.
   const usHost = rows.length > 0 && rows.every((e) => e.t_wall_ns.endsWith("000"));
-  const ms = (v) => (typeof v === "number") ? v.toFixed(usHost ? 3 : 6) : "\u2014";
 
   // The first event of each distinct call in a fresh process is a warm-up outlier: a
   // slow first mxlFlowReaderGetGrain stamps readNs late, inflating age and transit.
@@ -98,22 +122,7 @@ export default function Timing({ events }) {
             </thead>
             <tbody>
               {marked.map(({ e, first }) => (
-                <tr key={e.seq}>
-                  <td style={{ ...cellStyle, ...monoStyle, color: first ? kWarn : "#888" }}>
-                    {e.seq}{first ? " \u2020" : ""}</td>
-                  <td style={{ ...cellStyle, ...monoStyle, color: "#888" }}>{e.lane ?? "-"}</td>
-                  <td style={{ ...cellStyle, ...monoStyle, color: "#888" }}>{e.index}</td>
-                  <td style={{ ...cellStyle, ...monoStyle, color: "#666" }}>{e.ots_ns}</td>
-                  <td style={{ ...cellStyle, ...monoStyle, color: "#666" }}>
-                    {e.stamp?.valid ? e.stamp.write_ns : "\u2014"}</td>
-                  <td style={{ ...cellStyle, ...monoStyle, color: "#666" }}>{e.t_wall_ns}</td>
-                  <td style={{ ...cellStyle, ...monoStyle, color: (e.age_ms < 0) ? kWarn : kOk }}>
-                    {ms(e.age_ms)}</td>
-                  <td style={{ ...cellStyle, ...monoStyle, color: kOk }}>
-                    {ms(e.stamp?.valid ? e.stamp.transit_ms : undefined)}</td>
-                  <td style={{ ...cellStyle, ...monoStyle, color: kOk }}>
-                    {ms(e.stamp?.valid ? e.age_ms - e.stamp.transit_ms : undefined)}</td>
-                </tr>
+                <Row key={e.seq} e={e} first={first} usHost={usHost} />
               ))}
             </tbody>
           </table>
