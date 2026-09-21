@@ -27,6 +27,10 @@
 #include "engine.hpp"
 #include "scenario.hpp"
 
+// One /log page. 500 events is ~200 KB, which renders inside a frame, and a client
+// 5000 behind catches up in ten polls while new events arrive at ~90/s.
+constexpr std::size_t kDefaultLogLimit = 500;
+
 // Signal handlers run on the faulting thread, so this backtrace is the one that matters.
 // Installed for the whole life of the process: the tool provokes undefined behaviour in a 
 // C ABI by design, and on a machine with no debugger and no crash reports this is the only
@@ -294,10 +298,22 @@ int main(int argc, char** argv)
             {
                 sinceSeq = std::strtoull(req.get_param_value("since").c_str(), nullptr, 10);
             }
-            
+
+            // Bounded by default. An unbounded /log hands a client that has fallen
+            // behind the whole 5000-event tail -- 2.7 MB at the measured 536 B/event --
+            // which is the thing that keeps it behind. limit=0 asks for everything, for
+            // a human with curl who wants the lot in one file.
+            std::size_t limit = kDefaultLogLimit;
+            if (req.has_param("limit"))
+            {
+                limit = (std::size_t)std::strtoull(req.get_param_value("limit").c_str(),
+                                                   nullptr, 10);
+            }
+
             nlohmann::ordered_json events;
+            uint64_t               dropped = 0;
             std::string            error;
-            if (!log.since(sinceSeq, events, error))
+            if (!log.since(sinceSeq, limit, events, dropped, error))
             {
                 res.status = 410;   // Gone; these events existed and no longer do,
                                     // which is not the same as 400 "you asked wrongly"
@@ -308,7 +324,16 @@ int main(int argc, char** argv)
                 return;
             }
 
-            res.set_content(events.dump(2) + "\n", "application/json");
+            // A header, not a body field: the body stays a bare array, which is how
+            // every client already tells a page of events from an error object.
+            if (dropped > 0)
+            {
+                res.set_header("X-Log-Dropped", std::to_string(dropped));
+            }
+
+            // dump(), not dump(2): this is the one route whose body is measured in
+            // megabytes, and the indentation was 27% of it.
+            res.set_content(events.dump() + "\n", "application/json");
         });
 
     server.Post("/scenario",

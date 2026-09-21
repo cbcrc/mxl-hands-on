@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
 // SPDX-License-Identifier: Apache-2.0
-import { useState, useEffect, useLayoutEffect, useRef } from "react";
+import { memo, useState, useEffect, useLayoutEffect, useRef } from "react";
 import { sectionStyle, tableStyle, cellStyle, chipStyle, monoStyle,
   kOk, kBad, kWarn } from "./styles";
 import Builder from "./Builder";
@@ -45,32 +45,56 @@ function useLog(pollMs = 250) {
   const [events, setEvents] = useState([]);
   const [logError, setLogError] = useState(null);
   const sinceRef = useRef(0);
+  const busyRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
 
     async function poll() {
+      // setInterval does not wait for an async tick to finish. A resync hands back the
+      // backend's whole 5000-event tail -- 2.9 MB, which the server produces in 52 ms
+      // but a loaded main thread takes seconds to read -- so without this guard a dozen
+      // identical requests for the same backlog are in flight at once. They compete for
+      // the one thread that has to render the result, so the client never catches up,
+      // and never stops asking for the backlog it is behind on.
+      if (busyRef.current) return;
+      busyRef.current = true;
       try {
-        const res = await fetch(API + "/log?since=" + sinceRef.current);
-        const body = await res.json();
-        if (!alive) return;             // unmounted while the fetch was in flight
-        if (!Array.isArray(body)) {
-          setLogError(body?.error ?? "HTTP " + res.status);
-          // A 410 carries the cursor to resync to -- 0 after /reset, the last trimmed
-          // seq after a trim. Not computable here: both directions resync to the same
-          // number for opposite reasons. typeof, not ||, because that number is usually 0.
-          if (typeof body?.since === "number") {
+        // The retry is not politeness, it is the only way the cursor is usable. A 410
+        // suggests the oldest seq still held, and once the backend's ring is full every
+        // new event trims one, so that number expires in about 11 ms at 90 events/s.
+        // Waiting for the next 250 ms tick to spend it earns another 410, and the log
+        // never starts flowing again -- which is what left the panels empty mid-run.
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const res = await fetch(API + "/log?since=" + sinceRef.current);
+          const body = await res.json();
+          if (!alive) return;           // unmounted while the fetch was in flight
+          if (!Array.isArray(body)) {
+            setLogError(body?.error ?? "HTTP " + res.status);
+            // A 410 carries the cursor to resync to -- 0 after /reset, the last trimmed
+            // seq after a trim. Not computable here: both directions resync to the same
+            // number for opposite reasons. typeof, not ||, because that number is usually 0.
+            if (typeof body?.since !== "number") {
+              return;                   // not a resync; nothing to retry with
+            }
             sinceRef.current = body.since;
-            setEvents([]);    // the new reuses seq 1.., and key={e.seq} must stay unique
+            setEvents([]);   // the new reuses seq 1.., and key={e.seq} must stay unique
+            continue;
           }
+          // The backend clamps a trimmed cursor instead of refusing it, and says in a
+          // header how many events went by unseen. Worth showing: a gap in a timing
+          // trace that nothing announced is indistinguishable from a quiet interval.
+          const dropped = res.headers.get("X-Log-Dropped");
+          setLogError(dropped ? ("fell behind; " + dropped + " events skipped") : null);
+          if (body.length === 0) return;
+          sinceRef.current = body[body.length - 1].seq;
+          setEvents((prev) => prev.concat(body).slice(-kMaxEvents));
           return;
         }
-        setLogError(null);
-        if (body.length === 0) return;
-        sinceRef.current = body[body.length - 1].seq;
-        setEvents((prev) => prev.concat(body).slice(-kMaxEvents));
       } catch (e) {
         if (alive) setLogError(String(e));
+      } finally {
+        busyRef.current = false;
       }
     }
 
@@ -89,6 +113,7 @@ const consoleStyle = {
   lineHeight: 1.45,
   height: "22rem",
   overflowY: "auto",
+  overflowAnchor: "none",   // see the same note on boxStyle in Timing.jsx
   background: "#111",
   borderRadius: "6px",
   padding: "0.5rem 0.75rem",
@@ -132,7 +157,12 @@ function eventColor(e) {
   return kBad;
 }
 
-function EventLine({ e }) {
+// memo, because every poll builds a new events array and React would otherwise call
+// all 2000 of these again -- 4000 times under StrictMode's double render -- to produce
+// output identical for all but the ~20 lines that actually changed. The event objects
+// are the same references from poll to poll (prev.concat keeps them), so the shallow
+// prop compare holds and the unchanged lines are skipped outright.
+const EventLine = memo(function EventLine({ e }) {
   const [open, setOpen] = useState(false);
   return (
     <div>
@@ -146,7 +176,7 @@ function EventLine({ e }) {
       {open && <div style={detailStyle}>{JSON.stringify(e, null, 2)}</div>}
     </div>
   );
-}
+});
 // -- APP ------------------------------------------------------------
 
 export default function App() {
@@ -161,17 +191,26 @@ export default function App() {
   // Recomputed every render, deliberately: 2000 events is nothing, and a useMemo
   // here would be a cache to keep correct in exchange for no measurable gain.
   const lanes = [...new Set(events.map((e) => e.lane ?? "-"))].sort();
-  const shown = lane === null ? events : events.filter((e) => (e.lane ?? "-") === lane);
+  const live = lane === null ? events : events.filter((e) => (e.lane ?? "-") === lane);
+
+  // Scrolling up freezes the list. The tail keeps only the newest kMaxEvents, so once
+  // it is full every poll drops lines off the front and the line you are reading walks
+  // up and out -- ~90 lines a second in a 30 fps scenario. Freezing is the only thing
+  // that makes a specific event readable; scroll back to the bottom to resume.
+  const [frozen, setFrozen] = useState(null);
+  const shown = frozen ?? live;
 
   function onConsoleScroll() {
     const el = consoleRef.current;
-    stuckRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    stuckRef.current = atBottom;
+    setFrozen((prev) => atBottom ? null : (prev ?? live));
   }
 
   useLayoutEffect(() => {
     const el = consoleRef.current;
     if (el && stuckRef.current) el.scrollTop = el.scrollHeight;
-  }, [events, lane]);
+  }, [shown, lane]);
 
   useEffect(() => {
     async function load() {
@@ -231,14 +270,21 @@ export default function App() {
       <Timing events={events} />
       <section style={sectionStyle}>
         <h2 style={{ marginBottom: "1rem" }}>Console</h2>
-        {logError && <div style={{ color: kBad, marginBottom: "0.5rem" }}>{logError}</div>}
+        {/* Always rendered, never conditional: a resync raises this for one poll and
+            drops it on the next, and a line appearing and vanishing under a run changes
+            the page height -- which re-clamps the main scrollbar off the bottom. Same
+            rule as the timing box's empty state. */}
+        <div style={{ color: kBad, marginBottom: "0.5rem", minHeight: "1.2rem" }}>
+          {logError ?? ""}</div>
         <div style={{ marginBottom: "0.5rem" }}>
           <button type="button" style={chipStyle(lane === null)}
-                  onClick={() => setLane(null)}>all</button>
+                  onClick={() => { setLane(null); setFrozen(null); }}>all</button>
           {lanes.map((ln) => (
             <button type="button" key={ln} style={chipStyle(lane === ln)}
-                    onClick={() => setLane(ln)}>{ln}</button>
+                    onClick={() => { setLane(ln); setFrozen(null); }}>{ln}</button>
           ))}
+          {frozen && <span style={{ ...monoStyle, color: kWarn, marginLeft: "0.5rem" }}>
+            paused -- scroll to the bottom to resume</span>}
         </div>
         <div style={headRowStyle}>{row("seq", "ln", "step", "call", "status", "duration")}</div>
         <div style={consoleStyle} ref={consoleRef} onScroll={onConsoleScroll}>
