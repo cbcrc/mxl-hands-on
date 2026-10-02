@@ -76,7 +76,7 @@ This exercise also showcases the gstreamer clip player plugin (added in [PR #22]
 1. Identify the mxl domain with a domain_def.json in to allow the webRTC player application to discover mxl flows in the domain.
 
    ```sh
-   cp ./data/domain_def.json /Volumes/mxl/domain_1
+   cp ./data/domain_def.json /Volumes/mxl/domain_1/
    ```
 
 1. Look at the docker-compose.yaml file and notice the addition of the mxl2webrtc and mediamtx containers. These containers are there to give you access to a web application that will convert mxl flow into webrtc and display them in your browser.
