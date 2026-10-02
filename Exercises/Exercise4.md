@@ -107,7 +107,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
 
 1. Making sure we have at least one clip for our clip player application (you can add more of your own, .mp4 or .ts)
    ```sh
-   cp ~/mxl-hands-on/build-images/sizzle.ts data/Clips
+   cp ~/mxl-hands-on/build-images/sizzle.ts data/Clips/
    ```
 1. Start the system with the start script.
     ```sh
