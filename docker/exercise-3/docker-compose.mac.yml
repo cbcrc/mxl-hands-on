@@ -27,9 +27,13 @@
 #  3. Flows vanish intermittently / mxlsrc never finds a flow / mxl-info-gui
 #     always reports flows "inactive": the base compose file's mxl-domain
 #     volume is a virtiofs bind-mount of a Mac-side path. dmf-mxl's
-#     DomainWatcher relies on Linux inotify, and mxlIsFlowActive() relies on
-#     flock() — neither is reliably propagated across containers over
-#     virtiofs, causing intermittent flow loss and false "inactive" status.
+#     DomainWatcher relies on Linux inotify, which is not reliably propagated
+#     across containers over virtiofs, causing intermittent flow loss.
+#     mxlIsFlowActive() tries an exclusive flock() on the flow's data file;
+#     on Docker Desktop's file sharing, a flock() taken through a read-write
+#     open (as the writer does) is invisible to every other open, even in the
+#     same container, so the check always succeeds and every flow reports
+#     "inactive". (A flock() through a read-only open is seen.)
 #
 # Fix: back mxl-domain with a tmpfs volume that lives entirely inside the
 # Docker Desktop Linux VM (no virtiofs involved), preserving the RAM-disk

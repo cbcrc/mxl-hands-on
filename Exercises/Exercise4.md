@@ -1,8 +1,8 @@
-## Exercise 4 - Full open source DMF
+## Exercise 4 - Explore audio and video in a real DMF ecosystem with Gstreamer based mxl applications
 
 ### Synopsis
 
-In this exercise, we will compile the latest commit of the MXL SDK including rust bindings and the rust Gstreamer plugins. Then we will build a full stream augmentation workflow supported by various open source project. A full list is found at the end of this document.
+In this exercise, we will build a full stream augmentation workflow with web applications that produce, switch, key and play MXL flows. The applications use the MXL SDK, including its rust bindings and the rust Gstreamer plugins, and come as pre-built images, so there is nothing to compile. They are supported by various open source projects. A full list is found at the end of this document.
 
 ```mermaid
     flowchart LR
@@ -21,6 +21,7 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
             %% --- Stage 2: Processing ---
             subgraph Processing [Processing]
                 direction TB
+                InputSel[Input Selector]
                 AudioMix[Audio Mix]
                 HTML5Keyer[HTML5 Keyer]
                 SPXGraphics[SPX Graphics]
@@ -98,17 +99,17 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
     ```sh
         cd ~/mxl-hands-on/docker/exercise-4
     ```
-1. If you did **NOT** do the preparations steps for WLS, make sure you have a /Volumes/mxl mounted in *tmpfs*.
+1. If you did **NOT** do the preparations steps for WSL, make sure you have a /Volumes/mxl mounted in *tmpfs*. On Mac, skip this step: the MXL domain lives in a RAM volume inside Docker.
    ```sh
    sudo mount -t tmpfs -o size=512m,uid=1000,gid=1000,mode=0755 tmpfs /Volumes/mxl # on WSL linux
-   sudo mkdir -p /Volumes/mxl/domain_1
-   sudo chown 1000:1000 /Volumes/mxl/domain_1
    ```
 
-1. Making sure we have at least one clip for our clip player application (you can add more of your own, .mp4 or .ts)
-   ```sh
-   cp ~/mxl-hands-on/build-images/sizzle.ts data/Clips/
-   ```
+1. The start script copies one clip for our clip player application into `data/Clips`. You can add more of your own (.mp4 or .ts) to that folder.
+
+1. ⚠️ Docker Compose only downloads images that are missing. If you pulled the images in an earlier session, update them first.
+    ```sh
+    docker compose pull
+    ```
 1. Start the system with the start script.
     ```sh
         ./start.sh # For linux based system
@@ -118,57 +119,59 @@ In this exercise, we will compile the latest commit of the MXL SDK including rus
     ```
 1. Use the application and try to reproduce the workflow above. You have more documentation on application usage [here](../gst-apps/README.md)
 
-1. When you are down, do not forget to shutdown your containers.
+    | App | URL | API Swagger Page |
+    |-----|-----|-----|
+    | Test Generator | http://localhost:9600 | http://localhost:9600/docs |
+    | MXL Info GUI | http://localhost:9699 | http://localhost:9699/docs |
+    | MXL to WebRTC | http://localhost:9601 | http://localhost:9601/docs |
+    | File Player | http://localhost:9602 | http://localhost:9602/docs |
+    | HLS to MXL Gateway | http://localhost:9603 | http://localhost:9603/docs |
+    | Input Selector | http://localhost:9604 | http://localhost:9604/docs |
+    | HTML5 Keyer | http://localhost:9605 | http://localhost:9605/docs |
+    | WebRTC to MXL | http://localhost:9606 | http://localhost:9606/docs |
+    | SPX server | http://localhost:5660 | none |
+
+    Reference HLS stream that are 1920x1080p60
+    ```sh
+    https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8
+    ```
+    ```sh
+    https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
+    ```
+
+1. When you are done, do not forget to shutdown your containers.
     ```sh
     ./stop.sh # For linux based system
     ```
     ```sh
     ./stop-mac.sh # For mac based system
     ```
-| App | URL | API Swagger Page |
-|-----|-----|-----|
-| Test Generator | http://localhost:9600 | http://localhost:9600/docs |
-| MXL Info GUI | http://localhost:9699 | http://localhost:9699/docs |
-| MXL to WebRTC | http://localhost:9601 | http://localhost:9601/docs |
-| File Player | http://localhost:9602 | http://localhost:9602/docs |
-| HLS to MXL Gateway | http://localhost:9603 | http://localhost:9603/docs |
-| Input Selector | http://localhost:9604 | http://localhost:9604/docs |
-| HTML5 Keyer | http://localhost:9605 | http://localhost:9605/docs |
-| SPX server | http://localhost:5660 | none |
-
-Reference HLS stream that are 1920x1080p60
-```sh
-    https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_fmp4/master.m3u8
-```
-```sh
-    https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8
-```
 
 ### Open Source Components
 
-| Component | Category | License | Test Gen | Info GUI | MXL2WebRTC | File Player | HLS2MXL | Input Sel | HTML5 Keyer |
-|-----------|----------|---------|:--------:|:--------:|:----------:|:-----------:|:-------:|:---------:|:-----------:|
-| [React](https://github.com/facebook/react) | Frontend | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [React DOM](https://github.com/facebook/react) | Frontend | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [Vite](https://github.com/vitejs/vite) | Frontend | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react) | Frontend | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [MXL](https://github.com/dmf-mxl/mxl) | MXL | Apache-2.0 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [FastAPI](https://github.com/tiangolo/fastapi) | Python 3 | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [Uvicorn](https://github.com/encode/uvicorn) | Python 3 | BSD-3-Clause | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [aiofiles](https://github.com/Tinche/aiofiles) | Python 3 | Apache-2.0 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [Pydantic](https://github.com/pydantic/pydantic) | Python 3 | MIT | — | — | ✓ | — | ✓ | ✓ | ✓ |
-| [python-multipart](https://github.com/Kludex/python-multipart) | Python 3 | Apache-2.0 | ✓ | ✓ | — | ✓ | ✓ | — | — |
-| [Requests](https://github.com/psf/requests) | Python 3 | Apache-2.0 | ✓ | — | — | — | ✓ | — | — |
-| [PyGObject](https://gitlab.gnome.org/GNOME/pygobject) | GStreamer | LGPL-2.1+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [GStreamer](https://gstreamer.freedesktop.org) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [GStreamer plugins-base](https://gstreamer.freedesktop.org/modules/gst-plugins-base.html) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [GStreamer plugins-good](https://gstreamer.freedesktop.org/modules/gst-plugins-good.html) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [GStreamer plugins-bad](https://gstreamer.freedesktop.org/modules/gst-plugins-bad.html) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [GStreamer plugins-ugly](https://gstreamer.freedesktop.org/modules/gst-plugins-ugly.html) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [GStreamer libav](https://gstreamer.freedesktop.org/modules/gst-libav.html) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [GStreamer nice (libnice)](https://libnice.freedesktop.org) | GStreamer | LGPL-2.1 | — | — | ✓ | — | — | — | — |
-| [gstcefsrc](https://github.com/centricular/gstcefsrc) | GStreamer | LGPL-2.0+ | — | — | — | — | — | — | ✓ |
-| [CEF (Chromium Embedded Framework)](https://bitbucket.org/chromiumembedded/cef) | Browser Engine | BSD-3-Clause | — | — | — | — | — | — | ✓ |
-| [MediaMTX](https://github.com/bluenviron/mediamtx) | Infrastructure | MIT | — | — | ✓ | — | — | — | — |
-| [Ubuntu 24.04](https://ubuntu.com) | Base Image | Various | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| [Node.js 18](https://nodejs.org) | Build | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Component | Category | License | Test Gen | Info GUI | MXL2WebRTC | File Player | HLS2MXL | Input Sel | HTML5 Keyer | WebRTC2MXL |
+|-----------|----------|---------|:--------:|:--------:|:----------:|:-----------:|:-------:|:---------:|:-----------:|:----------:|
+| [React](https://github.com/facebook/react) | Frontend | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [React DOM](https://github.com/facebook/react) | Frontend | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [Vite](https://github.com/vitejs/vite) | Frontend | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react) | Frontend | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [MXL](https://github.com/dmf-mxl/mxl) | MXL | Apache-2.0 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [FastAPI](https://github.com/tiangolo/fastapi) | Python 3 | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [Uvicorn](https://github.com/encode/uvicorn) | Python 3 | BSD-3-Clause | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [aiofiles](https://github.com/Tinche/aiofiles) | Python 3 | Apache-2.0 | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [Pydantic](https://github.com/pydantic/pydantic) | Python 3 | MIT | — | — | ✓ | — | ✓ | ✓ | ✓ | ✓ |
+| [python-multipart](https://github.com/Kludex/python-multipart) | Python 3 | Apache-2.0 | ✓ | ✓ | — | ✓ | ✓ | — | — | — |
+| [Requests](https://github.com/psf/requests) | Python 3 | Apache-2.0 | ✓ | — | — | — | ✓ | — | — | — |
+| [PyGObject](https://gitlab.gnome.org/GNOME/pygobject) | GStreamer | LGPL-2.1+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [GStreamer](https://gstreamer.freedesktop.org) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [GStreamer plugins-base](https://gstreamer.freedesktop.org/modules/gst-plugins-base.html) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [GStreamer plugins-good](https://gstreamer.freedesktop.org/modules/gst-plugins-good.html) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [GStreamer plugins-bad](https://gstreamer.freedesktop.org/modules/gst-plugins-bad.html) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [GStreamer plugins-ugly](https://gstreamer.freedesktop.org/modules/gst-plugins-ugly.html) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| [GStreamer libav](https://gstreamer.freedesktop.org/modules/gst-libav.html) | GStreamer | LGPL-2.0+ | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| [GStreamer nice (libnice)](https://libnice.freedesktop.org) | GStreamer | LGPL-2.1 | — | — | ✓ | — | — | — | — | ✓ |
+| [gstcefsrc](https://github.com/centricular/gstcefsrc) | GStreamer | LGPL-2.0+ | — | — | — | — | — | — | ✓ | — |
+| [CEF (Chromium Embedded Framework)](https://bitbucket.org/chromiumembedded/cef) | Browser Engine | BSD-3-Clause | — | — | — | — | — | — | ✓ | — |
+| [MediaMTX](https://github.com/bluenviron/mediamtx) | Infrastructure | MIT | — | — | ✓ | — | — | — | — | ✓ |
+| [Ubuntu 24.04](https://ubuntu.com) | Base Image | Various | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [Node.js 18](https://nodejs.org) | Build | MIT | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
