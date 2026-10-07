@@ -15,7 +15,7 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.gst_hls2mxl import GstHLS2MXL
 
@@ -51,8 +51,9 @@ class StartRequest(BaseModel):
     video: FlowCfg
     audio: FlowCfg
     # rtspsrc's default jitterbuffer is 2000 ms; set this to override it when
-    # the source is RTSP (ignored for sources without a latency property).
-    rtsp_latency_ms: Optional[int] = None
+    # the source is RTSP. Also applies to srtsrc (srt://), which has the same
+    # property; ignored for sources without a latency property.
+    rtsp_latency_ms: Optional[int] = Field(default=None, ge=0)
 
 
 class ApplyRequest(BaseModel):

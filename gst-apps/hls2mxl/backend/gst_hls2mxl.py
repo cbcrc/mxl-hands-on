@@ -213,6 +213,7 @@ class GstHLS2MXL:
                 log.error("Failed to start MXL pipeline: %s", exc)
                 self._running = False
                 self._stabilising = False
+                self._stop_reason = f"error: {exc}"
 
         return False  # do not reschedule the GLib timer
 
