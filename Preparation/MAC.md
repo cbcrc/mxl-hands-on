@@ -25,7 +25,10 @@ In order to run these exercises on a Mac, you need to install Docker and create 
    ```sh
    docker run hello-world
    ```
+1. Our images are built for amd64 (Intel), so on Apple silicon Docker emulates them. Keep the default Docker Desktop settings: in Settings/General/Virtual Machine Options, select **Apple Virtualization framework** and enable **Use Rosetta for x86_64/amd64 emulation on Apple Silicon**.
 1. Some user have reported they had issue using Rosetta with Docker Desktop. If you get an 'invalid instruction' message in your docker logs using our images, you can try to switch to VMM for the docker virtual machine manager in Settings/General/virtual Machine Options.
+
+   > ⚠️ **Only switch to Docker VMM if you get that error.** Docker VMM can't use Rosetta, so it emulates amd64 with QEMU, which is much slower. On a test Mac, the Exercise 1 writer dropped from about 27 to about 18 frames per second (it should produce 29.97), so the latency shown by mxl-info grows by several seconds every minute.
 
 <img src="./Mac-VM-Options.png" width="800">
 
@@ -59,6 +62,13 @@ In order to run these exercises on a Mac, you need to install Docker and create 
 1. Verify that the disk was created
    ```sh
    diskutil list
+   ```
+1. The RAM disk disappears when you restart your Mac or eject it. Before each session, check that `/Volumes/mxl` is still the RAM disk: the size must be about 512M, not the size of your main disk. If it isn't, delete the leftover folder and create the RAM disk again with the step above. Otherwise `mkdir` creates the folders on your main disk, and the MXL writers can't write to them. If you skip the delete, macOS mounts the new RAM disk as `/Volumes/mxl 1`.
+   ```sh
+   df -h /Volumes/mxl
+   ```
+   ```sh
+   sudo rm -r /Volumes/mxl # only if df shows your main disk
    ```
 1. You are ready to go!!!
 

@@ -58,16 +58,21 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```sh
    cat docker-compose.yaml
    ```
-1. If you did **NOT** do the preparations steps for either WLS or MacOS, make sure you have a /Volumes/mxl mounted in *tmpfs* or *ram*.
+1. If you did **NOT** do the preparations steps for either WSL or MacOS, make sure you have a /Volumes/mxl mounted in *tmpfs* or *ram*.
    ```sh
    sudo mount -t tmpfs -o size=512m,uid=1000,gid=1000,mode=0755 tmpfs /Volumes/mxl # on WSL linux
-   sudo mkdir -p /Volumes/mxl/domain_1
-   sudo chown 1000:1000 /Volumes/mxl/domain_1
    ```
    ```sh
    diskutil erasevolume HFS+ mxl $(hdiutil attach -nomount ram://1048576) # on MacOS
+   ```
+1. Create the folder for the MXL domain. A RAM disk is empty after every restart, so do this step even if you did the preparation steps.
+   ```sh
    sudo mkdir -p /Volumes/mxl/domain_1
    sudo chown 1000:1000 /Volumes/mxl/domain_1
+   ```
+1. ⚠️ Docker Compose only downloads images that are missing. If you pulled the images in an earlier session, update them first.
+   ```sh
+   docker compose pull
    ```
 1. Start the containers with the provided .yaml file  
    ```sh
@@ -110,7 +115,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```sh
    docker exec exercise-1-reader-media-function-1 cat /domain/$FLOW1A_ID.mxl-flow/flow_def.json | jq
    ```
-1. Look inside the repository of the grains on the host and confirm that you have all the grain according to the grain count value observed in the step before. Keen observer will have noticed that there is no grain folder for an audio flow. Instead, we have a channels file that contain all grain of all audio channels of a flow in a continous buffer. [Click here for more explanation](https://github.com/dmf-mxl/mxl/blob/main/docs/Architecture.md) 
+1. Look inside the repository of the grains on the host and confirm that you have all the grain according to the grain count value observed in the step before. Keen observer will have noticed that there is no grain folder for an audio flow. Instead, we have a channels file that contain all grain of all audio channels of a flow in a continuous buffer. [Click here for more explanation](https://github.com/dmf-mxl/mxl/blob/main/docs/Architecture.md) 
    ```sh
    ls /Volumes/mxl/domain_1/$FLOW1V_ID.mxl-flow/grains
    ```
@@ -118,6 +123,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
    ```sh
    docker exec exercise-1-reader-media-function-1 /app/mxl-info -d /domain -f $FLOW1V_ID
    ```
+   > **On Mac, `Active` shows `false` even though the writer is running.** mxl-info decides whether a flow is active by checking for the writer's file lock, and Docker Desktop's file sharing doesn't pass that lock between containers for a folder on your Mac. It's harmless in this exercise: the flow is live, as the changing `Head index` shows. Exercises 3 and 4 keep the MXL domain inside Docker on Mac, so there `Active` is correct.
 1. Let's have a look at the audio flow with mxl-info.
    ```sh
    docker exec exercise-1-reader-media-function-1 /app/mxl-info -d /domain -f $FLOW1A_ID
@@ -146,7 +152,7 @@ You will then use the mxl-info tool to list and inspect the available flow withi
 The MXL domain is a fundamental concept in the Media Exchange Layer. It acts as the central shared memory space where all media flows and their associated metadata reside. Understanding its file structure is important for working with MXL.
 
 #### MXL Domain File Structure Explained
-The MXL domain follows a specific hierarchy to organize flows and their data. Here's a breakdown of the key components within `${mxlDomain}` (the base directory of your MXL domain, e.g., `/dev/shm/mxl/domain_1` in this exercise):
+The MXL domain follows a specific hierarchy to organize flows and their data. Here's a breakdown of the key components within `${mxlDomain}` (the base directory of your MXL domain, e.g., `/Volumes/mxl/domain_1` in this exercise):
 
 |Path|Description|
 |:---|:---|
@@ -159,7 +165,7 @@ The MXL domain follows a specific hierarchy to organize flows and their data. He
 |${mxlDomain}/${flowId}.mxl-flow/grains/${grainIndex}|Grain Header and optional payload (if payload is in host memory and not device memory ). Memory mapped by readers and writers|
 
 #### Understanding `tmpfs` and Memory-Mapped I/O
-In Step 9, you confirmed that the MXL domain is mounted on a `tmpfs` filesystem. This is a very important design choice for MXL.
+With `df -h`, you confirmed that the MXL domain is mounted on a `tmpfs` filesystem. This is a very important design choice for MXL.
 
 As noted, `tmpfs` is a temporary file storage facility in Unix-like operating systems that resides entirely in volatile memory (RAM), not on a persistent disk.  
   
@@ -167,7 +173,7 @@ You can read more about `tmpfs` here: https://www.kernel.org/doc/html/latest/fil
 
 
 #### NMOS IS04 flow definition    
-`${mxlDomain}/<flowId>.mxl-flow/.json`: This JSON file is the NMOS IS-04 Flow Resource Definition. It is crucial as it uniquely describes the characteristics of the MXL flow. Key parameters you observed include:  
+`${mxlDomain}/<flowId>.mxl-flow/flow_def.json`: This JSON file is the NMOS IS-04 Flow Resource Definition. It is crucial as it uniquely describes the characteristics of the MXL flow. Key parameters you observed include:  
 
 * `id`: The unique identifier (flowId) for this specific flow.
 * `label`: A human-readable label for the flow.
@@ -175,14 +181,12 @@ You can read more about `tmpfs` here: https://www.kernel.org/doc/html/latest/fil
 * Other parameters like `frame_width`, `frame_height`, `interlace_mode`, `colorspace`, `components`, etc., provide detailed technical specifications of the video flow.
 
 #### Interpreting mxl-info Output
-Step 11 introduces you to the `mxl-info` tool, which is invaluable for inspecting the live state of an MXL flow. When you `run mxl-info -d /domain -f flowId`, pay close attention to the following fields:
+The `mxl-info` tool is invaluable for inspecting the live state of an MXL flow. When you run `mxl-info -d /domain -f flowId`, pay close attention to the following fields:
 
-* `Flow[FlowId]`: Confirms the ID of the flow being inspected.
-* `grain count`: This value represents the depth of the circular buffer for that particular flow. It indicates how many historical grains (frames in this exercise) are currently available in the MXL domain for that flow. The mxl-writer continuously overwrites older grains once the buffer depth is reached.
-* `latency`: It is expressed in grain for video and samples for audio.
-It represents the time difference between the capture/generation timestamp of the latest available grain and the current time when mxl-info is executed.
-In this exercise, with the writer generating grains @ 29.97 frames per second (30000/1001), each grain represents 33.36 milliseconds of video.
-Therefore, the latency expressed in grain will have a value in time that represent grain * 33.36 ms. It is to note that the actual latency can be in between 2 grains, ex: if the value read 2 grain, it can be anywhere between 66 ms to 99 ms.
-For audio, you have to multiply the value by the period of a sample. In case of 48khz a sample is equal to 20.883 us. If your value is displaying 720 (samples) it mean a latency of 15 ms.
-* `grain rate`: Displays the nominal framerate of the flow, derived from the NMOS IS-04 definition.
+* `Flow [flowId]`: Confirms the ID of the flow being inspected.
+* `Grain count`: This value represents the depth of the circular buffer for that particular flow. It indicates how many historical grains (frames in this exercise) are currently available in the MXL domain for that flow. The mxl-writer continuously overwrites older grains once the buffer depth is reached.
+* `Latency (grains, ms)`: The time difference between the capture/generation timestamp of the latest available grain and the current time when mxl-info is executed. The first number is a count of grains for video, and of samples for audio. The range in brackets is the same latency in milliseconds.
+In this exercise, with the writer generating grains @ 29.97 frames per second (30000/1001), each grain represents 33.37 milliseconds of video. The latency in milliseconds is shown as a range one grain wide, because the actual latency falls somewhere within the duration of a grain.
+For audio, a sample at 48 kHz lasts 20.83 µs, so 720 samples is a latency of 15 ms.
+* `Grain/sample rate`: Displays the nominal framerate of the flow (or the sample rate for audio), derived from the NMOS IS-04 definition.
 ### [Back to main page](../README.md)

@@ -8,8 +8,6 @@ As the media industry transitions from traditional hardware-based setups to virt
 * **Interoperable software-based media production** – Enabling broadcasters to optimize workflows by seamlessly integrating diverse production tools and compute environments.
 * **Accelerating industry-wide adoption of software-defined infrastructure** – Helping media companies adopt software solutions for all tiers of production and for all levels of complexity, including workflows that are latency or quality sensitive.
 
-### [Preparation Windows 11 - Getting WSL (Alma) and Docker ready](./Preparation/WSL-Alma.md)
-
 ### [Preparation Windows 11 - Getting WSL (Ubuntu) and Docker ready](./Preparation/WSL-Ubuntu.md)
 
 ### [Preparation Mac - Getting Docker installed and creating a RamDisk](./Preparation/MAC.md)
@@ -18,13 +16,24 @@ As the media industry transitions from traditional hardware-based setups to virt
 
 ### [Exercise 2 - Multiple writers and multiple domains](./Exercises/Exercise2.md)
 
-### [Exercise 3 - Add VNC client for GUI and changing the attribute of one of the writer app](./Exercises/Exercise3.md)
+### [Exercise 3 - Watch MXL flows in your browser with a WebRTC player](./Exercises/Exercise3.md)
 
 ### [Exercise 4 - Explore audio and video in a real DMF ecosystem with Gstreamer based mxl applications.](./Exercises/Exercise4.md)
 
-## TODO
+## Before the session: download the images
 
-* Create a git pipeline that will automatically update the images to the latest MXL code
+The exercises use pre-built images from `ghcr.io/cbcrc`, all tagged `:latest`. Docker Compose only downloads an image when it is missing, so an image pulled for an earlier session is never updated on its own. Download (or refresh) all images ahead of time, so the session doesn't depend on the venue network:
+
+```sh
+cd ~/mxl-hands-on/docker
+for ex in exercise-*; do (cd "$ex" && docker compose pull); done
+```
+
+## More documentation
+
+* [GStreamer MXL apps](./gst-apps/README.md) - the applications used in Exercise 4
+* [Test tools](./test-tools/README.md) - bench instruments for the MXL SDK, including the ABI tester
+* [How to build the images](./how_to_build.md) - building the MXL SDK and publishing the images
 
 ## Authors
 
