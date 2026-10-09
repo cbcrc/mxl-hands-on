@@ -82,12 +82,13 @@ def line(label, values):
     if not values:
         return "  %-11s (no samples)" % label
     values = sorted(values)
-    return "  %-11s min %8.3f  p10 %8.3f  p50 %8.3f  p90 %8.3f  max %8.3f   mean %8.3f" % (
+    return "  %-11s min %8.3f  p10 %8.3f  p50 %8.3f  p90 %8.3f  p99 %8.3f  max %8.3f   mean %8.3f" % (
         label,
         values[0],
         percentile(values, 0.10),
         percentile(values, 0.50),
         percentile(values, 0.90),
+        percentile(values, 0.99),
         values[-1],
         sum(values) / len(values),
     )
