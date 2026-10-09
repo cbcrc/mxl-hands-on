@@ -46,6 +46,8 @@ class Group:
         self.statuses = Counter()
         self.mismatched = 0
         self.no_stamp = 0
+        self.touch = []
+        self.end_to_end = []
 
     def add(self, event):
         # A step that never reached the ABI has no "status"; it has "ok": false and
@@ -68,6 +70,11 @@ class Group:
             self.mismatched += 1
         if "transit_ms" in stamp:
             self.transit.append(stamp["transit_ms"])
+        if "end_to_end_ms" in stamp:
+            self.end_to_end.append(stamp["end_to_end_ms"])
+        touch = event.get("touch")
+        if isinstance(touch, dict) and "touch_ms" in touch:
+            self.touch.append(touch["touch_ms"])
 
     @property
     def read_ok(self):
@@ -129,6 +136,9 @@ def report(key, group):
         )
 
     print(line("transit_ms", group.transit))
+    if group.touch:
+        print(line("touch_ms", group.touch))
+        print(line("end_to_end", group.end_to_end))
     print(line("age_ms", group.age))
     print()
 

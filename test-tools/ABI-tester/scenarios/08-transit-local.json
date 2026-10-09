@@ -159,7 +159,8 @@
           },
           "reader": "R",
           "timeout_ns": 2000000000,
-          "verify_stamp": true
+          "verify_stamp": true,
+          "touch_payload": "lines"
         },
         "call": "mxlFlowReaderGetGrain",
         "id": "b4",
