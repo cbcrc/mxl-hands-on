@@ -29,7 +29,7 @@ services:
       - type: bind
         source: ${MXL_DOMAIN_DEVICE:-/Volumes/mxl/domain_1}
         target: /mxl-domain
-      # The image bakes scenarios 01-07. This mount replaces that directory with the
+      # The image bakes scenarios 01-11. This mount replaces that directory with the
       # working tree's, which is the only way 08 and 09 reach a container built from
       # an older commit.
       - type: bind
