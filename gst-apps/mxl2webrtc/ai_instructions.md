@@ -189,9 +189,9 @@ RUN npm run build
   COPY dmf-mxl/rust/target/release/libgstmxl.so \
        /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstmxl.so
 
-  COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.2 /opt/mxl/lib/libmxl.so.1.2
+  COPY dmf-mxl/build/Linux-Clang-Release/lib/libmxl.so.1.1 /opt/mxl/lib/libmxl.so.1.1
   RUN cd /opt/mxl/lib \
-   && ln -sf libmxl.so.1.2 libmxl.so.1 \
+   && ln -sf libmxl.so.1.1 libmxl.so.1 \
    && ln -sf libmxl.so.1 libmxl.so \
    && ldconfig /opt/mxl/lib /usr/lib/x86_64-linux-gnu/gstreamer-1.0 \
    && mkdir -p /workspace/mxl/build/Linux-Clang-Release/lib \

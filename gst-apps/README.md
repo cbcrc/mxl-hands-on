@@ -15,6 +15,7 @@ This directory contains web applications that produce, inspect, and consume [MXL
 | [HLS to MXL Gateway](#5-hls-to-mxl-gateway) | `hls2mxl:latest` | `Depending on Docker compose config` | Ingests a live HLS stream and republishes it as MXL video and audio flows |
 | [Input Selector](#6-input-selector) | `input-selector:latest` | `Depending on Docker compose config` | Live-switches between up to `MAX_INPUTS` MXL video inputs (frame-accurate) and publishes the active one to a single MXL video output |
 | [HTML5 Keyer](#7-html5-keyer) | `html5-keyer:latest` | `9605` | Keying mode: composites an HTML5 graphics overlay (CEF/Chromium) over a live MXL video background → MXL output. Teleprompter mode: keys an app-hosted OGraf teleprompter over a black picture, with optional MXL-audio voice tracking |
+| [WebRTC to MXL](#8-webrtc-to-mxl) | `webrtc2mxl:latest` | `Depending on Docker compose config` | Captures a browser microphone over WebRTC (through MediaMTX) and writes it as an MXL audio flow |
 
 Pre-built images are published to `ghcr.io/cbcrc` — see [Exercise 4](../Exercises/Exercise4.md) to spin up the whole system without compiling anything.
 
@@ -81,6 +82,7 @@ Open the UIs in a browser once the containers are up:
 | HLS to MXL Gateway | http://localhost:9603 | http://localhost:9603/docs |
 | Input Selector | http://localhost:9604 | — (deferred; Rust backend) |
 | HTML5 Keyer | http://localhost:9605 | http://localhost:9605/docs |
+| WebRTC to MXL | http://localhost:9606 | http://localhost:9606/docs |
 
 ---
 
@@ -320,6 +322,34 @@ For the GStreamer pipeline details (both modes) see [gstreamer-pipeline.md — S
 
 ---
 
+## 8. WebRTC to MXL
+
+**Images:** `ghcr.io/cbcrc/webrtc2mxl:latest` (+ `bluenviron/mediamtx:latest`)
+
+The reverse of [MXL to WebRTC](#3-mxl-to-webrtc): captures your **browser microphone** and writes it into an MXL **audio** flow. It is audio-only — no video.
+
+**How it works:**
+
+```
+Browser mic → WHIP publish (Opus) → MediaMTX
+MediaMTX → WHEP pull → webrtcbin → rtpopusdepay → opusdec → audioconvert → audioresample
+  → capsfilter(F32LE 48k) → queue → mxlsink   (Audio flow)
+```
+
+The browser publishes first; the backend then pulls the stream from MediaMTX, retrying until the publish is live. The flow UUID is **deterministic** (UUID v5 from the group hint), so restarting with the same group hint reuses the same MXL flow directory.
+
+> **Microphone access needs a secure context:** browsers only allow `getUserMedia` on `localhost` or over HTTPS. Open the UI at `http://localhost:9606`; from another machine over plain HTTP, the microphone is blocked.
+
+**Setup panel** (before starting):
+- Select the MXL domain and the microphone (the browser asks for permission once to list the devices; with none selected, the default input is used).
+- Set the **Group Hint** (default `WEBRTC2MXL`), **Label** (default `webrtc-audio`), and **Description** (default `webrtc-audio-out`).
+
+**Operation panel** (while running):
+- The output flow name and UUID, the connection state (**● LIVE** once publishing), and a **mic level meter** to confirm the microphone is picking up sound.
+- An error banner if the backend pipeline fails to start.
+
+---
+
 ## Building from source
 
 If you want to build the Docker images yourself you can run these commands and read more on our process [here](../how_to_build.md)
@@ -344,4 +374,4 @@ docker compose build
 |----------|---------------|
 | [gstreamer-pipeline.md](./gstreamer-pipeline.md) | `gst-launch-1.0` equivalents, Mermaid diagrams, and prose explanations for every pipeline |
 | [how_to_build.md](../how_to_build.md) | Full build guide: MXL SDK → portable apps → Docker images → push to GHCR |
-| [Exercises/Exercise5.md](../Exercises/Exercise5.md) | Step-by-step walkthrough using the pre-built images from `ghcr.io/cbcrc` |
+| [Exercises/Exercise4.md](../Exercises/Exercise4.md) | Step-by-step walkthrough using the pre-built images from `ghcr.io/cbcrc` |

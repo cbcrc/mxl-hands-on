@@ -18,7 +18,7 @@ These commands work in WSL
 ## Installing WSL on Windows 11
 
 ### Steps
-1. Make sure you are using Windows Terminal. To lunch Windows Terminal in admin mode, do `Window Key + R`, type `wt`, and then press `Ctrl + Shift + Enter` (instead of just enter). Click **YES** on the user Account Control (UAC) prompt that appears.
+1. Make sure you are using Windows Terminal. To launch Windows Terminal in admin mode, do `Window Key + R`, type `wt`, and then press `Ctrl + Shift + Enter` (instead of just enter). Click **YES** on the user Account Control (UAC) prompt that appears.
 
 1. Check if WSL is installed
 
@@ -34,6 +34,7 @@ These commands work in WSL
    ```
    ```sh
    wsl --install
+   ```
 1. List all the available linux distribution to be use with WSL
 
    ⚡ Windows Terminal
@@ -41,13 +42,13 @@ These commands work in WSL
    wsl --list --online
    ```
 1. Reboot your PC
-1. Alternatively to Alma Linux, CBC also support Ubuntu Linux as well.
+1. Install Ubuntu 24.04.
 
    ⚡ Windows Terminal
    ```sh
    wsl.exe --install Ubuntu-24.04
    ```
-1. After the distribution install, it should prompt for a default UNIX username and password. **Use the user username. This will make sure command in the exercises are working properly**.
+1. After the distribution install, it should prompt for a default UNIX username and password.
 1. You will now be logged in your newly created user. We will exit back to the powershell command line.
 
    🐧 Ubuntu/Linux
@@ -137,7 +138,7 @@ These commands work in WSL
    ```sh
    wsl --shutdown
    ```
-1. Restart your linux instance using the arrow down menu of the terminal window and verify that the */mxl* folder is mounted to *tmpfs*
+1. Restart your linux instance using the arrow down menu of the terminal window and verify that the */Volumes/mxl* folder is mounted to *tmpfs*
 
    🐧 Ubuntu/Linux
    ```sh
