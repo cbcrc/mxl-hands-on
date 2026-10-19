@@ -1,0 +1,71 @@
+# SPDX-FileCopyrightText: 2026 CBC/Radio-Canada
+# SPDX-License-Identifier: Apache-2.0
+#
+# Two abi-tester instances sharing one MXL domain: the writer is pinned to NUMA node 0,
+# the reader to node 1, so every grain the reader consumes crosses the socket interconnect.
+# cpuset lists are for a 2-node host where node 0 = even CPUs and node 1 = odd CPUs
+# (`numactl --hardware`); adjust for other topologies.
+#
+#   MXL_DOMAIN_DEVICE=/dev/shm/domain_1 \
+#     docker compose -f test-tools/docker-compose.numa-writer-reader.yml up -d
+name: numa-xtest
+
+x-abi-tester: &abi-tester
+  platform: linux/amd64
+  image: ghcr.io/cbcrc/abi-tester:latest
+  pull_policy: always
+  volumes:
+    - type: bind
+      source: ${MXL_DOMAIN_DEVICE:-/dev/shm/domain_1}
+      target: /mxl-domain
+    - type: bind
+      source: ./ABI-tester/scenarios
+      target: /app/scenarios
+  environment:
+    - MXL_DOMAIN_ROOT=/mxl-domain
+    - SCENARIO_DIR=/app/scenarios
+
+services:
+  abi-writer:
+    <<: *abi-tester
+    container_name: abi-writer
+    hostname: abi-writer
+    cpuset: "0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46"
+    ports:
+      - "9607:9600"
+    volumes:
+      - type: bind
+        source: ${MXL_DOMAIN_DEVICE:-/dev/shm/domain_1}
+        target: /mxl-domain
+      - type: bind
+        source: ./ABI-tester/scenarios
+        target: /app/scenarios
+      - type: bind
+        source: ./ABI-tester/logs/writer
+        target: /app/logs
+    environment:
+      - MXL_DOMAIN_ROOT=/mxl-domain
+      - SCENARIO_DIR=/app/scenarios
+      - ABI_TESTER_LOG_FILE=/app/logs/events.ndjson
+
+  abi-reader:
+    <<: *abi-tester
+    container_name: abi-reader
+    hostname: abi-reader
+    cpuset: "1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47"
+    ports:
+      - "9608:9600"
+    volumes:
+      - type: bind
+        source: ${MXL_DOMAIN_DEVICE:-/dev/shm/domain_1}
+        target: /mxl-domain
+      - type: bind
+        source: ./ABI-tester/scenarios
+        target: /app/scenarios
+      - type: bind
+        source: ./ABI-tester/logs/reader
+        target: /app/logs
+    environment:
+      - MXL_DOMAIN_ROOT=/mxl-domain
+      - SCENARIO_DIR=/app/scenarios
+      - ABI_TESTER_LOG_FILE=/app/logs/events.ndjson

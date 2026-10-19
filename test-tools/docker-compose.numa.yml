@@ -1,0 +1,5 @@
+# Pins abi-tester to NUMA node 0 CPUs. Memory is bound separately with `docker update --cpuset-mems 0`.
+# Use with: docker compose -f docker-compose-published.yml -f docker-compose.numa.yml up -d
+services:
+  abi-tester:
+    cpuset: "0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46"
