@@ -1,5 +1,5 @@
 {
-  "description": "Remote transit. Reader half of 08-transit-local, to run on the far host against the domain the RDMA transfer lands in. Same flow id, same two reader lanes, no writer. stamp.transit_ms now spans two machines, so it is only meaningful if both clocks are disciplined to the same PTP/TAI source -- an unsynchronised pair reports the clock offset, not the transport. Start it once the flow is visible in the local domain (mxl-info -d); the writer runs 20 min, so there is time to bring RDMA up first.",
+  "description": "Remote transit. Reader half of 08/10/11-transit-local, to run on the far host against the domain the RDMA transfer lands in. Same flow id, same two reader lanes, no writer. stamp.transit_ms now spans two machines, so it is only meaningful if both clocks are disciplined to the same PTP/TAI source -- an unsynchronised pair reports the clock offset, not the transport. Start it once the flow is visible in the local domain (mxl-info -d); the writer runs 20 min, so there is time to bring RDMA up first.",
   "lanes": {
     "B": [
       {
