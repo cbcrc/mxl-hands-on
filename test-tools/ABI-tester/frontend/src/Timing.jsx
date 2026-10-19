@@ -4,7 +4,7 @@ import { memo, useLayoutEffect, useRef, useState } from "react";
 import { sectionStyle, tableStyle, cellStyle, monoStyle, kOk, kWarn } from "./styles";
 
 const kCols = ["seq", "lane", "index", "write OTS", "write wall", "read wall",
-               "age ms", "transit ms", "write late ms"];
+               "age ms", "transit ms", "touch ms", "end-to-end ms", "write late ms"];
 
 // Same height and stick-to-bottom rule as the console in App.jsx, for the same
 // reason: a 29.97 fps scenario adds ~1800 rows a minute, and an uncapped table
@@ -51,6 +51,10 @@ const Row = memo(function Row({ e, first, usHost }) {
         {ms(e.age_ms)}</td>
       <td style={{ ...cellStyle, ...monoStyle, color: kOk }}>
         {ms(e.stamp?.valid ? e.stamp.transit_ms : undefined)}</td>
+      <td style={{ ...cellStyle, ...monoStyle, color: kOk }}>
+        {ms(e.touch?.touch_ms)}</td>
+      <td style={{ ...cellStyle, ...monoStyle, color: kOk }}>
+        {ms(e.stamp?.valid ? e.stamp.end_to_end_ms : undefined)}</td>
       <td style={{ ...cellStyle, ...monoStyle, color: kOk }}>
         {ms(e.stamp?.valid ? e.age_ms - e.stamp.transit_ms : undefined)}</td>
     </tr>

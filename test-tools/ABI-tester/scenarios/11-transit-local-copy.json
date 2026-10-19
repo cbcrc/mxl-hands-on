@@ -1,5 +1,5 @@
 {
-  "description": "Local transit. Lane A writes 1080p29.97 v210 in real time for 20 min, stamping mxlGetTime() into every payload. Lane B reads the same flow grain by grain with a blocking read and reports stamp.transit_ms = read wall clock - stamped write time; both ends are the same process, so the clocks are the same clock and the number is pure shared-memory propagation. Lane C is a once-per-second head probe that cannot desync, kept as a watchdog for the 20-minute run. Pair with 09-transit-remote-reader on the far host. Log with ABI_TESTER_LOG_FILE, then run mxl-transit-stats.py.",
+  "description": "Local transit, copy. Lane A writes 1080p29.97 v210 in real time for 20 min, stamping mxlGetTime() into every payload. Lane B memcpys the whole grain into a reused per-lane buffer: the copy a real consumer makes, without mxlsrc's per-frame allocation, touch_ms times the walk, and end_to_end_ms = transit_ms + touch_ms. Lane C is a once-per-second head probe that cannot desync, kept as a watchdog for the 20-minute run. Pair with 09-transit-remote-reader on the far host. Log with ABI_TESTER_LOG_FILE, then run mxl-transit-stats.py.",
   "lanes": {
     "A": [
       {
@@ -159,7 +159,8 @@
           },
           "reader": "R",
           "timeout_ns": 2000000000,
-          "verify_stamp": true
+          "verify_stamp": true,
+          "touch_payload": "copy"
         },
         "call": "mxlFlowReaderGetGrain",
         "id": "b4",
@@ -218,5 +219,5 @@
       }
     ]
   },
-  "name": "08-transit-local"
+  "name": "11-transit-local-copy"
 }

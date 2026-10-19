@@ -123,6 +123,39 @@ namespace
 
     constexpr uint64_t kStampMagic = 0x4D584C5354414D50ULL;  // "MXLSTAMP"
 
+    // Walk the whole payload, so a reader on the far NUMA node pays for pulling every
+    // cache line across the interconnect -- not just the stamp's one line.
+    //   "lines": one 8-byte load per 64-byte line: all the memory traffic, minimal CPU
+    //   "copy": memcpy into a private buffer, which is what a real consumer does
+    // Returns a checksum for "lines": a loop whose result nobody uses is dead code,
+    // and the optimiser may delete it. Reporting the sum is what keeps the loads real.
+    uint64_t touchPayload(std::string const& mode, uint8_t const* payload, size_t size)
+    {
+        constexpr size_t kCacheLine = 64;
+        uint64_t         sum        = 0;
+
+        if (mode == "lines")
+        {
+            for (size_t offset = 0; offset + sizeof(uint64_t) <= size; offset += kCacheLine)
+            {
+                uint64_t word = 0;
+                std::memcpy(&word, payload + offset, sizeof(word));   // M5: no pointer cast
+                sum += word;
+            }
+        }
+        else if (mode == "copy")
+        {
+            // thread_local and reused: a fresh 5.5 MB vector per call would page-fault
+            // inside the timing bracket. One lane = one thread = one buffer, so only a
+            // lane's first read pays the allocation. The buffer outlives this call, so
+            // the compiler cannot prove the copy unused -- no checksum needed.
+            thread_local std::vector<uint8_t> buffer;
+            buffer.resize(size);
+            std::memcpy(buffer.data(), payload, size);
+        }
+        return sum;
+    }
+
     // --- argument accessors -------------------------------------
 
     std::string argString(json const& args, char const* name, std::string fallback = {})
@@ -312,6 +345,14 @@ namespace
                               std::to_string(kMaxSleepNs / 1'000'000) + " ms cap");
             }
         }
+
+        // Validated before the read, like timeout_ns: a typo must not cost a grain.
+        std::string const touch = argString(args, "touch_payload", "none");
+        if ((touch != "none") && (touch != "lines") && (touch != "copy"))
+        {
+            return failed("touch_payload must be \"none\", \"lines\" or \"copy\", not \"" +
+                          touch + "\"");
+        }
         
         mxlGrainInfo grain{};
         uint8_t*     payload = nullptr;
@@ -338,6 +379,17 @@ namespace
 
         // The honest instant: right after ABI returned, before any JSON exists.
         uint64_t const readNs = mxlGetTime();
+
+        // Inside the bracket, before any JSON: readNs -> touchedNs is then the payload
+        // walk alone, and touchedNs - writeNs is the full end-to-end figure.
+        uint64_t checksum  = 0;
+        uint64_t touchedNs = readNs;
+        bool const touched = (touch != "none") && (status == MXL_STATUS_OK) && (payload != nullptr);
+        if (touched)
+        {
+            checksum  = touchPayload(touch, payload, grain.grainSize);
+            touchedNs = mxlGetTime();
+        }
 
         json result = statusJson(call, status);
 
@@ -386,6 +438,19 @@ namespace
             result["age_ms"] = (double)((int64_t)(readNs - otsNs)) / 1000000.0;
         }
 
+        if (touched)
+        {
+            json touchInfo;
+            touchInfo["mode"]     = touch;
+            touchInfo["bytes"]    = grain.grainSize;
+            touchInfo["touch_ms"] = (double)(touchedNs - readNs) / 1000000.0;
+            if (touch == "lines")
+            {
+                touchInfo["checksum"] = checksum;   // printed so the loop cannot be optimised out
+            }
+            result["touch"] = touchInfo;
+        }
+
         if (args.value("verify_stamp", false))
         {
             json stampInfo;
@@ -413,6 +478,11 @@ namespace
                     stampInfo["write_ns"]   = nsText(stamp.writeNs);
                     stampInfo["transit_ms"] =
                         (double)((int64_t)(readNs - stamp.writeNs)) / 1000000.0; 
+                    if (touched)
+                    {
+                        stampInfo["end_to_end_ms"] =
+                            (double)((int64_t)(touchedNs - stamp.writeNs)) / 1000000.0;
+                    }
                 }
             }
             result["stamp"] = stampInfo;
@@ -1376,7 +1446,8 @@ namespace
                 {"index", "uint64", true, "Grain index to read"},
                 {"timeout_ns", "uint64", true, "How long to wait; default 0, i.e. return at once"},
                 {"store_as", "handle", false, "Registry name to cache the grain under"},
-                {"verify_stamp", "bool", false, "Parse the 24-bytes payload stamp and report transit"}},
+                {"verify_stamp", "bool", false, "Parse the 24-bytes payload stamp and report transit"},
+                {"touch_payload", "string", false, "\"lines\" or \"copy\": walk the whole grain, report touch.touch_ms"}},
             [](Registry& registry, json const& args)
             {
                 return readGrain(registry, args, "mxlFlowReaderGetGrain", true, false);
@@ -1392,7 +1463,8 @@ namespace
                 {"min_valid_slices", "uint64", true, "Slices required before the grain is returned"},
                 {"timeout_ns", "uint64", false, "How long to wait; default 0, i.e return at once"},
                 {"store_as", "handle", false, "Registry name to cache the grain under"},
-                {"verify_stamp", "bool", false, "Parse the 24-bytes payload stamp and report transit"}},
+                {"verify_stamp", "bool", false, "Parse the 24-bytes payload stamp and report transit"},
+                {"touch_payload", "string", false, "\"lines\" or \"copy\": walk the whole grain, report touch.touch_ms"}},
             [](Registry& registry, json const& args)
             {
                 return readGrain(registry, args, "mxlFlowReaderGetGrainSlice", true, true);
@@ -1405,7 +1477,8 @@ namespace
             {{"reader", "handle", true, "Registry name of the flow reader"},
                 {"index", "uint64", true, "Grain index to read"},
                 {"store_as", "handle", false, "Registry name to cache the grain under"},
-                {"verify_stamp", "bool", false, "Parse the 24-bytes payload stamp and report transit"}},
+                {"verify_stamp", "bool", false, "Parse the 24-bytes payload stamp and report transit"},
+                {"touch_payload", "string", false, "\"lines\" or \"copy\": walk the whole grain, report touch.touch_ms"}},
             [](Registry& registry, json const& args)
             {
                 return readGrain(registry, args, "mxlFlowReaderGetGrainNonBlocking", false, false);
@@ -1419,7 +1492,8 @@ namespace
                 {"index", "uint64", true, "Grain index to read"},
                 {"min_valid_slices", "uint64", true, "Slices required before the grain is returned"},
                 {"store_as", "handle", false, "Registry name to cache the grain under"},
-                {"verify_stamp", "bool", false, "Parse the 24-bytes payload stamp and report transit"}},
+                {"verify_stamp", "bool", false, "Parse the 24-bytes payload stamp and report transit"},
+                {"touch_payload", "string", false, "\"lines\" or \"copy\": walk the whole grain, report touch.touch_ms"}},
             [](Registry& registry, json const& args)
             {
                 return readGrain(registry, args, "mxlFlowReaderGetGrainSliceNonBlocking", false, true);
