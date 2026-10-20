@@ -4,12 +4,101 @@ This report asks what it costs when an MXL flow's writer and its readers run on 
 Sapphire Rapids host. It was measured on 2026-10-19 and 2026-10-20 on two identical lab hosts, following
 [numa-guide.md](numa-guide.md), with the ABI-tester.
 
-It has three parts:
+It has four parts:
+- a [background](#background) section that explains the terms the rest of the report uses;
 - a [summary](#summary) of the findings;
 - the [test procedure](#test-procedure);
 - the [detailed report](#detailed-report), in the order the tests were run, with every number.
 
+## Background
+
+Readers who know CPU caches and NUMA can skip to the [summary](#summary).
+
+### The machine and the setup
+
+Each lab host has two CPU sockets. Each socket is a separate chip with 12 cores, its own 30 MB L3 cache and its
+own memory. Linux calls each socket a **NUMA node**: node 0 is socket 0 and node 1 is socket 1, and this report
+uses the two words interchangeably. A core can read the other socket's memory, but the request and the data travel
+over **UPI** (Ultra Path Interconnect), Intel's link between the two sockets, and that takes longer than reading
+its own memory.
+
+```
+            socket 0 = node 0                                socket 1 = node 1
+  +----------------------------------+          +----------------------------------+
+  | 12 cores (even CPUs)             |          | 12 cores (odd CPUs)              |
+  | 30 MB L3                         |   UPI    | 30 MB L3                         |
+  | memory (holds the grains)        |<-------->| memory                           |
+  |                                  |          |                                  |
+  | writer, local reader             |          | cross reader                     |
+  +----------------------------------+          +----------------------------------+
+```
+
+In every test except layout B (§2-3):
+- the **writer** runs on node 0, and the grains are in node 0's memory, because the writer creates the flow;
+- a **local reader** runs on node 0;
+- a **cross reader** runs on node 1 and reads every grain across UPI.
+
+### Lines and caches
+
+The CPU does not move single bytes between memory and its caches. It moves **lines** of 64 bytes, and the caches,
+snoops, memory directory and counters below all work per line. A 2160p v210 grain is 22 118 400 B, which is
+345 600 lines. At 29.97 fps that is about 10.4 M lines per second, or **311 M lines per 30 s**, the counter window.
+That number recurs in every counter table: it is one 2160p30 grain stream.
+
+Each core has small private caches (L1, L2). The 12 cores of a socket share its L3. Reading a line from a cache
+is much faster than reading it from memory (DRAM), and reading local memory is faster than reading the other
+socket's memory over UPI.
+
+### Snoops and the memory directory
+
+Several caches can hold a copy of the same line. Before a core writes a line, every other copy must be dropped, or
+another core would go on reading the old value. Within a socket, the L3 knows which cores hold which lines.
+Between sockets, the socket whose memory holds the line (its **home**) asks the other socket with a **snoop**: "do
+you have a copy of this line? If so, drop it, and send it to me if you changed it." The answer either carries data
+or says "I have nothing". Each snoop is a round trip over UPI.
+
+So as not to snoop on every access, Sapphire Rapids keeps a few bits per line in memory, the **memory directory**,
+that record whether the other socket may hold a copy. Two states matter here:
+- **I:** not cached on the other socket. No snoop is needed.
+- **A:** may be cached on the other socket. The home must snoop it before giving the line to a writer.
+
+When node 1 reads a node 0 line, its state goes from I to A. Node 1 later drops its copy without telling anyone, so
+the state stays A until the next snoop. Changing the state is a write to memory.
+
+### Writing a line: RFO and non-temporal stores
+
+- **RFO** (read for ownership) is what a core sends before writing a line: it fetches the line and gets the only
+  copy. If the line is in state A, the RFO waits for the snoop of node 1. The writer fills each grain with
+  `memset`, which writes this way.
+- **Non-temporal stores** write straight to memory, around the caches. They are meant for data that will not be
+  read again soon. glibc's `memcpy` uses them for copies above 16 MiB, which covers any 2160p grain. Such a write
+  does not read the line from memory first, so the home cannot see the directory bits and snoops the other socket
+  anyway.
+
+### What the tests measure
+
+- **Writer fill:** the time the writer takes to `memset` a whole grain.
+- **Reader touch:** the time a reader takes to read every line of a grain (*lines*) or to `memcpy` it (*copy*).
+- **Transit:** from the writer's commit stamp to the reader's wake-up. It measures the notification, not the data.
+- **Ring:** the flow keeps its last 5 grains, and the writer overwrites the oldest.
+- **head+1 / head-3:** the reader reads the grain just committed, or the one three frames older. At 2160p, three
+  newer grains (66 MB) are more than the 30 MB L3, so a head-3 read comes from memory.
+- **p50 / p99:** the median, and the value 99 % of grains stay under.
+
+### Units
+
+- **Flow rates in Gb/s**, as media flows are usually quoted. One 2160p29.97 v210 flow is 663 MB/s, i.e.
+  **5.3 Gb/s**. Active 10-bit 4:2:2 video is 4.97 Gb/s; v210 packs 6 pixels into 16 bytes instead of 15.
+- **Memory bandwidth in GB/s** (bytes), as memory is specified and as the tools report it.
+- **Counts per 30 s**, the counter window: 311 M lines per 30 s is one 2160p30 grain stream.
+- **Latencies from the uncore counters are in CHA cycles**, the clock of the L3 logic. Its frequency was not
+  recorded, so these numbers are only compared with each other.
+
 ## Summary
+
+Most results are at 2160p. At 1080p a grain (5.5 MB) and even the whole ring (27.6 MB) fit in one socket's 30 MB
+L3, so reads could come from cache and hide the cost of crossing sockets. A 2160p grain is 22 MB and its ring
+110 MB. Unless noted, the writer and the grains are on node 0, and "cross" means a reader on node 1.
 
 ### Bottom line
 
@@ -24,26 +113,28 @@ the reader's copy, and about **0.5 ms on the writer's fill**. Each is about 1.5 
 
 1. **Set the governor first.** Under `schedutil`, reads were bimodal and up to 2x slower. That produced a false
    "node 1 is faster" result. `performance` removed it and halved wake-up latency. (§1-3)
-2. **Wake-up across sockets is free.** Transit, from the writer's commit to the reader's wake-up, is
-   0.03-0.06 ms at p50 under `performance`, the same for local and cross readers, at 1080p and 2160p. (§3, §4, §6)
-3. **A cross reader reading alone pays +0.44 ms (+30 %) on a 2160p copy.** About 230 M of its 328 M lines per
-   30 s come from remote DRAM.
+2. **Wake-up across sockets is free.** [Transit](#what-the-tests-measure), from the writer's commit to the
+   reader's wake-up, is 0.03-0.06 ms at p50 under `performance`, the same for local and cross readers, at 1080p
+   and 2160p. (§3, §4, §6)
+3. **A cross reader reading alone pays +0.44 ms (+30 %) on a 2160p copy.** About 230 M of its 328 M
+   [lines](#lines-and-caches) per 30 s come from node 0's memory.
    - Earlier results that showed it as almost free (+4 %) came from several readers feeding each other
      cache-to-cache.
    - To measure the cross-node cost, test one reader at a time. (§4-6)
 4. **A cross reader slows the writer by about 0.5 ms (+34 %).**
-   - Lines that node 1 has read stay marked "maybe cached remotely" in the memory directory.
-   - Each later write to such a line must first snoop node 1, almost always for nothing, then rewrite the
-     directory.
+   - Lines that node 1 has read stay marked "maybe cached remotely" in the
+     [memory directory](#snoops-and-the-memory-directory).
+   - Each later write to such a line must first [snoop](#snoops-and-the-memory-directory) node 1, almost always
+     for nothing, then rewrite the directory.
    - That is about 300 M snoops and about 520 M extra DRAM writes per 30 s for one 2160p flow.
    - Every consumer of the flow, local ones included, gets each grain later. (§6, §7)
 5. **The cost is per flow, not per reader.** With 1 to 6 cross readers on one flow:
-   - the grain crosses UPI once (663 MB/s at 2160p30);
+   - the grain crosses [UPI](#the-machine-and-the-setup) once (5.3 Gb/s at 2160p30);
    - the writer's penalty stays at 0.5 ms;
    - two cross readers were faster than one, because they feed each other. (§8)
 6. **A fresh grain is slower to read.** Reading at commit (head+1) is 14-16 % slower than reading three grains
    later, because the lines are still in the writer's cache. (§4, §5)
-7. **UPI data scales with flows, and the links are far from full.** Four cross flows move 2.65 GB/s. At four
+7. **UPI data scales with flows, and the links are far from full.** Four cross flows move 21 Gb/s. At four
    flows, local readers lost their advantage: touch 2.26 vs 2.31 ms, with a worse tail. They share node 0's L3
    and memory controller with four writers. (§9)
 8. **Under heavy memory load, cross readers did not degrade more than local ones.**
@@ -51,7 +142,8 @@ the reader's copy, and about **0.5 ms on the writer's fill**. Each is about 1.5 
    - The writer's snoop hides behind the slower DRAM read.
    - With four flows under load, the writer was the bottleneck: fill p99 4.4-4.8 ms. (§9, §10)
 9. **Large copies send one cross-socket snoop per line, even when everything is local.**
-   - A `memcpy` above glibc's 16 MiB threshold, which covers any 2160p grain, uses non-temporal stores.
+   - A `memcpy` above glibc's 16 MiB threshold, which covers any 2160p grain, uses
+     [non-temporal stores](#writing-a-line-rfo-and-non-temporal-stores).
    - Those cannot consult the directory, so they broadcast a snoop to the other socket.
    - Memory-streaming neighbours do the same, at a much larger scale. (§7, §8, §10)
 
@@ -72,18 +164,22 @@ the reader's copy, and about **0.5 ms on the writer's fill**. Each is about 1.5 
 
 ### Open questions
 
-- **The local writer slows from 1.48 to 1.65 ms** when two or more local readers read its flow (§8). The guess
-  is invalidating copies held in several readers' caches.
-- **Under load, the writer's fill keeps a 0.35 ms cross gap**, although its RFO latency gap at the CHA is nearly
-  zero (§10).
-- **Under memory stress, socket 1 receives extra snoops**, only in cross runs (§9, §10).
+- **The writer slows from 1.48 to 1.65 ms when two or more local readers read its flow**, with no cross reader
+  involved (§8). A guess: each write must first drop the copies of the line held in several readers' caches.
+- **Under heavy memory load, the writer's fill is still 0.35 ms slower when its reader is cross** (§10). Yet the
+  wait per write request ([RFO](#writing-a-line-rfo-and-non-temporal-stores)), measured at the L3, is now almost
+  the same local and cross: 279 vs 283 cycles, against 242 vs 303 without load. The snoop to node 1 hides behind
+  the slow memory read. Something else makes up the 0.35 ms, and it was not found.
+- **Under memory stress, socket 1 receives more snoops in cross runs than in local runs**, for example 654 vs
+  313 M per 30 s with one flow (§9, §10). Where they come from is not known.
 - **On .134, a writer on node 1 was slower for every reader** (§3). This was not followed up.
 - **UPI headroom is estimated, not measured.** The link count and flit size for this SKU were not checked.
 
 ### Caveats
 
 - One hardware type (2 x Xeon Silver 4510), on two hosts.
-- Most configurations ran once, for 90 s or 5 min. Where runs were repeated, they agreed to within 0.05 ms.
+- Most configurations ran once, for 90 s or 5 min. Where runs were repeated, they agreed to within 0.05 ms,
+  except one at 0.14 ms (§7).
 - The ABI-tester's copy into a reused buffer stands in for a real consumer. No mxlsrc or GStreamer pipeline was
   measured.
 - Counters were multiplexed over 20-30 s windows and scaled.
@@ -138,16 +234,28 @@ head-3, 2160p, and 2160p head-3) were derived from those and exist only on .136,
   `Cpus_allowed_list` and `Mems_allowed_list` were checked in `/proc/<pid>/status` before every run.
 - **Grain pages.** The writer creates the flow, so the grain pages are first touched on node 0. `numa_maps` in
   every container showed the grain pages as `N0=` only.
-- **Layouts:**
+- **Layouts.** Each container is pinned to whole physical cores. CPU n and its hyperthread sibling n+24 are one
+  core, so "0-10 even + 24-34 even" means CPUs 0, 2, 4, 6, 8, 10 and 24, 26, 28, 30, 32, 34: 6 cores on node 0.
+  No two containers share a core. Each container's memory node is the node it runs on, so in layout B the grains
+  are in node 1's memory.
 
-| Layout | Writer | Local reader | Cross reader | stress-ng |
+| Layout | Role | Node | Cores | CPUs |
 |---|---|---|---|---|
-| First run (§1) | all 24 node 0 CPUs (its own lanes B/C are the local reader) | - | all 24 node 1 CPUs | - |
-| A (§2-8) | 0-10 even + 24-34 even | 12-22 even + 36-46 even | 1-11 odd + 25-35 odd | - |
-| B (§2-3) | A's cross set, mems 1 | 13-23 odd + 37-47 odd | A's writer set, mems 0 | - |
-| Flows (§9-10) | 0-6 even + 24-30 even | 8-14 even + 32-38 even | 1-11 odd + 25-35 odd | 16-22 even + 40-46 even |
+| **First run** (§1) | writer, whose own reader lane is the local reader | 0 | 12 | all even CPUs |
+| | cross reader | 1 | 12 | all odd CPUs |
+| **A** (§2-8): the standard layout | writer | 0 | 6 | 0-10 even + 24-34 even |
+| | local reader | 0 | 6 | 12-22 even + 36-46 even |
+| | cross reader | 1 | 6 | 1-11 odd + 25-35 odd |
+| **B** (§2-3): A with the nodes swapped, to test whether one socket is faster | writer | 1 | 6 | 1-11 odd + 25-35 odd |
+| | local reader | 1 | 6 | 13-23 odd + 37-47 odd |
+| | cross reader | 0 | 6 | 0-10 even + 24-34 even |
+| **Flows** (§9-10): node 0 split three ways to make room for stress-ng | writer | 0 | 4 | 0-6 even + 24-30 even |
+| | local reader | 0 | 4 | 8-14 even + 32-38 even |
+| | stress-ng | 0 | 4 | 16-22 even + 40-46 even |
+| | cross reader | 1 | 6 | 1-11 odd + 25-35 odd |
 
-Each set is whole physical cores with their siblings, so no two containers ever share a core.
+In §1-5 the writer container also runs reader lanes of its own, reported as "the writer's own reader". From §6 on
+it runs the writer lanes only.
 
 ### Host settings
 
@@ -187,6 +295,22 @@ Variants of this:
 
 Every counter needs root, because `perf_event_paranoid` is 4.
 
+The tools:
+- **`perf stat`** reads the CPU's hardware counters and prints one total per event over a time window, like an
+  odometer. It does not slow the program down or record individual accesses.
+  - **`-C <cpus>`** counts only what happens on those CPUs. In §5-6 that is one container's CPUs, so each number
+    belongs to one container.
+  - **`-a --per-socket`** counts on every CPU and prints one total per socket (S0, S1). §7-10 need it because
+    their events are not tied to a core but to hardware shared by the whole socket: the L3 logic (CHA), the
+    memory directory logic (M2M), the UPI links and the memory controller (IMC). Those totals cannot be split by
+    container. The writer is on S0 and the cross reader on S1, so the split by socket mostly matches the split by
+    role.
+- **`perf c2c`** ("cache to cache") samples individual loads and stores and reports which lines move between
+  cores or sockets. It is the usual tool for false sharing. It saw nothing here; see below.
+- **Offcore events** (`ocr.*`, §5-6) count, per core, every line brought in from outside the core, by where it
+  came from: the local L3, another core's cache, local memory, the other socket's memory or the other socket's
+  cache.
+
 | Section | Tool | Events |
 |---|---|---|
 | §5 | `perf c2c`, then `perf stat` per container's CPUs | `ocr.reads_to_core.*`: every line read into a core, demand + prefetch + RFO, by source |
@@ -200,7 +324,23 @@ Things learned about the counters:
   `tor_inserts.snps_from_rem` on the receiving socket instead.
 - **The writer's ownership requests are mostly `ia_miss_rfo_pref`** (L2 prefetch RFOs), not `ia_miss_rfo`.
 - **RFO miss latency** is `tor_occupancy / tor_inserts`, in CHA cycles.
-- **Events are multiplexed and scaled.** Each is live for 20-60 % of the window.
+- **Events are multiplexed and scaled.** There are more events than hardware counters, so perf rotates them and
+  scales each total up. Each event is live for 20-60 % of the window.
+
+The counter vocabulary used in §5-10:
+
+| Term | Meaning |
+|---|---|
+| CHA | Caching and Home Agent. There is one per L3 slice, about one per core. It tracks which cores hold each line and acts as the **home** for memory lines: it checks the directory, sends snoops and sends requests to memory. |
+| TOR | Table of Requests: the CHA's queue of requests waiting for an answer. `tor_inserts` counts requests entering it and `tor_occupancy` adds up how many are waiting at each cycle, so occupancy / inserts is the average wait per request, in CHA cycles. |
+| `ia_miss_rfo`, `ia_miss_rfo_pref` | RFOs from a core (IA) that missed the L3. `_pref` are the ones the L2 prefetcher sends ahead of the writes. |
+| `requests.invitoe` | `InvItoE`: a request for the only copy of a line without reading its data, sent by non-temporal stores that overwrite the whole line. |
+| `snoop_resp.rspi`, `.rspifwd` | Snoop answers: RspI is "I have nothing", RspIFwd is "I had it, here is the data". |
+| `tor_inserts.snps_from_rem` | Snoops arriving at this socket from the other one. |
+| M2M | Mesh to Memory: the bridge between the CHAs and the memory controller. It reads and writes the directory bits stored with each line. `directory_lookup.state_i` / `state_a` count the state found, `directory_update.i2a` / `a2i` the state changed. |
+| IMC, `cas_count.rd` / `.wr` | The integrated memory controller. A CAS is one 64-byte read or write to memory, so CAS x 64 B / 30 s gives GB/s. |
+| UPI flits | The unit of transfer on UPI. `txl_flits.all_data` counts the flits carrying line data that a socket sends, `non_data` the rest: requests, snoops and answers. Here, about 9 data flits carry one 64-byte line. |
+| `ocr.reads_to_core.*` | Offcore: lines brought into a core, demand reads, prefetches and RFOs alike, by source. |
 
 ### Analysis
 
@@ -246,11 +386,13 @@ node 1, sharing a single MXL domain on tmpfs. Each read flavour ran once for 5 m
 | Flow | 1080p29.97 v210, 5 529 600 B grains, 9 000 grains written (5 min) |
 
 **Scenarios.** Each run uses scenario 10 (stamp), 08 (lines) or 11 (copy) from `ABI-tester/scenarios`. Both
-instances load it with jq overrides: `a7.times = 8999`, `b5.times = 8849`, `c3.times = 299`. Lane B stops 150
-grains before the writer, so its last blocking reads don't wait out their 2 s timeouts.
-- **Writer instance** runs all three lanes. Its lanes B and C are the **local** reader (node 0).
-- **Reader instance** runs the same body with lane A removed. Its lanes B and C are the **cross-node** reader
-  (node 1).
+instances load it with jq overrides: `a7.times = 8999`, `b5.times = 8849`. Lane B stops 150 grains before the
+writer, so its last blocking reads don't wait out their 2 s timeouts.
+- **Writer instance** runs the writer lane A and the reader lane B. Its lane B is the **local** reader (node 0).
+- **Reader instance** runs the same body with lane A removed. Its lane B is the **cross-node** reader (node 1).
+
+The scenarios also have a lane C, a once-per-second non-blocking read of the newest grain. It is not reported: it
+measures where in the frame the probe happens to fall (about half a frame at p50), not latency.
 
 The domain was cleared and the containers restarted before each run. The writer creates the flow, so it touches
 the pages first. While the copy run's flow was still mapped, `/proc/1/numa_maps` in **both** containers showed
@@ -277,20 +419,6 @@ How to read the columns:
 - `touch` = time to read the whole grain (lines) or memcpy it (copy).
 - `end-to-end` = transit + touch.
 
-#### Results: lane C (once-per-second `mxlFlowReaderGetGrainNonBlocking` at head), ms
-
-300 reads per reader per run, all ok.
-
-| Flavour | node 0 transit p50 | node 1 transit p50 |
-|---|---:|---:|
-| stamp | 17.911 | 17.582 |
-| lines | 17.042 | 16.257 |
-| copy | 17.984 | 17.189 |
-
-Lane C reads the newest committed grain at a random phase, so its p50 is about half a frame period (33.4 ms / 2),
-as expected. Its p99 (about 1.7 s, max 4.7 s) is **not meaningful**: with `c3.times = 299`, lane C runs about
-5 s past the writer's last commit, so its final probes read a grain that is already seconds old.
-
 #### Observations
 
 1. **Wake-up latency does not depend on the node.** For all three flavours, transit p50 is 0.071-0.074 ms and
@@ -302,26 +430,36 @@ as expected. Its p99 (about 1.7 s, max 4.7 s) is **not meaningful**: with `c3.ti
    - **p99 is close for both:** lines 1.016 vs 1.085 ms, copy 1.555 vs 1.609 ms.
    - **The copy distributions are bimodal.** The node 0 reader sits almost always in a mode near 1.45 ms. The
      node 1 reader is mostly near 0.69 ms but reaches the same 1.45 ms mode above p90.
-3. **Possible reasons, none of them verified:**
+3. **Possible reasons why the cross reader looked faster, none of them verified at the time.** Later sections
+   tested each one; the outcome follows each reason.
    - **The ring fits in L3.** The flow ring is 5 grains (`data.0`-`data.4`), about 27.6 MB, which fits in one
      socket's 30 MB L3. A freshly committed grain is then likely still in node 0's L3. In that case the node 1
      reader's read is served largely cache-to-cache over UPI, not from remote DRAM, and this test does not
-     measure a remote-DRAM read.
+     measure a remote-DRAM read.\
+     → **§4-6: true.** At 1080p the cross reader was reading node 0's cache. At 2160p, with one reader reading
+     from memory, cross costs +0.44 ms (+30 %).
    - **The local reader shares the writer's process and CPU set.** It also shares its L2 and L3 with the
-     writer's working set.
+     writer's working set.\
+     → **§2: ruled out.** A separate local reader matches the writer's own reader to within 1 µs.
    - **Frequency scaling.** The governor is `schedutil` and the host was otherwise idle, so the core frequency
-     a reader wakes on can vary between the two sockets.
-4. **These are single 5-minute runs.** No pcm/UPI counters were collected, because pcm needs sudo on the host.
+     a reader wakes on can vary between the two sockets.\
+     → **§3: the cause.** Under `performance` every reader agrees, and the "faster" cross reader is gone.
+4. **These are single 5-minute runs.** No pcm/UPI counters were collected, because pcm needs sudo on the host.\
+   → §5-10 add `perf` counters, recorded with sudo by the user.
 
 #### Follow-ups worth trying
 
 - **Separate local reader.** Pin a third reader container to node 0 and run the reader-only body. That separates
-  "local" from "same process as the writer".
+  "local" from "same process as the writer".\
+  → **§2: done.** Same process is ruled out.
 - **Rerun with the `performance` governor**, or with `isolcpus` on the readers' CPUs, to remove frequency and
-  scheduler noise.
-- **Repeat 3 times.** The guide asks for at least 3 runs.
+  scheduler noise.\
+  → **§3: done** with `performance`, which removed the noise. `isolcpus` was not tried.
+- **Repeat 3 times.** The guide asks for at least 3 runs.\
+  → **Not done** systematically. The runs repeated in §7 matched §6 to within 0.05 ms, except one at 0.14 ms.
 - **Run under node 0 memory stress**, as in the guide's stress-ng section, to see whether the cross-node reader
-  then degrades more.
+  then degrades more.\
+  → **§9-10: done.** Cross did not degrade more than local.
 
 ### 2. Three readers, then swapped nodes (.134, 2026-10-19, 18:28 to 18:50 UTC)
 
@@ -379,15 +517,21 @@ touch plus about 0.08 ms. Both are in the raw output below.
    - the core a thread happens to wake on;
    - whether the grain is still in the writer socket's L3 (the ring of 5 grains is about 27.6 MB, the L3 30 MB).
 
+   → **§3: frequency confirmed.** Under `performance` the two states collapse into one, whatever core a reader
+   wakes on. The L3 question is answered in §4-6.
+
 #### Next steps to separate those
 
 - **Governor run (needs sudo).** Rerun copy and lines with the `performance` governor:
   `sudo cpupower frequency-set -g performance`, then `-g schedutil` afterwards. If the 2x states collapse into
-  the fast one, frequency is the cause.
+  the fast one, frequency is the cause.\
+  → **§3: done.** Frequency is the cause.
 - **Without sudo.** During a run, sample each reader thread's last CPU (`/proc/1/task/*/stat`, field 39, via
-  `docker exec`) and that CPU's `scaling_cur_freq`. Then line them up with the touch_ms time series.
+  `docker exec`) and that CPU's `scaling_cur_freq`. Then line them up with the touch_ms time series.\
+  → **Not done.** §3 made it unnecessary.
 - **2160p run.** Run with 2160p grains (a ring of about 110 MB, larger than L3) to see a real remote-DRAM read
-  cost.
+  cost.\
+  → **§4: done**, and corrected by §5-6: one reader alone pays +0.44 ms (+30 %).
 
 ### 3. `performance` governor (.134, 2026-10-19, 18:57 to 19:19 UTC)
 
@@ -429,7 +573,8 @@ Under `schedutil`, every reader's transit had been 0.070-0.080 ms at p50 and 0.0
    run agree to within 1.5 % at p50 and within 0.005 ms at p99, on both flavours and in both layouts. For a 1080p
    grain that was just written, the cross-node read costs the same as the local one. The ring of 5 grains
    (about 27.6 MB) most likely still sits in the writer socket's L3, so this measures cache-to-cache over UPI,
-   not remote DRAM.
+   not remote DRAM.\
+   → **§4-6: confirmed.** The cost appears at 2160p, with one reader reading from memory.
 3. **Layout B is slower for all three readers, local and cross alike.** That is the run with the writer on
    node 1. Copy is 0.80 vs 0.68 ms, and transit p50 is 0.055 vs 0.033 ms with a fatter p99. Because it hits
    every reader, it follows where the **writer** runs, not where a reader reads from. It is one run each, so
@@ -437,13 +582,17 @@ Under `schedutil`, every reader's transit had been 0.070-0.080 ms at p50 and 0.0
    - other activity on that node (the host also runs `intel-mtl-manager` and mediamtx);
    - different uncore or C-state behaviour on socket 1.
 
+   → **Not followed up.** It is listed in the summary's open questions.
+
 #### Recommendation
 
 For latency tests on this host, set the governor to `performance` and report it with the results. Under
 `schedutil`, run-to-run variation (about 2x on touch) is far larger than the effect being measured. The
 remaining open questions:
-- why the writer on node 1 is slower; a repeat run, plus a look at what else runs on node 1, would tell;
-- the remote-DRAM cost, which needs a 2160p run whose ring is larger than L3.
+- why the writer on node 1 is slower; a repeat run, plus a look at what else runs on node 1, would tell.\
+  → **Not followed up.**
+- the remote-DRAM cost, which needs a 2160p run whose ring is larger than L3.\
+  → **§4-6.**
 
 ### 4. 2160p, and reading a grain from DRAM (head-3) (.136, 2026-10-19, 19:50 to 20:19 UTC)
 
@@ -839,7 +988,7 @@ The grain stream is about 311 M lines per 30 s.
      So the cross - local gap shrinks to about +0.35 ms. That local slowdown is not explained; the guess is
      invalidating copies held by several local readers.
 2. **The grain crosses UPI once, however many node 1 readers there are.**
-   - About 2.8 G data flits per 30 s for any N. That is 9 flits per 64-byte line, so 311 M lines, 663 MB/s at
+   - About 2.8 G data flits per 30 s for any N. That is 9 flits per 64-byte line, so 311 M lines, 5.3 Gb/s at
      2160p30.
    - Node 1 readers that miss the same line at the same time share one fetch, and node 0's DRAM reads stay flat.
 3. **Readers contend with each other more than with the socket boundary.**
@@ -861,7 +1010,7 @@ The grain stream is about 311 M lines per 30 s.
 - Putting several consumers of a flow on the other socket costs no more UPI data and no more writer time than
   putting one there. The cost is per flow crossing the boundary.
 - Large copies (more than 16 MiB per grain) generate one cross-socket snoop per line per reader, local or not.
-- This is far from UPI limits: one 2160p30 flow is 663 MB/s of data. Flows are what scale UPI data, which is the
+- This is far from UPI limits: one 2160p30 flow is 5.3 Gb/s of data. Flows are what scale UPI data, which is the
   next test.
 
 ### 9. Several flows, with and without light memory stress (.136, 2026-10-20, 14:00 to 14:23 UTC)
@@ -915,8 +1064,8 @@ L is local and X is cross. The F=2 stressed columns are in `dir.csv`, and they s
 
 #### What it shows
 
-1. **UPI data scales exactly with flows: about 2.8 G flits per 30 s per 2160p30 flow** (663 MB/s). Four cross
-   flows move 2.65 GB/s, still far from link limits.
+1. **UPI data scales exactly with flows: about 2.8 G flits per 30 s per 2160p30 flow** (5.3 Gb/s). Four cross
+   flows move 21 Gb/s, still far from link limits.
 2. **The writer's cross cost stays about the same per flow: +0.51, +0.42 and +0.46 ms at F = 1, 2, 4.**
    - The RFO latency gap grows slowly: 61, 65, then 78 cycles.
    - The writer's p99 of about 3 ms at F = 4 appears for local and cross alike. That is the writer's own
@@ -940,7 +1089,7 @@ L is local and X is cross. The F=2 stressed columns are in `dir.csv`, and they s
 
 #### For MXL deployments
 
-- Each flow whose readers sit on the other socket costs its writer about 0.5 ms per grain at 2160p and 663 MB/s
+- Each flow whose readers sit on the other socket costs its writer about 0.5 ms per grain at 2160p and 5.3 Gb/s
   of UPI data. Neither grows with the number of readers.
 - With several heavy flows on one socket, moving readers to the other socket can help. They get their own L3, and
   at F = 4 they had a better tail than the local readers.
@@ -1017,6 +1166,8 @@ Transit p50 rises to 0.045-0.078 ms under this stress, for local and cross alike
 <details>
 <summary>Raw <code>mxl-transit-stats.py</code> output</summary>
 
+Lane C is left out (see §1).
+
 ```
 08-transit-local-lines/reader.ndjson  lane B  mxlFlowReaderGetGrain
   calls       8850 ok, 0 failed
@@ -1026,12 +1177,6 @@ Transit p50 rises to 0.045-0.078 ms under this stress, for local and cross alike
   end_to_end  min    0.495  p10    0.583  p50    0.706  p90    0.983  p99    1.095  max    1.564   mean    0.770
   age_ms      min    0.581  p10    0.916  p50    0.968  p90    1.035  p99    1.079  max    1.979   mean    0.971
 
-08-transit-local-lines/reader.ndjson  lane C  mxlFlowReaderGetGrainNonBlocking
-  calls       300 ok, 0 failed
-  indices     53719210084..53719218906, 300 read, 8527 indexes not read
-  transit_ms  min    0.066  p10    3.360  p50   16.257  p90   30.618  p99 1705.710  max 4696.114   mean   61.045
-  age_ms      min    0.919  p10    4.286  p50   17.151  p90   31.547  p99 1706.507  max 4696.911   mean   61.954
-
 08-transit-local-lines/writer.ndjson  lane B  mxlFlowReaderGetGrain
   calls       8850 ok, 0 failed
   indices     53719209995..53719218844, 8850 read, 0 indexes not read
@@ -1040,35 +1185,17 @@ Transit p50 rises to 0.045-0.078 ms under this stress, for local and cross alike
   end_to_end  min    0.481  p10    0.833  p50    0.918  p90    0.990  p99    1.167  max    1.822   mean    0.899
   age_ms      min    0.579  p10    0.915  p50    0.969  p90    1.036  p99    1.078  max    1.995   mean    0.972
 
-08-transit-local-lines/writer.ndjson  lane C  mxlFlowReaderGetGrainNonBlocking
-  calls       300 ok, 0 failed
-  indices     53719210084..53719218906, 300 read, 8527 indexes not read
-  transit_ms  min    0.453  p10    3.436  p50   17.042  p90   30.767  p99 1701.700  max 4692.061   mean   61.505
-  age_ms      min    1.397  p10    4.288  p50   17.951  p90   31.695  p99 1702.497  max 4692.858   mean   62.414
-
 10-transit-local-stamp/reader.ndjson  lane B  mxlFlowReaderGetGrain
   calls       8850 ok, 0 failed
   indices     53719172951..53719181800, 8850 read, 0 indexes not read
   transit_ms  min    0.030  p10    0.070  p50    0.074  p90    0.081  p99    0.092  max    0.880   mean    0.075
   age_ms      min    0.289  p10    0.859  p50    0.869  p90    0.877  p99    0.888  max    1.891   mean    0.853
 
-10-transit-local-stamp/reader.ndjson  lane C  mxlFlowReaderGetGrainNonBlocking
-  calls       300 ok, 0 failed
-  indices     53719173040..53719181861, 300 read, 8526 indexes not read
-  transit_ms  min    0.074  p10    3.462  p50   17.582  p90   30.725  p99 1724.453  max 4714.778   mean   61.969
-  age_ms      min    0.870  p10    4.258  p50   18.379  p90   31.523  p99 1725.250  max 4715.575   mean   62.757
-
 10-transit-local-stamp/writer.ndjson  lane B  mxlFlowReaderGetGrain
   calls       8850 ok, 0 failed
   indices     53719172951..53719181800, 8850 read, 0 indexes not read
   transit_ms  min    0.027  p10    0.069  p50    0.073  p90    0.079  p99    0.089  max    0.886   mean    0.073
   age_ms      min    0.289  p10    0.858  p50    0.867  p90    0.875  p99    0.886  max    1.910   mean    0.852
-
-10-transit-local-stamp/writer.ndjson  lane C  mxlFlowReaderGetGrainNonBlocking
-  calls       300 ok, 0 failed
-  indices     53719173039..53719181861, 300 read, 8527 indexes not read
-  transit_ms  min    0.129  p10    3.871  p50   17.911  p90   30.786  p99 1724.768  max 4715.200   mean   62.301
-  age_ms      min    0.928  p10    4.671  p50   18.707  p90   31.584  p99 1725.565  max 4715.997   mean   63.090
 
 11-transit-local-copy/reader.ndjson  lane B  mxlFlowReaderGetGrain
   calls       8850 ok, 0 failed
@@ -1078,12 +1205,6 @@ Transit p50 rises to 0.045-0.078 ms under this stress, for local and cross alike
   end_to_end  min    0.637  p10    0.745  p50    0.762  p90    1.529  p99    1.635  max    5.071   mean    0.908
   age_ms      min    0.584  p10    0.903  p50    0.938  p90    0.963  p99    1.025  max    1.630   mean    0.935
 
-11-transit-local-copy/reader.ndjson  lane C  mxlFlowReaderGetGrainNonBlocking
-  calls       300 ok, 0 failed
-  indices     53719247130..53719255951, 300 read, 8526 indexes not read
-  transit_ms  min    0.116  p10    3.136  p50   17.189  p90   30.643  p99 1733.501  max 4723.957   mean   61.899
-  age_ms      min    0.960  p10    4.004  p50   18.058  p90   31.517  p99 1734.299  max 4724.755   mean   62.764
-
 11-transit-local-copy/writer.ndjson  lane B  mxlFlowReaderGetGrain
   calls       8850 ok, 0 failed
   indices     53719247041..53719255890, 8850 read, 0 indexes not read
@@ -1091,12 +1212,6 @@ Transit p50 rises to 0.045-0.078 ms under this stress, for local and cross alike
   touch_ms    min    0.579  p10    1.380  p50    1.453  p90    1.470  p99    1.609  max    5.592   mean    1.396
   end_to_end  min    0.664  p10    1.453  p50    1.526  p90    1.546  p99    1.692  max    5.678   mean    1.470
   age_ms      min    0.581  p10    0.905  p50    0.941  p90    0.964  p99    1.025  max    1.646   mean    0.937
-
-11-transit-local-copy/writer.ndjson  lane C  mxlFlowReaderGetGrainNonBlocking
-  calls       300 ok, 0 failed
-  indices     53719247130..53719255951, 300 read, 8526 indexes not read
-  transit_ms  min    0.118  p10    3.507  p50   17.984  p90   30.743  p99 1727.114  max 4717.611   mean   62.198
-  age_ms      min    1.026  p10    4.397  p50   18.858  p90   31.620  p99 1727.912  max 4718.409   mean   63.063
 
 ```
 
