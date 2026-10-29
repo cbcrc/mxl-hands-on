@@ -32,7 +32,7 @@ for ex in exercise-*; do (cd "$ex" && docker compose pull); done
 ## More documentation
 
 * [GStreamer MXL apps](./gst-apps/README.md) - the applications used in Exercise 4
-* [Test tools](./test-tools/README.md) - bench instruments for the MXL SDK, including the ABI tester
+* [MXL API Bench](https://github.com/cbcrc/mxl-api-bench) - bench instrument for the MXL SDK (formerly the ABI tester in `test-tools/`)
 * [How to build the images](./how_to_build.md) - building the MXL SDK and publishing the images
 
 ## Authors
