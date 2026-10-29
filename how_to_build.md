@@ -108,24 +108,9 @@ Then the gst-apps images, same pattern:
    done
 ```
 
-Then the ABI-tester (`test-tools/`), same pattern but a single image rather than a loop. Its build
-context is also the repository root: the `COPY` paths are root-relative and it reads the SDK headers
-and `libmxl.so.1.1` straight out of Step 1's build directory, so **Step 1 must have run**.
-
-```sh
-   # Run from the repository root. Pushes both :$TAG_APP and :latest with SBOM attached.
-   docker buildx build --platform linux/amd64 --sbom=true --provenance=mode=max \
-     -f test-tools/ABI-tester/Dockerfile \
-     -t "ghcr.io/cbcrc/abi-tester:${TAG_APP}" -t "ghcr.io/cbcrc/abi-tester:latest" \
-     --push .
-```
-
-> Note the context stays `.` even though the app lives in `test-tools/`: BuildKit picks up
-> `test-tools/ABI-tester/Dockerfile.dockerignore` because of `-f`, and that file is what keeps the
-> multi-GB repository root out of the context (it denies everything, then allows the ~12 MB this
-> build actually reads). This image has a Node frontend stage and a CMake backend stage, so a cold
-> build takes a couple of minutes; `docker compose build` in `test-tools/` warms the cache if you
-> are iterating.
+The bench instrument formerly in `test-tools/` now lives in
+[cbcrc/mxl-api-bench](https://github.com/cbcrc/mxl-api-bench), which builds its own MXL SDK and
+documents its own publish step.
 
 To verify the SBOM landed on GHCR (prints the SPDX document):
 
