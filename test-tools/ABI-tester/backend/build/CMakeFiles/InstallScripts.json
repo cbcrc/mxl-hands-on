@@ -1,7 +1,0 @@
-{
-	"InstallScripts" : 
-	[
-		"/Users/mathieu.rochon/mxl-hands-on/test-tools/ABI-tester/backend/build/cmake_install.cmake"
-	],
-	"Parallel" : false
-}

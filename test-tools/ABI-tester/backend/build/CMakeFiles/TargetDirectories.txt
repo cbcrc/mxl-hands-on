@@ -1,3 +1,0 @@
-/Users/mathieu.rochon/mxl-hands-on/test-tools/ABI-tester/backend/build/CMakeFiles/abi-tester.dir
-/Users/mathieu.rochon/mxl-hands-on/test-tools/ABI-tester/backend/build/CMakeFiles/edit_cache.dir
-/Users/mathieu.rochon/mxl-hands-on/test-tools/ABI-tester/backend/build/CMakeFiles/rebuild_cache.dir
