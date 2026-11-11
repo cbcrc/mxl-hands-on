@@ -107,6 +107,21 @@ const isAncillaryFlow = (f) => flowRole(f).includes("ancillary");
 
 // ── WHEP player hook ──────────────────────────────────────────────────────────
 
+// Ask for stereo Opus. Without stereo=1 in our own SDP, Chrome decodes Opus as mono,
+// and MediaMTX's answer only echoes the parameters we offer, so a stereo flow plays
+// with the same mix in both ears.
+function withOpusStereo(sdp) {
+  const pts = [...sdp.matchAll(/^a=rtpmap:(\d+) opus\/48000\/2/gim)].map(m => m[1]);
+  let out = sdp;
+  for (const pt of pts) {
+    out = out.replace(new RegExp(`^(a=fmtp:${pt} )(.*)$`, "m"), (_, head, params) => {
+      const kept = params.split(";").filter(p => !/^\s*(sprop-)?stereo=/i.test(p));
+      return head + [...kept, "stereo=1", "sprop-stereo=1"].join(";");
+    });
+  }
+  return out;
+}
+
 function waitIceGathering(pc, timeoutMs = 5000) {
   return new Promise((resolve) => {
     if (pc.iceGatheringState === "complete") { resolve(); return; }
@@ -198,7 +213,7 @@ function useWhepPlayer(pipelinePlaying, whepUrl, serverOffers) {
             const offerSdp = await offerResp.text();
             await pc.setRemoteDescription({ type: "offer", sdp: offerSdp });
             const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
+            await pc.setLocalDescription({ type: "answer", sdp: withOpusStereo(answer.sdp) });
             await waitIceGathering(pc);
             if (cancelled) { pc.close(); return; }
 
@@ -220,7 +235,7 @@ function useWhepPlayer(pipelinePlaying, whepUrl, serverOffers) {
           pc.addTransceiver("audio", { direction: "recvonly" });
 
           const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
+          await pc.setLocalDescription({ type: "offer", sdp: withOpusStereo(offer.sdp) });
           await waitIceGathering(pc);
 
           if (cancelled) { pc.close(); return; }
